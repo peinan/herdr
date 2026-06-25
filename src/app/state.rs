@@ -1391,6 +1391,9 @@ pub struct AppState {
     pub local_sound_playback: bool,
     pub toast_config: ToastConfig,
     pub keybinds: Keybinds,
+    /// Window a repeatable prefix binding stays "armed" for bare-key repeat.
+    /// Client-only input state; not part of the runtime/session protocol.
+    pub repeat_timeout: std::time::Duration,
     /// Frame counter for spinner animations (wraps around).
     pub spinner_tick: u32,
     /// UI color palette — all sidebar/UI colors centralized for theming.
@@ -1740,6 +1743,9 @@ impl AppState {
             local_sound_playback: false,
             toast_config: ToastConfig::default(),
             keybinds: Keybinds::default(),
+            repeat_timeout: crate::config::resolve_repeat_timeout(
+                crate::config::DEFAULT_REPEAT_TIMEOUT_MS,
+            ),
             spinner_tick: 0,
             palette: Palette::catppuccin(),
             theme_name: "catppuccin".to_string(),

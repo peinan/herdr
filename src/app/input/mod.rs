@@ -49,7 +49,7 @@ pub(crate) use self::{
         handle_keybind_help_key, handle_navigator_key, handle_rename_key, handle_resize_key,
         insert_navigator_search_text, insert_rename_input_text,
     },
-    navigate::terminal_direct_navigation_action,
+    navigate::{leave_command_mode, terminal_direct_navigation_action},
     settings::open_settings_at,
 };
 use self::{

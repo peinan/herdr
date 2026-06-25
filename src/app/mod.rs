@@ -54,6 +54,7 @@ use tracing::info;
 use crate::config::Config;
 use crate::events::AppEvent;
 
+pub(crate) use input::leave_command_mode;
 pub use state::{AppState, Mode, ToastKind, ViewState};
 
 pub(crate) fn load_plugin_manifest(
@@ -126,6 +127,9 @@ pub struct App {
     pub(crate) selection_autoscroll_deadline: Option<Instant>,
     pub(crate) selection_highlight_clear_deadline: Option<Instant>,
     pub(crate) session_save_deadline: Option<Instant>,
+    /// Deadline after which an "armed" repeatable prefix binding stops repeating
+    /// and drops out of `Mode::Prefix`. `None` whenever not armed. Client-only.
+    pub(crate) repeat_deadline: Option<Instant>,
     pub(crate) persist_pane_history: bool,
     pub(crate) last_render_at: Option<Instant>,
     pub(crate) suppressed_repeat_keys:
@@ -619,6 +623,7 @@ impl App {
             local_sound_playback: true,
             toast_config: config.ui.toast.clone(),
             keybinds: config.keybinds(),
+            repeat_timeout: crate::config::resolve_repeat_timeout(config.keys.repeat_timeout),
             spinner_tick: 0,
             palette: theme_palette,
             theme_name,
@@ -712,6 +717,7 @@ impl App {
             session_save_deadline: None,
             selection_autoscroll_deadline: None,
             selection_highlight_clear_deadline: None,
+            repeat_deadline: None,
             persist_pane_history: config.experimental.pane_history,
             last_render_at: None,
             suppressed_repeat_keys: HashSet::new(),
@@ -1277,6 +1283,7 @@ impl App {
                     self.state.prefix_code = live.prefix.0;
                     self.state.prefix_mods = live.prefix.1;
                     self.state.keybinds = live.keybinds;
+                    self.state.repeat_timeout = live.repeat_timeout;
                     diagnostics.extend(keybind_diagnostics);
                 }
                 Err(keybind_diagnostics) => {
@@ -1522,27 +1529,25 @@ impl App {
                 crate::raw_input::RawInputEvent::Paste(text) => {
                     if self.state.mode != Mode::Terminal {
                         self.paste_into_active_text_input(&text);
-                    } else {
-                        if let Some(ws_idx) = self.state.active {
-                            if let Some(ws) = self.state.workspaces.get(ws_idx) {
-                                if let Some(focused) = ws.focused_pane_id() {
-                                    if let Some(runtime) = self.state.runtime_for_pane_in_workspace(
-                                        &self.terminal_runtimes,
-                                        ws_idx,
-                                        focused,
-                                    ) {
-                                        let _ = runtime.try_send_bytes(bytes::Bytes::from(
-                                            if runtime
-                                                .input_state()
-                                                .map(|s| s.bracketed_paste)
-                                                .unwrap_or(false)
-                                            {
-                                                format!("\x1b[200~{text}\x1b[201~")
-                                            } else {
-                                                text
-                                            },
-                                        ));
-                                    }
+                    } else if let Some(ws_idx) = self.state.active {
+                        if let Some(ws) = self.state.workspaces.get(ws_idx) {
+                            if let Some(focused) = ws.focused_pane_id() {
+                                if let Some(runtime) = self.state.runtime_for_pane_in_workspace(
+                                    &self.terminal_runtimes,
+                                    ws_idx,
+                                    focused,
+                                ) {
+                                    let _ = runtime.try_send_bytes(bytes::Bytes::from(
+                                        if runtime
+                                            .input_state()
+                                            .map(|s| s.bracketed_paste)
+                                            .unwrap_or(false)
+                                        {
+                                            format!("\x1b[200~{text}\x1b[201~")
+                                        } else {
+                                            text
+                                        },
+                                    ));
                                 }
                             }
                         }
@@ -3908,6 +3913,17 @@ mod tests {
             app.next_loop_deadline(now, false),
             app.selection_autoscroll_deadline
         );
+    }
+
+    #[test]
+    fn next_loop_deadline_includes_repeat_deadline() {
+        let mut app = test_app();
+        let now = Instant::now();
+        app.next_resize_poll = now + Duration::from_millis(300);
+        app.repeat_deadline = Some(now + Duration::from_millis(5));
+        app.next_animation_tick = Some(now + Duration::from_millis(100));
+        app.session_save_deadline = Some(now + Duration::from_millis(200));
+        assert_eq!(app.next_loop_deadline(now, false), app.repeat_deadline);
     }
 
     #[test]

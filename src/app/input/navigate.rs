@@ -29,8 +29,20 @@ pub(crate) fn terminal_direct_navigation_action(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ActionContext {
     Direct,
-    Prefix,
+    /// Action dispatched from prefix mode. `repeatable` carries whether the
+    /// matched binding opted in to tmux `bind -r` style repeat, so the exit
+    /// decision in `finish_action_context` can keep the app armed in `Prefix`.
+    Prefix {
+        repeatable: bool,
+    },
     Navigate,
+}
+
+impl ActionContext {
+    /// Whether this is a prefix dispatch whose binding opted in to repeat.
+    fn is_repeatable_prefix(self) -> bool {
+        matches!(self, ActionContext::Prefix { repeatable: true })
+    }
 }
 
 impl App {
@@ -42,37 +54,59 @@ impl App {
             if !self.pass_through_key_to_focused_pane(raw_key) {
                 leave_command_mode(&mut self.state);
             }
+            self.sync_repeat_deadline();
             return;
         }
 
         if key.code == KeyCode::Esc {
             leave_command_mode(&mut self.state);
+            self.sync_repeat_deadline();
             return;
         }
 
-        if let Some(action) = action_for_key(&self.state, raw_key, BindingDispatch::Prefix) {
+        if let Some((action, repeatable)) =
+            action_for_key_with_repeat(&self.state, raw_key, BindingDispatch::Prefix)
+        {
+            let context = ActionContext::Prefix { repeatable };
             if action == NavigateAction::EditScrollback {
                 let previous_mode = self.state.mode;
                 self.launch_focused_scrollback_editor();
-                finish_action_context(&mut self.state, ActionContext::Prefix, previous_mode);
+                finish_action_context(&mut self.state, context, previous_mode);
             } else {
                 execute_navigate_action_in_context(
                     &mut self.state,
                     &mut self.terminal_runtimes,
                     action,
-                    ActionContext::Prefix,
+                    context,
                 );
             }
             self.selection_autoscroll_deadline = None;
+            self.sync_repeat_deadline();
             return;
         }
 
         if let Some(binding) = command_for_key(&self.state, raw_key, BindingDispatch::Prefix) {
-            self.launch_custom_command(binding, ActionContext::Prefix);
+            // Custom commands are not repeatable in v1.
+            self.launch_custom_command(binding, ActionContext::Prefix { repeatable: false });
+            self.sync_repeat_deadline();
             return;
         }
 
         leave_command_mode(&mut self.state);
+        self.sync_repeat_deadline();
+    }
+
+    /// Arm or clear the repeat deadline based on the current mode. When still in
+    /// `Mode::Prefix` after dispatch, (re)arm to `now + repeat_timeout`;
+    /// otherwise clear it. Centralizing arm/clear here keeps every
+    /// `handle_prefix_key` exit path consistent and covers both the TUI and
+    /// headless dispatch loops, which share this entry point.
+    pub(crate) fn sync_repeat_deadline(&mut self) {
+        self.repeat_deadline = if self.state.mode == Mode::Prefix {
+            Some(std::time::Instant::now() + self.state.repeat_timeout)
+        } else {
+            None
+        };
     }
 
     pub(crate) fn handle_navigate_key(&mut self, raw_key: TerminalKey) {
@@ -666,8 +700,19 @@ fn action_for_key(
     key: TerminalKey,
     dispatch: BindingDispatch,
 ) -> Option<NavigateAction> {
+    action_for_key_with_repeat(state, key, dispatch).map(|(action, _repeatable)| action)
+}
+
+/// Like [`action_for_key`], but also reports whether the matched binding opted
+/// in to repeat. `repeatable` is only ever `true` for prefix bindings; indexed
+/// and direct matches always report `false`.
+fn action_for_key_with_repeat(
+    state: &AppState,
+    key: TerminalKey,
+    dispatch: BindingDispatch,
+) -> Option<(NavigateAction, bool)> {
     if let Some(action) = indexed_navigation_action(state, key, dispatch) {
-        return Some(action);
+        return Some((action, false));
     }
 
     let kb = &state.keybinds;
@@ -719,7 +764,9 @@ fn action_for_key(
         (&kb.goto, NavigateAction::OpenNavigator),
     ] {
         if action_matches(bindings, key, dispatch) {
-            return Some(action);
+            let repeatable =
+                matches!(dispatch, BindingDispatch::Prefix) && bindings.repeatable_for_key(key);
+            return Some((action, repeatable));
         }
     }
     None
@@ -954,7 +1001,9 @@ pub(super) fn execute_navigate_action_in_context(
 
 fn workspace_action_target(state: &AppState, context: ActionContext) -> Option<usize> {
     let idx = match context {
-        ActionContext::Direct | ActionContext::Prefix => state.active.unwrap_or(state.selected),
+        ActionContext::Direct | ActionContext::Prefix { .. } => {
+            state.active.unwrap_or(state.selected)
+        }
         ActionContext::Navigate => state.selected,
     };
     (idx < state.workspaces.len()).then_some(idx)
@@ -989,8 +1038,25 @@ fn leave_navigate_mode(state: &mut AppState) {
 }
 
 fn finish_action_context(state: &mut AppState, context: ActionContext, previous_mode: Mode) {
-    if matches!(context, ActionContext::Direct | ActionContext::Prefix)
-        && state.mode == previous_mode
+    if context.is_repeatable_prefix() {
+        // Stay armed only if the action returned to a base context (or never
+        // left Prefix). Every modal/sub-mode is its own `Mode` variant, so the
+        // resulting mode alone tells us whether the action re-entered a base
+        // context vs opened an interactive surface. Navigation/cycling actions
+        // (next/previous workspace/agent/tab, swap, cycle, focus, zoom, sidebar)
+        // land on the command base mode and so re-arm; actions that entered a
+        // modal/sub-mode (Resize, Copy, Rename*, Settings, Navigator,
+        // ConfirmClose, ...) keep that mode and exit the repeat window.
+        if state.mode == Mode::Prefix || state.mode == command_base_mode(state) {
+            state.mode = Mode::Prefix;
+        }
+        return;
+    }
+
+    if matches!(
+        context,
+        ActionContext::Direct | ActionContext::Prefix { .. }
+    ) && state.mode == previous_mode
     {
         leave_command_mode(state);
     }
@@ -1008,12 +1074,19 @@ fn finish_custom_command_context(
     }
 }
 
-fn leave_command_mode(state: &mut AppState) {
-    state.mode = if state.active.is_some() {
+/// The base mode prefix/command dispatch returns to: `Terminal` when a pane is
+/// active, else `Navigate`. Shared by `leave_command_mode` and the repeatable
+/// re-arm decision so both agree on what "returned to base" means.
+fn command_base_mode(state: &AppState) -> Mode {
+    if state.active.is_some() {
         Mode::Terminal
     } else {
         Mode::Navigate
-    };
+    }
+}
+
+pub(crate) fn leave_command_mode(state: &mut AppState) {
+    state.mode = command_base_mode(state);
 }
 
 fn write_scrollback_temp_file(content: &str) -> io::Result<std::path::PathBuf> {
@@ -1164,7 +1237,7 @@ mod tests {
             &mut state,
             &mut terminal_runtimes,
             NavigateAction::RenameWorkspace,
-            ActionContext::Prefix,
+            ActionContext::Prefix { repeatable: false },
         );
 
         assert_eq!(state.mode, Mode::RenameWorkspace);
@@ -1192,7 +1265,7 @@ mod tests {
             &mut state,
             &mut terminal_runtimes,
             NavigateAction::CloseWorkspace,
-            ActionContext::Prefix,
+            ActionContext::Prefix { repeatable: false },
         );
 
         assert_eq!(state.request_remove_linked_worktree, None);
@@ -1328,7 +1401,7 @@ mod tests {
             &mut state,
             &mut terminal_runtimes,
             NavigateAction::SwitchWorkspace(1),
-            ActionContext::Prefix,
+            ActionContext::Prefix { repeatable: false },
         );
 
         assert_eq!(state.active, Some(2));
@@ -1941,7 +2014,7 @@ last_pane = "prefix+tab"
             &mut state,
             &mut terminal_runtimes,
             NavigateAction::NewTab,
-            ActionContext::Prefix,
+            ActionContext::Prefix { repeatable: false },
         );
 
         assert_eq!(state.mode, Mode::Navigate);
@@ -2264,5 +2337,304 @@ last_pane = "prefix+tab"
 
         assert!(state.detach_requested);
         assert!(!state.should_quit);
+    }
+
+    // -------------------------------------------------------------------------
+    // Repeatable prefix bindings (tmux `bind -r` style)
+    // -------------------------------------------------------------------------
+
+    /// Build a two-pane App from a custom `[keys]` TOML, focused on the right
+    /// pane, in `Mode::Terminal`. Returns the App and the root (left) pane id so
+    /// tests can assert focus moved.
+    fn two_pane_app_with_keys(keys_toml: &str) -> (App, crate::layout::PaneId) {
+        let config: Config = toml::from_str(keys_toml).expect("keys toml parses");
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(&config, true, None, api_rx, crate::api::EventHub::default());
+        app.state.workspaces = vec![Workspace::test_new("test")];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = Mode::Terminal;
+        let root = app.state.workspaces[0].tabs[0].root_pane;
+        let right = app.state.workspaces[0].test_split(Direction::Horizontal);
+        app.state.workspaces[0].layout.focus_pane(right);
+        app.state.view.pane_infos = app.state.workspaces[0]
+            .active_tab()
+            .unwrap()
+            .layout
+            .panes(ratatui::layout::Rect::new(0, 0, 80, 24));
+        (app, root)
+    }
+
+    async fn press(app: &mut App, code: KeyCode, mods: KeyModifiers) {
+        app.handle_key(TerminalKey::new(code, mods)).await;
+    }
+
+    async fn press_prefix(app: &mut App) {
+        let code = app.state.prefix_code;
+        let mods = app.state.prefix_mods;
+        app.handle_key(TerminalKey::new(code, mods)).await;
+    }
+
+    /// Characterization: with the default (non-repeatable) config, a prefix
+    /// focus-pane binding is one-shot — it returns to Terminal and never arms
+    /// the repeat deadline.
+    #[tokio::test]
+    async fn default_prefix_focus_pane_does_not_arm_repeat() {
+        let (mut app, root) = two_pane_app_with_keys(
+            r#"
+[keys]
+focus_pane_left = "prefix+h"
+"#,
+        );
+
+        press_prefix(&mut app).await;
+        press(&mut app, KeyCode::Char('h'), KeyModifiers::empty()).await;
+
+        assert_eq!(app.state.workspaces[0].focused_pane_id(), Some(root));
+        assert_eq!(app.state.mode, Mode::Terminal);
+        assert!(app.repeat_deadline.is_none());
+    }
+
+    /// A repeatable focus-pane binding stays in `Mode::Prefix` after dispatch
+    /// and arms the repeat deadline.
+    #[tokio::test]
+    async fn repeatable_prefix_binding_stays_armed() {
+        let (mut app, root) = two_pane_app_with_keys(
+            r#"
+[keys]
+focus_pane_left = { key = "prefix+h", repeat = true }
+"#,
+        );
+
+        press_prefix(&mut app).await;
+        press(&mut app, KeyCode::Char('h'), KeyModifiers::empty()).await;
+
+        assert_eq!(app.state.workspaces[0].focused_pane_id(), Some(root));
+        assert_eq!(app.state.mode, Mode::Prefix);
+        assert!(app.repeat_deadline.is_some());
+    }
+
+    /// While armed, the bare key (no prefix) repeats the action and re-arms.
+    #[tokio::test]
+    async fn armed_bare_key_repeats_and_rearms() {
+        let (mut app, root) = two_pane_app_with_keys(
+            r#"
+[keys]
+focus_pane_left = { key = "prefix+h", repeat = true }
+focus_pane_right = { key = "prefix+l", repeat = true }
+"#,
+        );
+
+        press_prefix(&mut app).await;
+        press(&mut app, KeyCode::Char('l'), KeyModifiers::empty()).await; // focus right
+        let right = app.state.workspaces[0].focused_pane_id();
+        assert_eq!(app.state.mode, Mode::Prefix);
+
+        // Bare `h` (no prefix) while armed focuses left and stays armed.
+        press(&mut app, KeyCode::Char('h'), KeyModifiers::empty()).await;
+        assert_eq!(app.state.workspaces[0].focused_pane_id(), Some(root));
+        assert_ne!(app.state.workspaces[0].focused_pane_id(), right);
+        assert_eq!(app.state.mode, Mode::Prefix);
+        assert!(app.repeat_deadline.is_some());
+    }
+
+    /// A non-repeatable binding dispatched from prefix mode exits to Terminal
+    /// and clears the repeat deadline.
+    #[tokio::test]
+    async fn non_repeatable_prefix_binding_exits_and_clears() {
+        let (mut app, root) = two_pane_app_with_keys(
+            r#"
+[keys]
+focus_pane_left = "prefix+h"
+"#,
+        );
+
+        press_prefix(&mut app).await;
+        press(&mut app, KeyCode::Char('h'), KeyModifiers::empty()).await;
+
+        assert_eq!(app.state.workspaces[0].focused_pane_id(), Some(root));
+        assert_eq!(app.state.mode, Mode::Terminal);
+        assert!(app.repeat_deadline.is_none());
+    }
+
+    /// Esc while armed exits prefix mode and clears the repeat deadline.
+    #[tokio::test]
+    async fn esc_while_armed_exits_and_clears() {
+        let (mut app, _root) = two_pane_app_with_keys(
+            r#"
+[keys]
+focus_pane_left = { key = "prefix+h", repeat = true }
+"#,
+        );
+
+        press_prefix(&mut app).await;
+        press(&mut app, KeyCode::Char('h'), KeyModifiers::empty()).await;
+        assert_eq!(app.state.mode, Mode::Prefix);
+        assert!(app.repeat_deadline.is_some());
+
+        press(&mut app, KeyCode::Esc, KeyModifiers::empty()).await;
+        assert_eq!(app.state.mode, Mode::Terminal);
+        assert!(app.repeat_deadline.is_none());
+    }
+
+    /// An unbound key while armed exits prefix mode and clears the deadline.
+    #[tokio::test]
+    async fn unbound_key_while_armed_exits_and_clears() {
+        let (mut app, _root) = two_pane_app_with_keys(
+            r#"
+[keys]
+focus_pane_left = { key = "prefix+h", repeat = true }
+"#,
+        );
+
+        press_prefix(&mut app).await;
+        press(&mut app, KeyCode::Char('h'), KeyModifiers::empty()).await;
+        assert_eq!(app.state.mode, Mode::Prefix);
+
+        press(&mut app, KeyCode::F(12), KeyModifiers::empty()).await;
+        assert_eq!(app.state.mode, Mode::Terminal);
+        assert!(app.repeat_deadline.is_none());
+    }
+
+    /// A mode-changing action (copy mode) is NOT kept armed even when the
+    /// binding opts in to repeat: the new mode wins and the deadline clears.
+    #[tokio::test]
+    async fn repeatable_mode_changing_action_transitions_and_clears_copy() {
+        let (mut app, _root) = two_pane_app_with_keys(
+            r#"
+[keys]
+copy_mode = { key = "prefix+[", repeat = true }
+"#,
+        );
+
+        press_prefix(&mut app).await;
+        press(&mut app, KeyCode::Char('['), KeyModifiers::empty()).await;
+
+        assert_eq!(app.state.mode, Mode::Copy);
+        assert!(app.repeat_deadline.is_none());
+    }
+
+    /// A mode-changing action (resize mode) is NOT kept armed even when the
+    /// binding opts in to repeat.
+    #[tokio::test]
+    async fn repeatable_mode_changing_action_transitions_and_clears_resize() {
+        let (mut app, _root) = two_pane_app_with_keys(
+            r#"
+[keys]
+resize_mode = { key = "prefix+r", repeat = true }
+"#,
+        );
+
+        press_prefix(&mut app).await;
+        press(&mut app, KeyCode::Char('r'), KeyModifiers::empty()).await;
+
+        assert_eq!(app.state.mode, Mode::Resize);
+        assert!(app.repeat_deadline.is_none());
+    }
+
+    /// The scheduled-task deadline handler drops out of prefix mode when the
+    /// repeat deadline elapses.
+    #[tokio::test]
+    async fn scheduled_task_expiry_exits_prefix() {
+        let (mut app, _root) = two_pane_app_with_keys(
+            r#"
+[keys]
+focus_pane_left = { key = "prefix+h", repeat = true }
+"#,
+        );
+
+        press_prefix(&mut app).await;
+        press(&mut app, KeyCode::Char('h'), KeyModifiers::empty()).await;
+        assert_eq!(app.state.mode, Mode::Prefix);
+        assert!(app.repeat_deadline.is_some());
+
+        // Simulate the deadline having elapsed.
+        app.repeat_deadline = Some(std::time::Instant::now() - std::time::Duration::from_millis(1));
+        let changed = app.handle_scheduled_tasks(std::time::Instant::now(), false);
+
+        assert!(changed);
+        assert_eq!(app.state.mode, Mode::Terminal);
+        assert!(app.repeat_deadline.is_none());
+    }
+
+    /// The pressing-prefix-again-while-armed path clears the deadline (existing
+    /// "prefix twice sends a literal prefix" behavior is preserved).
+    #[tokio::test]
+    async fn prefix_key_while_armed_clears_deadline() {
+        let (mut app, _root) = two_pane_app_with_keys(
+            r#"
+[keys]
+focus_pane_left = { key = "prefix+h", repeat = true }
+"#,
+        );
+
+        press_prefix(&mut app).await;
+        press(&mut app, KeyCode::Char('h'), KeyModifiers::empty()).await;
+        assert_eq!(app.state.mode, Mode::Prefix);
+        assert!(app.repeat_deadline.is_some());
+
+        // Pressing the prefix key again exits prefix mode (no focused runtime to
+        // pass through to in this test harness) and clears the deadline.
+        press_prefix(&mut app).await;
+        assert_eq!(app.state.mode, Mode::Terminal);
+        assert!(app.repeat_deadline.is_none());
+    }
+
+    /// Regression guard for discussion #599: a navigation/cycling action that
+    /// returns to the terminal base mode (here `next_tab`, which internally
+    /// calls `leave_navigate_mode`) stays armed when marked repeatable, and the
+    /// bare key repeats it. Without the base-mode re-arm rule this would exit to
+    /// Terminal after the first press.
+    #[tokio::test]
+    async fn repeatable_navigation_action_stays_armed() {
+        let config: Config = toml::from_str(
+            r#"
+[keys]
+next_tab = { key = "prefix+n", repeat = true }
+"#,
+        )
+        .unwrap();
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(&config, true, None, api_rx, crate::api::EventHub::default());
+        let mut workspace = Workspace::test_new("test");
+        workspace.test_add_tab(Some("second"));
+        app.state.workspaces = vec![workspace];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = Mode::Terminal;
+        assert_eq!(app.state.workspaces[0].active_tab_index(), 0);
+
+        // prefix+n: cycles to tab 1, stays armed in prefix mode.
+        press_prefix(&mut app).await;
+        press(&mut app, KeyCode::Char('n'), KeyModifiers::empty()).await;
+        assert_eq!(app.state.workspaces[0].active_tab_index(), 1);
+        assert_eq!(app.state.mode, Mode::Prefix);
+        assert!(app.repeat_deadline.is_some());
+
+        // Bare `n` (no prefix) while armed cycles back to tab 0 and stays armed.
+        press(&mut app, KeyCode::Char('n'), KeyModifiers::empty()).await;
+        assert_eq!(app.state.workspaces[0].active_tab_index(), 0);
+        assert_eq!(app.state.mode, Mode::Prefix);
+        assert!(app.repeat_deadline.is_some());
+    }
+
+    /// An "opening" action that lands on `Navigate` (the workspace picker) while
+    /// a pane is active must NOT be held armed even if flagged repeatable: the
+    /// base mode is `Terminal`, so `Navigate` is treated as an interactive
+    /// surface and the picker stays open.
+    #[tokio::test]
+    async fn repeatable_opening_action_does_not_hijack_picker() {
+        let (mut app, _root) = two_pane_app_with_keys(
+            r#"
+[keys]
+workspace_picker = { key = "prefix+w", repeat = true }
+"#,
+        );
+
+        press_prefix(&mut app).await;
+        press(&mut app, KeyCode::Char('w'), KeyModifiers::empty()).await;
+
+        assert_eq!(app.state.mode, Mode::Navigate);
+        assert!(app.repeat_deadline.is_none());
     }
 }

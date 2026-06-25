@@ -3361,6 +3361,18 @@ impl HeadlessServer {
 
         if self
             .app
+            .repeat_deadline
+            .is_some_and(|deadline| now >= deadline)
+        {
+            self.app.repeat_deadline = None;
+            if self.app.state.mode == app::state::Mode::Prefix {
+                app::leave_command_mode(&mut self.app.state);
+                changed = true;
+            }
+        }
+
+        if self
+            .app
             .state
             .next_pending_agent_notification_deadline()
             .is_some_and(|deadline| now >= deadline)
@@ -7837,6 +7849,45 @@ next_tab = ""
             "Found direct calls to self.app.handle_internal_event outside \
              handle_internal_event_with_forwarding (bypass risk):\n  {}",
             bypass_lines.join("\n  ")
+        );
+    }
+
+    /// The headless scheduled-task handler drops out of prefix mode and clears
+    /// the repeat deadline when it elapses. Mirrors the TUI expiry branch — the
+    /// two are separate implementations and must stay in sync.
+    #[test]
+    fn headless_scheduled_tasks_expiry_exits_prefix() {
+        let mut server = test_headless_server();
+        server
+            .app
+            .state
+            .workspaces
+            .push(crate::workspace::Workspace::test_new("test"));
+        server.app.state.active = Some(0);
+        server.app.state.mode = app::state::Mode::Prefix;
+        let now = Instant::now();
+        server.app.repeat_deadline = Some(now - Duration::from_millis(1));
+
+        assert!(server.handle_scheduled_tasks_headless(now, false));
+        assert_eq!(server.app.repeat_deadline, None);
+        assert_eq!(server.app.state.mode, app::state::Mode::Terminal);
+    }
+
+    /// The headless loop wake-up aggregator includes the repeat deadline so the
+    /// server actually wakes to expire an armed repeatable binding.
+    #[test]
+    fn headless_loop_deadline_includes_repeat_deadline() {
+        let mut server = test_headless_server();
+        let deadline = Instant::now() + Duration::from_millis(500);
+        server.app.repeat_deadline = Some(deadline);
+
+        assert_eq!(
+            server.app.next_headless_loop_deadline_with_git_refresh(
+                Instant::now(),
+                false,
+                server.has_app_client()
+            ),
+            Some(deadline)
         );
     }
 }
