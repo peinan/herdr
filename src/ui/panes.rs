@@ -314,6 +314,21 @@ pub(super) fn compute_pane_infos(
     pane_infos
 }
 
+/// Decide whether a pane's content should be dimmed.
+///
+/// Non-focused panes dim while another pane has focus in a multi-pane layout.
+/// With `dim_inactive_panes` enabled this is an always-on active-pane highlight;
+/// otherwise the dim only appears outside Terminal mode (e.g. while the
+/// prefix/command overlay is active).
+fn should_dim_pane(
+    is_focused: bool,
+    multi_pane: bool,
+    dim_inactive_panes: bool,
+    terminal_active: bool,
+) -> bool {
+    !is_focused && multi_pane && (dim_inactive_panes || !terminal_active)
+}
+
 pub(super) fn render_panes(
     app: &AppState,
     terminal_runtimes: &TerminalRuntimeRegistry,
@@ -341,7 +356,12 @@ pub(super) fn render_panes(
             rt.render(frame, info.inner_rect, show_cursor);
             render_pane_scrollbar(app, frame, info, rt);
 
-            let should_dim = !info.is_focused && multi_pane && !terminal_active;
+            let should_dim = should_dim_pane(
+                info.is_focused,
+                multi_pane,
+                app.dim_inactive_panes,
+                terminal_active,
+            );
             if should_dim {
                 let inner = info.inner_rect;
                 let buf = frame.buffer_mut();
@@ -960,6 +980,24 @@ mod tests {
             assert!(info.borders.is_empty());
             assert_eq!(pane_inner_rect(info.rect, info.borders), info.rect);
         }
+    }
+
+    #[test]
+    fn dim_inactive_panes_controls_unfocused_dimming() {
+        // Focused panes never dim.
+        assert!(!should_dim_pane(true, true, true, true));
+        // Single-pane layouts never dim.
+        assert!(!should_dim_pane(false, false, true, true));
+
+        // Enabled: unfocused panes dim in Terminal mode (always-on highlight)...
+        assert!(should_dim_pane(false, true, true, true));
+        // ...and outside Terminal mode.
+        assert!(should_dim_pane(false, true, true, false));
+
+        // Disabled: preserve prefix-only behavior — no dim in Terminal mode...
+        assert!(!should_dim_pane(false, true, false, true));
+        // ...but dim outside Terminal mode (e.g. prefix overlay active).
+        assert!(should_dim_pane(false, true, false, false));
     }
 
     #[test]
