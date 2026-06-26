@@ -204,6 +204,18 @@ Key strings accept plain keys, modifier combinations such as `ctrl+a`, `shift+n`
 
 If you have old custom keybindings and want the new defaults, run `herdr config reset-keys`. Herdr backs up `config.toml`, removes `[keys]` and `[[keys.command]]`, and uses built-in v2 defaults after restart or `herdr server reload-config`.
 
+A prefix binding can use a table form to opt in to tmux `bind -r` style repeat, so the bare key repeats the action while you stay armed in prefix mode:
+
+```toml
+[keys]
+swap_pane_up = { key = "prefix+shift+k", repeat = true }
+next_tab = { key = "prefix+n", repeat = true }
+# Armed window in milliseconds. Default: 500. `0` clamps to the default.
+repeat_timeout = 500
+```
+
+Repeat is off by default; string and array bindings never repeat. The armed state ends on the prefix key, `Esc`, an unbound key, or after `repeat_timeout` milliseconds. Repeat applies to navigation and cycling actions that return you to the terminal or navigate view — next/previous workspace, agent, and tab; swap, cycle, and focus pane; zoom; and toggle sidebar. It does not hold you armed for actions that open a dialog or enter a sub-mode (rename, help, settings, the workspace picker, the navigator, copy or resize mode); those transition as usual even if flagged `repeat = true`. See the [keyboard guide](/docs/preview/keyboard/#repeat-a-binding-without-re-pressing-the-prefix) for details.
+
 ## Indexed jumps
 
 Indexed keybindings use `1..9` in normal keybinding fields:

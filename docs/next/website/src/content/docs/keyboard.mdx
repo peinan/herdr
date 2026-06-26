@@ -75,6 +75,29 @@ Every binding is configurable, including the prefix itself:
 prefix = "ctrl+a"
 ```
 
+## Repeat a binding without re-pressing the prefix
+
+Some prefix actions are natural to fire several times in a row — stepping through tabs, cycling panes, or moving a pane across the layout. Instead of pressing the prefix before every keypress, you can mark a binding as repeatable. After `prefix` + the key, Herdr stays "armed" and you can press the bare key again to repeat it, until you press anything else or a short timeout elapses. This mirrors tmux's `bind -r`.
+
+Use the table form with `repeat = true`:
+
+```toml
+[keys]
+# After `prefix+shift+k`, keep pressing `shift+k` to keep swapping the pane up.
+swap_pane_up = { key = "prefix+shift+k", repeat = true }
+swap_pane_down = { key = "prefix+shift+j", repeat = true }
+# After `prefix+n`, keep pressing `n` to step through tabs.
+next_tab = { key = "prefix+n", repeat = true }
+previous_tab = { key = "prefix+p", repeat = true }
+
+# The armed window in milliseconds. Default: 500. `0` clamps to the default.
+repeat_timeout = 500
+```
+
+The armed state ends as soon as you press the prefix key, `Esc`, an unbound key, or after `repeat_timeout` milliseconds of no input. Repeat is opt-in and off by default; plain string and array bindings never repeat.
+
+Repeat applies to navigation and cycling actions — the ones that return you to your terminal or navigate view after running. That covers next/previous workspace, agent, and tab; swap, cycle, and focus pane; zoom; and toggle sidebar. It does **not** keep you armed for actions that open a dialog or enter a sub-mode — rename, help, settings, the workspace picker, the navigator, and copy or resize mode all transition as usual and end the repeat window, even if you set `repeat = true`. Marking those as repeatable has no useful effect, so leave it off for them.
+
 ## Going prefix-free
 
 You can bind Herdr actions to direct chords that need no prefix at all. The hard part is knowing which chords are safe, because terminals, shells, and desktop environments already own most of the keyboard.

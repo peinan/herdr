@@ -222,6 +222,14 @@ impl App {
             changed = true;
         }
 
+        if self.repeat_deadline.is_some_and(|deadline| now >= deadline) {
+            self.repeat_deadline = None;
+            if self.state.mode == crate::app::state::Mode::Prefix {
+                crate::app::leave_command_mode(&mut self.state);
+                changed = true;
+            }
+        }
+
         if self
             .state
             .next_pending_agent_notification_deadline()
@@ -566,6 +574,7 @@ impl App {
             self.session_save_deadline,
             self.selection_autoscroll_deadline,
             self.selection_highlight_clear_deadline,
+            self.repeat_deadline,
             render_deadline,
         ]
         .into_iter()

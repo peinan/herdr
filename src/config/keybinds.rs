@@ -2,6 +2,7 @@
 use crossterm::event::KeyEvent;
 use crossterm::event::{KeyCode, KeyModifiers};
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 use tracing::warn;
 
 use super::Config;
@@ -9,10 +10,34 @@ use crate::input::TerminalKey;
 
 pub type KeyCombo = (KeyCode, KeyModifiers);
 
+/// Default `keys.repeat_timeout` (milliseconds) for repeatable prefix bindings.
+pub(crate) const DEFAULT_REPEAT_TIMEOUT_MS: u64 = 500;
+
+/// Resolve a configured `keys.repeat_timeout` (milliseconds) to a `Duration`,
+/// clamping `0` to the default so an "armed" prefix state can always expire.
+pub(crate) fn resolve_repeat_timeout(millis: u64) -> Duration {
+    let millis = if millis == 0 {
+        DEFAULT_REPEAT_TIMEOUT_MS
+    } else {
+        millis
+    };
+    Duration::from_millis(millis)
+}
+
 #[derive(Debug, Clone)]
 pub struct LiveKeybindConfig {
     pub prefix: KeyCombo,
     pub keybinds: Keybinds,
+    pub repeat_timeout: Duration,
+}
+
+/// Key field of a [`BindingConfig::Table`]. A single key (`"prefix+j"`) or a
+/// list of keys both map to the same untagged forms as a bare string/array.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum BindingKey {
+    One(String),
+    Many(Vec<String>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -20,6 +45,14 @@ pub struct LiveKeybindConfig {
 pub enum BindingConfig {
     One(String),
     Many(Vec<String>),
+    /// Table form that carries per-binding options, e.g.
+    /// `{ key = "prefix+shift+j", repeat = true }`. Listed last so the simpler
+    /// string/array shapes win during untagged deserialization.
+    Table {
+        key: BindingKey,
+        #[serde(default)]
+        repeat: bool,
+    },
 }
 
 impl Default for BindingConfig {
@@ -41,7 +74,17 @@ impl BindingConfig {
         match self {
             Self::One(value) => vec![value.as_str()],
             Self::Many(values) => values.iter().map(String::as_str).collect(),
+            Self::Table { key, .. } => match key {
+                BindingKey::One(value) => vec![value.as_str()],
+                BindingKey::Many(values) => values.iter().map(String::as_str).collect(),
+            },
         }
+    }
+
+    /// Whether this binding opted in to tmux `bind -r` style repeat. Only the
+    /// table form can set it; string/array forms are never repeatable.
+    pub(crate) fn repeatable(&self) -> bool {
+        matches!(self, Self::Table { repeat: true, .. })
     }
 
     pub(crate) fn has_values(&self) -> bool {
@@ -141,6 +184,9 @@ impl BindingTrigger {
 pub struct ResolvedBinding {
     pub trigger: BindingTrigger,
     pub label: String,
+    /// tmux `bind -r` style repeat opt-in. Only action bindings parsed from a
+    /// table config can be `true`; navigate/indexed bindings are always `false`.
+    pub repeatable: bool,
 }
 
 impl ResolvedBinding {
@@ -202,6 +248,13 @@ impl ActionKeybinds {
         self.bindings
             .iter()
             .any(|binding| binding.trigger.is_prefix() && binding.matches_terminal_key(key))
+    }
+
+    /// Whether a prefix binding matching `key` opted in to repeat.
+    pub fn repeatable_for_key(&self, key: TerminalKey) -> bool {
+        self.bindings.iter().any(|binding| {
+            binding.repeatable && binding.trigger.is_prefix() && binding.matches_terminal_key(key)
+        })
     }
 
     pub fn matches_direct_key(&self, key: TerminalKey) -> bool {
@@ -753,6 +806,9 @@ fn parse_action_bindings(
     diagnostics: &mut Vec<String>,
     source: BindingSource,
 ) -> ActionKeybinds {
+    // Repeat is a per-binding-config opt-in (table form). Stamp it onto every
+    // resolved key parsed from this config so multi-key configs repeat uniformly.
+    let repeatable = config.repeatable();
     let mut bindings = Vec::new();
     for raw in config.values() {
         let raw = raw.trim();
@@ -760,7 +816,8 @@ fn parse_action_bindings(
             continue;
         }
         match parse_binding_string(raw) {
-            Some(ParsedBinding::Single(binding)) => {
+            Some(ParsedBinding::Single(mut binding)) => {
+                binding.repeatable = repeatable;
                 if reject_binding(field, &binding, registry, diagnostics, source) {
                     continue;
                 }
@@ -912,6 +969,7 @@ fn append_legacy_indexed_bindings(
         let binding = ResolvedBinding {
             trigger: BindingTrigger::Direct(combo),
             label: format!("{}+{idx}", configured_label.trim()),
+            repeatable: false,
         };
         if reject_binding(field, &binding, registry, diagnostics, source) {
             continue;
@@ -1037,6 +1095,7 @@ fn parse_binding_string(raw: &str) -> Option<ParsedBinding> {
                     } else {
                         key_label
                     },
+                    repeatable: false,
                 }
             })
             .collect();
@@ -1056,6 +1115,7 @@ fn parse_binding_string(raw: &str) -> Option<ParsedBinding> {
             BindingTrigger::Direct(combo)
         },
         label,
+        repeatable: false,
     }))
 }
 
@@ -2149,5 +2209,176 @@ description = "say hello"
             keybinds.custom_commands[0].description,
             Some("say hello".to_string())
         );
+    }
+
+    #[test]
+    fn table_binding_with_repeat_true_marks_binding_repeatable() {
+        let config: Config = toml::from_str(
+            r#"
+[keys]
+swap_pane_down = { key = "prefix+shift+j", repeat = true }
+"#,
+        )
+        .unwrap();
+        let keybinds = config.keybinds();
+        assert_eq!(keybinds.swap_pane_down.bindings.len(), 1);
+        assert!(keybinds.swap_pane_down.bindings[0].repeatable);
+        assert!(keybinds
+            .swap_pane_down
+            .repeatable_for_key(TerminalKey::new(KeyCode::Char('j'), KeyModifiers::SHIFT)));
+    }
+
+    #[test]
+    fn table_binding_without_repeat_defaults_to_not_repeatable() {
+        let config: Config = toml::from_str(
+            r#"
+[keys]
+swap_pane_down = { key = "prefix+shift+j" }
+"#,
+        )
+        .unwrap();
+        let keybinds = config.keybinds();
+        assert_eq!(keybinds.swap_pane_down.bindings.len(), 1);
+        assert!(!keybinds.swap_pane_down.bindings[0].repeatable);
+    }
+
+    #[test]
+    fn table_binding_with_repeat_false_is_not_repeatable() {
+        let config: Config = toml::from_str(
+            r#"
+[keys]
+swap_pane_down = { key = "prefix+shift+j", repeat = false }
+"#,
+        )
+        .unwrap();
+        let keybinds = config.keybinds();
+        assert_eq!(keybinds.swap_pane_down.bindings.len(), 1);
+        assert!(!keybinds.swap_pane_down.bindings[0].repeatable);
+    }
+
+    #[test]
+    fn table_binding_repeat_applies_to_all_keys_in_multi_key_config() {
+        let config: Config = toml::from_str(
+            r#"
+[keys]
+swap_pane_down = { key = ["prefix+shift+j", "prefix+ctrl+j"], repeat = true }
+"#,
+        )
+        .unwrap();
+        let keybinds = config.keybinds();
+        assert_eq!(keybinds.swap_pane_down.bindings.len(), 2);
+        assert!(keybinds
+            .swap_pane_down
+            .bindings
+            .iter()
+            .all(|binding| binding.repeatable));
+    }
+
+    #[test]
+    fn string_and_array_bindings_are_never_repeatable() {
+        // String form.
+        let config: Config = toml::from_str(
+            r#"
+[keys]
+swap_pane_down = "prefix+shift+j"
+"#,
+        )
+        .unwrap();
+        let keybinds = config.keybinds();
+        assert_eq!(keybinds.swap_pane_down.bindings.len(), 1);
+        assert!(!keybinds.swap_pane_down.bindings[0].repeatable);
+
+        // Array form parses byte-identically to a multi-key non-repeatable config.
+        let config: Config = toml::from_str(
+            r#"
+[keys]
+swap_pane_down = ["prefix+shift+j", "prefix+ctrl+j"]
+"#,
+        )
+        .unwrap();
+        let keybinds = config.keybinds();
+        assert_eq!(keybinds.swap_pane_down.bindings.len(), 2);
+        assert!(keybinds
+            .swap_pane_down
+            .bindings
+            .iter()
+            .all(|binding| !binding.repeatable));
+    }
+
+    #[test]
+    fn table_binding_with_invalid_key_is_diagnosed() {
+        let config: Config = toml::from_str(
+            r#"
+[keys]
+swap_pane_down = { key = "prefix+nonsense", repeat = true }
+"#,
+        )
+        .unwrap();
+        let keybinds = config.keybinds();
+        let diagnostics = config.collect_diagnostics();
+        assert!(keybinds.swap_pane_down.bindings.is_empty());
+        assert!(diagnostics.iter().any(
+            |diag| diag.contains("invalid keybinding") && diag.contains("keys.swap_pane_down")
+        ));
+    }
+
+    #[test]
+    fn repeat_timeout_defaults_to_500ms() {
+        let config = Config::default();
+        assert_eq!(config.keys.repeat_timeout, DEFAULT_REPEAT_TIMEOUT_MS);
+        let live = config.live_keybinds().expect("default config is valid");
+        assert_eq!(live.repeat_timeout, Duration::from_millis(500));
+    }
+
+    #[test]
+    fn repeat_timeout_user_value_propagates() {
+        let config: Config = toml::from_str(
+            r#"
+[keys]
+repeat_timeout = 750
+"#,
+        )
+        .unwrap();
+        assert_eq!(config.keys.repeat_timeout, 750);
+        let live = config.live_keybinds().expect("config is valid");
+        assert_eq!(live.repeat_timeout, Duration::from_millis(750));
+    }
+
+    #[test]
+    fn repeat_timeout_zero_clamps_to_default_with_diagnostic() {
+        let config: Config = toml::from_str(
+            r#"
+[keys]
+repeat_timeout = 0
+"#,
+        )
+        .unwrap();
+        let (live, diagnostics) = config
+            .live_keybinds_with_diagnostics()
+            .expect("config is valid");
+        assert_eq!(live.repeat_timeout, Duration::from_millis(500));
+        assert!(diagnostics
+            .iter()
+            .any(|diag| diag.contains("keys.repeat_timeout = 0")));
+    }
+
+    #[test]
+    fn local_profile_roundtrips_table_repeat_and_repeat_timeout() {
+        let config: Config = toml::from_str(
+            r#"
+[keys]
+repeat_timeout = 750
+swap_pane_down = { key = "prefix+shift+j", repeat = true }
+"#,
+        )
+        .unwrap();
+        let profile_toml = config
+            .local_keybindings_profile_toml()
+            .expect("profile serializes");
+        let reparsed: Config = toml::from_str(&profile_toml).expect("profile reparses");
+        assert_eq!(reparsed.keys.repeat_timeout, 750);
+        let keybinds = reparsed.keybinds();
+        assert_eq!(keybinds.swap_pane_down.bindings.len(), 1);
+        assert!(keybinds.swap_pane_down.bindings[0].repeatable);
     }
 }

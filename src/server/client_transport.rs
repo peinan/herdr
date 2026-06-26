@@ -359,6 +359,7 @@ fn parse_client_keybindings(
             Ok(Some(Box::new(crate::config::LiveKeybindConfig {
                 prefix: config.prefix_key(),
                 keybinds: config.keybinds(),
+                repeat_timeout: crate::config::resolve_repeat_timeout(config.keys.repeat_timeout),
             })))
         }
     }

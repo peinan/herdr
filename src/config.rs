@@ -28,7 +28,9 @@ pub use self::{
 };
 
 pub(crate) use self::io::upsert_top_level_bool;
-pub(crate) use self::keybinds::parse_key_combo;
+pub(crate) use self::keybinds::{
+    parse_key_combo, resolve_repeat_timeout, DEFAULT_REPEAT_TIMEOUT_MS,
+};
 
 pub const CONFIG_PATH_ENV_VAR: &str = "HERDR_CONFIG_PATH";
 pub const DEFAULT_SCROLLBACK_LIMIT_BYTES: usize = 10_000_000;
@@ -89,11 +91,24 @@ impl Config {
     pub(crate) fn live_keybinds_with_diagnostics(
         &self,
     ) -> Result<(LiveKeybindConfig, Vec<String>), Vec<String>> {
-        let (prefix_diag, prefix, keybind_diags, keybinds) = self.validated_keybinds();
+        let (prefix_diag, prefix, mut keybind_diags, keybinds) = self.validated_keybinds();
+        let repeat_timeout = resolve_repeat_timeout(self.keys.repeat_timeout);
+        if self.keys.repeat_timeout == 0 {
+            keybind_diags.push(format!(
+                "keys.repeat_timeout = 0 disables repeat expiry; using default {DEFAULT_REPEAT_TIMEOUT_MS}ms"
+            ));
+        }
         if let Some(prefix_diag) = prefix_diag {
             Err(std::iter::once(prefix_diag).chain(keybind_diags).collect())
         } else {
-            Ok((LiveKeybindConfig { prefix, keybinds }, keybind_diags))
+            Ok((
+                LiveKeybindConfig {
+                    prefix,
+                    keybinds,
+                    repeat_timeout,
+                },
+                keybind_diags,
+            ))
         }
     }
 

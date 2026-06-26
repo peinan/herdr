@@ -292,6 +292,10 @@ pub struct LoadedConfig {
 pub struct KeysConfig {
     /// Prefix key to enter prefix mode (e.g. "ctrl+b", "f12", "esc").
     pub prefix: String,
+    /// Window (milliseconds) a repeatable prefix binding stays "armed" so the
+    /// bare key can repeat without re-pressing the prefix. Default: 500.
+    /// `0` clamps to the default.
+    pub repeat_timeout: u64,
     /// Open keybinding help. Default: "prefix+?"
     pub help: BindingConfig,
     /// Open settings. Default: "prefix+s"
@@ -411,6 +415,8 @@ pub struct KeysConfig {
 pub(crate) struct KeysConfigOverlay {
     #[serde(skip_serializing_if = "Option::is_none")]
     prefix: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    repeat_timeout: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     help: Option<BindingConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -539,6 +545,7 @@ impl<'de> Deserialize<'de> for KeysConfig {
         }
 
         apply_field!(prefix);
+        apply_field!(repeat_timeout);
         apply_field!(help);
         apply_field!(settings);
         apply_field!(new_workspace);
@@ -637,6 +644,7 @@ impl KeysConfig {
         }
 
         profile.prefix = Some(self.prefix.clone());
+        copy_user_field!(repeat_timeout);
         copy_effective_action_field!(help, keybinds.help);
         copy_effective_action_field!(settings, keybinds.settings);
         copy_effective_action_field!(new_workspace, keybinds.new_workspace);
@@ -888,6 +896,7 @@ impl Default for KeysConfig {
     fn default() -> Self {
         Self {
             prefix: "ctrl+b".into(),
+            repeat_timeout: super::keybinds::DEFAULT_REPEAT_TIMEOUT_MS,
             help: BindingConfig::one("prefix+?"),
             settings: BindingConfig::one("prefix+s"),
             new_workspace: BindingConfig::one("prefix+shift+n"),

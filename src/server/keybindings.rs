@@ -4,6 +4,7 @@ pub(crate) fn app_keybindings(app: &app::App) -> crate::config::LiveKeybindConfi
     crate::config::LiveKeybindConfig {
         prefix: (app.state.prefix_code, app.state.prefix_mods),
         keybinds: app.state.keybinds.clone(),
+        repeat_timeout: app.state.repeat_timeout,
     }
 }
 
@@ -14,4 +15,5 @@ pub(crate) fn apply_keybindings(
     app.state.prefix_code = keybindings.prefix.0;
     app.state.prefix_mods = keybindings.prefix.1;
     app.state.keybinds = keybindings.keybinds.clone();
+    app.state.repeat_timeout = keybindings.repeat_timeout;
 }
