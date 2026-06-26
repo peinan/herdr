@@ -323,6 +323,7 @@ pane_borders = true
 pane_gaps = true
 show_agent_labels_on_pane_borders = false
 sidebar_divider = true
+zoom_indicator = "Z"
 agent_panel_sort = "spaces"
 accent = "cyan"
 ```
@@ -348,6 +349,8 @@ Set `pane_borders = false` to remove split pane borders. Set `pane_gaps = false`
 Set `show_agent_labels_on_pane_borders = true` if you want detected agent labels in split pane borders when no manual pane label is set.
 
 Set `sidebar_divider = false` to hide the vertical divider line between the sidebar and the main pane area.
+
+`zoom_indicator` is the marker shown in the zoomed pane's border title when you zoom a pane with `prefix+z`. It defaults to `Z` and is appended after the pane's existing label (or shown alone when the pane has no label). Set it to an empty string to hide the marker.
 
 ## Notifications
 

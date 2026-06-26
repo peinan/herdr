@@ -574,12 +574,21 @@ fn render_pane_border_titles(app: &AppState, ws: &crate::workspace::Workspace, f
         if !info.borders.contains(Borders::TOP) || info.rect.width <= 4 {
             continue;
         }
-        let Some(title) = ws
+        let base = ws
             .pane_state(info.id)
             .and_then(|pane| app.terminals.get(&pane.attached_terminal_id))
-            .and_then(|terminal| terminal.border_label(app.show_agent_labels_on_pane_borders))
-            .and_then(|label| pane_border_title(&label, info.rect.width))
-        else {
+            .and_then(|terminal| terminal.border_label(app.show_agent_labels_on_pane_borders));
+        // When the tab is zoomed, `compute_pane_infos` emits a single pane info
+        // for the focused pane, so `is_focused` identifies the zoomed pane.
+        let zoomed_here = ws.zoomed && info.is_focused;
+        let show_marker = zoomed_here && !app.zoom_indicator.is_empty();
+        let label = match (base, show_marker) {
+            (Some(base), true) => format!("{base} {}", app.zoom_indicator),
+            (Some(base), false) => base,
+            (None, true) => app.zoom_indicator.clone(),
+            (None, false) => continue,
+        };
+        let Some(title) = pane_border_title(&label, info.rect.width) else {
             continue;
         };
         let y = info.rect.y;
@@ -882,6 +891,85 @@ mod tests {
         assert_eq!(buffer[(4, 0)].symbol(), "模");
         assert_eq!(buffer[(5, 0)].symbol(), " ");
         assert_eq!(buffer[(6, 0)].symbol(), "块");
+    }
+
+    fn render_border_top_row(
+        zoomed: bool,
+        is_focused: bool,
+        zoom_indicator: &str,
+        manual_label: Option<&str>,
+    ) -> String {
+        let width: u16 = 20;
+        let mut app = AppState::test_new();
+        app.mode = Mode::Terminal;
+        app.zoom_indicator = zoom_indicator.to_string();
+        app.view.terminal_area = Rect::new(0, 0, width, 3);
+        app.view.pane_infos = vec![PaneInfo {
+            id: PaneId::from_raw(1),
+            rect: Rect::new(0, 0, width, 3),
+            inner_rect: Rect::default(),
+            scrollbar_rect: None,
+            borders: Borders::ALL,
+            is_focused,
+        }];
+
+        let mut ws = Workspace::test_new("test");
+        ws.tabs[0].zoomed = zoomed;
+        if let Some(label) = manual_label {
+            let terminal_id = ws.tabs[0].panes[&PaneId::from_raw(1)]
+                .attached_terminal_id
+                .clone();
+            let mut terminal_state = TerminalState::new(terminal_id.clone(), "/tmp".into());
+            terminal_state.set_manual_label(label.into());
+            app.terminals.insert(terminal_id, terminal_state);
+        }
+
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, 3)).unwrap();
+        terminal
+            .draw(|frame| render_pane_borders(&app, &ws, frame))
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        (0..width)
+            .map(|x| buffer[(x, 0)].symbol())
+            .collect::<String>()
+    }
+
+    #[test]
+    fn zoom_indicator_appended_to_focused_zoomed_pane_with_label() {
+        let row = render_border_top_row(true, true, "Z", Some("claude"));
+        assert!(row.contains("claude Z"), "border row: {row:?}");
+    }
+
+    #[test]
+    fn zoom_indicator_shown_alone_when_zoomed_pane_has_no_label() {
+        let row = render_border_top_row(true, true, "Z", None);
+        assert!(row.contains(" Z "), "border row: {row:?}");
+        assert!(!row.contains("claude"), "border row: {row:?}");
+    }
+
+    #[test]
+    fn zoom_indicator_absent_when_not_zoomed() {
+        let row = render_border_top_row(false, true, "Z", Some("claude"));
+        assert!(row.contains("claude"), "border row: {row:?}");
+        assert!(!row.contains('Z'), "border row: {row:?}");
+    }
+
+    #[test]
+    fn empty_zoom_indicator_renders_no_marker() {
+        // Empty indicator with a label keeps the base label and no marker.
+        let labeled = render_border_top_row(true, true, "", Some("claude"));
+        assert!(labeled.contains("claude"), "border row: {labeled:?}");
+        assert!(!labeled.contains('Z'), "border row: {labeled:?}");
+
+        // Empty indicator with no label falls back to the no-title behavior:
+        // the top border row stays unbroken horizontal line cells.
+        let unlabeled = render_border_top_row(true, true, "", None);
+        assert!(
+            unlabeled.chars().all(|c| c == '─' || c == '┌' || c == '┐'),
+            "border row: {unlabeled:?}"
+        );
     }
 
     #[test]

@@ -296,6 +296,9 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # Draw the vertical divider between the sidebar and the main pane area.
 # sidebar_divider = true
 
+# Marker appended to the zoomed pane's border title (prefix+z). Empty string hides it.
+# zoom_indicator = "Z"
+
 # Agent panel ordering: "spaces" (grouped by space) or "priority" (attention queue).
 # "workspaces" is accepted as an alias for "spaces".
 # agent_panel_sort = "spaces"
