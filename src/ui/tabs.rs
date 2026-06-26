@@ -26,14 +26,8 @@ fn tab_width(ws: &crate::workspace::Workspace, tab_idx: usize) -> u16 {
 }
 
 fn tab_chrome_label(ws: &crate::workspace::Workspace, tab_idx: usize) -> String {
-    let name = ws
-        .tab_display_name(tab_idx)
-        .unwrap_or_else(|| (tab_idx + 1).to_string());
-    if ws.tabs.get(tab_idx).is_some_and(|tab| tab.zoomed) {
-        format!("{name} Z")
-    } else {
-        name
-    }
+    ws.tab_display_name(tab_idx)
+        .unwrap_or_else(|| (tab_idx + 1).to_string())
 }
 
 fn layout_tab_hit_areas(ws: &crate::workspace::Workspace, area: Rect, scroll: usize) -> Vec<Rect> {
@@ -407,7 +401,7 @@ mod tests {
     }
 
     #[test]
-    fn tab_bar_marks_zoomed_tabs_without_renaming_them() {
+    fn tab_bar_does_not_mark_zoomed_tabs() {
         let mut app = AppState::test_new();
         let mut ws = Workspace::test_new("test");
         ws.tabs[0].zoomed = true;
@@ -427,8 +421,7 @@ mod tests {
             .unwrap();
 
         let row = buffer_row_text(terminal.backend().buffer(), app.view.tab_bar_rect, 0);
-        assert!(row.contains(" 1 Z"), "tab row: {row:?}");
-        assert!(row.contains(" test Z"), "tab row: {row:?}");
+        assert!(!row.contains('Z'), "zoom marker should not appear: {row:?}");
         assert_eq!(app.workspaces[0].tab_display_name(0).as_deref(), Some("1"));
         assert_eq!(
             app.workspaces[0].tab_display_name(custom_tab).as_deref(),
@@ -437,11 +430,13 @@ mod tests {
     }
 
     #[test]
-    fn zoom_marker_counts_toward_tab_width() {
+    fn zoom_does_not_affect_tab_width() {
         let mut ws = Workspace::test_new("test");
         ws.tabs[0].set_custom_name("abcdefgh".into());
+
+        let unzoomed_width = tab_width(&ws, 0);
         ws.tabs[0].zoomed = true;
 
-        assert_eq!(tab_width(&ws, 0), 14);
+        assert_eq!(tab_width(&ws, 0), unzoomed_width);
     }
 }

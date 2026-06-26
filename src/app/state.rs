@@ -1367,6 +1367,9 @@ pub struct AppState {
     pub show_agent_labels_on_pane_borders: bool,
     pub dim_inactive_panes: bool,
     pub sidebar_divider: bool,
+    /// Marker appended to the zoomed pane's border title (prefix+z). Empty
+    /// hides it. Projected from `[ui] zoom_indicator`.
+    pub zoom_indicator: String,
     pub pane_history_persistence: bool,
     /// Expose the focused pane's cursor anchor to the outer terminal even when
     /// the pane requested `?25l`. See `[experimental] reveal_hidden_cursor_for_cjk_ime`.
@@ -1728,6 +1731,7 @@ impl AppState {
             show_agent_labels_on_pane_borders: false,
             dim_inactive_panes: true,
             sidebar_divider: true,
+            zoom_indicator: "Z".into(),
             pane_history_persistence: false,
             reveal_hidden_cursor_for_cjk_ime: false,
             cjk_ime_agent_filter_configured: false,

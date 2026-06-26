@@ -4,6 +4,10 @@
 
 ### Added
 - Added `ui.sidebar_divider` to hide the vertical divider line between the sidebar and the main pane area.
+- Added `ui.zoom_indicator` to configure the marker shown in the zoomed pane's border title. It defaults to `Z` and an empty string hides it.
+
+### Changed
+- The zoom marker now appears in the zoomed pane's border title instead of the tab label, so it stays visible while looking at the zoomed pane.
 
 ### Fixed
 - Native Windows clients running inside Alacritty now preserve mouse reports and `ctrl+j` input instead of leaking mouse escape sequences into panes. `shift+enter` remains dependent on whether the outer terminal reports it as a distinct modified Enter key. (#792)

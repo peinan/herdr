@@ -795,6 +795,9 @@ pub struct UiConfig {
     /// Draw the vertical divider line between the sidebar and the main pane
     /// area. Set to false to hide it. Default: true.
     pub sidebar_divider: bool,
+    /// Marker appended to the zoomed pane's border title (prefix+z). Set to an
+    /// empty string to hide it. Default: "Z".
+    pub zoom_indicator: String,
     /// Agent sidebar ordering. Saved values are "spaces" or "priority". Default: "spaces".
     pub agent_panel_sort: AgentPanelSortConfig,
     /// Accent color for highlights, borders, and navigation UI.
@@ -988,6 +991,7 @@ impl Default for UiConfig {
             show_agent_labels_on_pane_borders: false,
             dim_inactive_panes: true,
             sidebar_divider: true,
+            zoom_indicator: "Z".into(),
             agent_panel_sort: AgentPanelSortConfig::Spaces,
             accent: "cyan".into(),
             toast: ToastConfig::default(),
@@ -1201,6 +1205,7 @@ agent_panel_scope = "current"
         assert!(!default_config.ui.show_agent_labels_on_pane_borders);
         assert!(default_config.ui.dim_inactive_panes);
         assert!(default_config.ui.sidebar_divider);
+        assert_eq!(default_config.ui.zoom_indicator, "Z");
 
         let toml = r#"
 [ui]
@@ -1209,6 +1214,7 @@ pane_gaps = true
 show_agent_labels_on_pane_borders = true
 dim_inactive_panes = false
 sidebar_divider = false
+zoom_indicator = "ZOOM*"
 "#;
         let config: Config = toml::from_str(toml).unwrap();
         assert!(!config.ui.pane_borders);
@@ -1216,6 +1222,7 @@ sidebar_divider = false
         assert!(config.ui.show_agent_labels_on_pane_borders);
         assert!(!config.ui.dim_inactive_panes);
         assert!(!config.ui.sidebar_divider);
+        assert_eq!(config.ui.zoom_indicator, "ZOOM*");
     }
 
     #[test]
