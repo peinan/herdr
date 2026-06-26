@@ -293,6 +293,9 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # Dim panes that are not focused, providing an active-pane highlight even outside prefix mode.
 # dim_inactive_panes = true
 
+# Draw the vertical divider between the sidebar and the main pane area.
+# sidebar_divider = true
+
 # Agent panel ordering: "spaces" (grouped by space) or "priority" (attention queue).
 # "workspaces" is accepted as an alias for "spaces".
 # agent_panel_sort = "spaces"

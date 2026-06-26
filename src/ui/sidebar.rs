@@ -638,16 +638,18 @@ pub(super) fn render_sidebar_collapsed(app: &AppState, frame: &mut Frame, area: 
     let is_navigating = matches!(app.mode, Mode::Navigate);
 
     let p = &app.palette;
-    let sep_style = if is_navigating {
-        Style::default().fg(p.accent)
-    } else {
-        Style::default().fg(p.surface_dim)
-    };
-    let sep_x = area.x + area.width.saturating_sub(1);
-    let buf = frame.buffer_mut();
-    for y in area.y..area.y + area.height {
-        buf[(sep_x, y)].set_symbol("│");
-        buf[(sep_x, y)].set_style(sep_style);
+    if app.sidebar_divider {
+        let sep_style = if is_navigating {
+            Style::default().fg(p.accent)
+        } else {
+            Style::default().fg(p.surface_dim)
+        };
+        let sep_x = area.x + area.width.saturating_sub(1);
+        let buf = frame.buffer_mut();
+        for y in area.y..area.y + area.height {
+            buf[(sep_x, y)].set_symbol("│");
+            buf[(sep_x, y)].set_style(sep_style);
+        }
     }
 
     let (ws_area, divider_y, detail_area) = collapsed_sidebar_sections(area);
@@ -785,17 +787,19 @@ pub(super) fn render_sidebar(
 ) {
     let p = &app.palette;
     let is_navigating = matches!(app.mode, Mode::Navigate);
-    let sep_style = if is_navigating {
-        Style::default().fg(p.accent)
-    } else {
-        Style::default().fg(p.surface_dim)
-    };
+    if app.sidebar_divider {
+        let sep_style = if is_navigating {
+            Style::default().fg(p.accent)
+        } else {
+            Style::default().fg(p.surface_dim)
+        };
 
-    let sep_x = area.x + area.width.saturating_sub(1);
-    let buf = frame.buffer_mut();
-    for y in area.y..area.y + area.height {
-        buf[(sep_x, y)].set_symbol("│");
-        buf[(sep_x, y)].set_style(sep_style);
+        let sep_x = area.x + area.width.saturating_sub(1);
+        let buf = frame.buffer_mut();
+        for y in area.y..area.y + area.height {
+            buf[(sep_x, y)].set_symbol("│");
+            buf[(sep_x, y)].set_style(sep_style);
+        }
     }
 
     let (ws_area, detail_area) = expanded_sidebar_sections(area, app.sidebar_section_split);
