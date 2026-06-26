@@ -792,6 +792,9 @@ pub struct UiConfig {
     /// Dim panes that are not focused, providing an active-pane highlight even
     /// outside prefix/command modes. Default: true.
     pub dim_inactive_panes: bool,
+    /// Draw the vertical divider line between the sidebar and the main pane
+    /// area. Set to false to hide it. Default: true.
+    pub sidebar_divider: bool,
     /// Agent sidebar ordering. Saved values are "spaces" or "priority". Default: "spaces".
     pub agent_panel_sort: AgentPanelSortConfig,
     /// Accent color for highlights, borders, and navigation UI.
@@ -984,6 +987,7 @@ impl Default for UiConfig {
             pane_gaps: true,
             show_agent_labels_on_pane_borders: false,
             dim_inactive_panes: true,
+            sidebar_divider: true,
             agent_panel_sort: AgentPanelSortConfig::Spaces,
             accent: "cyan".into(),
             toast: ToastConfig::default(),
@@ -1196,6 +1200,7 @@ agent_panel_scope = "current"
         assert!(default_config.ui.pane_gaps);
         assert!(!default_config.ui.show_agent_labels_on_pane_borders);
         assert!(default_config.ui.dim_inactive_panes);
+        assert!(default_config.ui.sidebar_divider);
 
         let toml = r#"
 [ui]
@@ -1203,12 +1208,14 @@ pane_borders = false
 pane_gaps = true
 show_agent_labels_on_pane_borders = true
 dim_inactive_panes = false
+sidebar_divider = false
 "#;
         let config: Config = toml::from_str(toml).unwrap();
         assert!(!config.ui.pane_borders);
         assert!(config.ui.pane_gaps);
         assert!(config.ui.show_agent_labels_on_pane_borders);
         assert!(!config.ui.dim_inactive_panes);
+        assert!(!config.ui.sidebar_divider);
     }
 
     #[test]
