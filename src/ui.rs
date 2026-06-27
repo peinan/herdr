@@ -394,6 +394,15 @@ pub fn render_with_runtime_registry(
     // Ambient notifications sit above panes, but below interactive overlays.
     render_notifications(app, frame, terminal_area);
 
+    // Transient mode hint bars (navigate/prefix/copy/resize) render on the tab
+    // bar row at the top; fall back to the terminal's bottom row when there is
+    // no tab bar (e.g. a very short window).
+    let mode_bar_area = if tab_bar_area.width > 0 {
+        tab_bar_area
+    } else {
+        terminal_area
+    };
+
     match app.mode {
         Mode::Onboarding => render_onboarding_overlay(app, frame, frame.area()),
         Mode::ReleaseNotes => render_release_notes_overlay(app, frame, frame.area()),
@@ -401,14 +410,14 @@ pub fn render_with_runtime_registry(
         Mode::Navigate if app.view.layout == ViewLayout::Mobile => {
             render_mobile_panel(app, terminal_runtimes, frame, frame.area())
         }
-        Mode::Navigate => render_navigate_overlay(app, frame, terminal_area),
+        Mode::Navigate => render_navigate_overlay(app, frame, mode_bar_area),
         Mode::Prefix => {
             if app.prefix_indicator == PrefixIndicatorConfig::StatusBar {
-                render_prefix_overlay(app, frame, terminal_area);
+                render_prefix_overlay(app, frame, mode_bar_area);
             }
         }
-        Mode::Copy => render_copy_mode_overlay(app, frame, terminal_area),
-        Mode::Resize => render_resize_overlay(app, frame, terminal_area),
+        Mode::Copy => render_copy_mode_overlay(app, frame, mode_bar_area),
+        Mode::Resize => render_resize_overlay(app, frame, mode_bar_area),
         Mode::ConfirmClose => render_confirm_close_overlay(app, frame, terminal_area),
         Mode::ContextMenu => {
             render_context_menu(app, frame);
@@ -1082,6 +1091,40 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect::<String>();
         assert!(!rendered.contains("PREFIX"));
+    }
+
+    #[test]
+    fn mode_hint_bar_renders_on_the_tab_bar_row() {
+        let mut app = crate::app::state::AppState::test_new();
+        app.workspaces = vec![Workspace::test_new("test")];
+        app.active = Some(0);
+        app.selected = 0;
+        app.mode = Mode::Resize;
+
+        compute_view(&mut app, Rect::new(0, 0, 80, 20));
+        let tab_row = app.view.tab_bar_rect.y;
+        let bottom_row = app.view.terminal_area.y + app.view.terminal_area.height - 1;
+        assert!(app.view.tab_bar_rect.width > 0, "expected a tab bar row");
+
+        let backend = TestBackend::new(80, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| render(&app, frame)).unwrap();
+        let buffer = terminal.backend().buffer();
+
+        let row_text =
+            |row: u16| -> String { (0..80).map(|x| buffer[(x, row)].symbol()).collect() };
+
+        // The resize hint bar moved to the tab bar row (top), not the bottom.
+        assert!(
+            row_text(tab_row).contains("RESIZE"),
+            "resize hint bar should be on the tab bar row: {:?}",
+            row_text(tab_row)
+        );
+        assert!(
+            !row_text(bottom_row).contains("RESIZE"),
+            "resize hint bar should not be at the bottom: {:?}",
+            row_text(bottom_row)
+        );
     }
 
     #[test]
