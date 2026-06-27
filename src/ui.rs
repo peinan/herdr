@@ -280,8 +280,6 @@ fn compute_view_internal(
         workspace_card_areas,
         tab_bar_rect,
         tab_hit_areas: tab_bar_view.tab_hit_areas,
-        tab_scroll_left_hit_area: tab_bar_view.scroll_left_hit_area,
-        tab_scroll_right_hit_area: tab_bar_view.scroll_right_hit_area,
         new_tab_hit_area: tab_bar_view.new_tab_hit_area,
         terminal_area,
         mobile_header_rect: Rect::default(),
@@ -355,8 +353,6 @@ fn compute_mobile_view(
         workspace_card_areas: Vec::new(),
         tab_bar_rect: Rect::default(),
         tab_hit_areas: Vec::new(),
-        tab_scroll_left_hit_area: Rect::default(),
-        tab_scroll_right_hit_area: Rect::default(),
         new_tab_hit_area: Rect::default(),
         terminal_area,
         mobile_header_rect: header_rect,
@@ -854,7 +850,7 @@ mod tests {
     }
 
     #[test]
-    fn tab_bar_dims_auto_named_tabs_and_emphasizes_custom_tabs() {
+    fn tab_bar_marks_active_with_accent_and_inactive_with_overlay() {
         let mut app = crate::app::state::AppState::test_new();
         let mut ws = Workspace::test_new("test");
         let custom_tab = ws.test_add_tab(Some("logs"));
@@ -872,19 +868,18 @@ mod tests {
         terminal.draw(|frame| render(&app, frame)).unwrap();
         let buffer = terminal.backend().buffer();
 
-        let auto_rect = app.view.tab_hit_areas[0];
-        let custom_rect = app.view.tab_hit_areas[1];
-        let auto_style = buffer[(auto_rect.x + 1, auto_rect.y)].style();
-        let custom_style = buffer[(custom_rect.x + 1, custom_rect.y)].style();
+        // Markers occupy one glyph cell each at rect.x; active tab is index 1.
+        let inactive_rect = app.view.tab_hit_areas[0];
+        let active_rect = app.view.tab_hit_areas[1];
+        let inactive_style = buffer[(inactive_rect.x, inactive_rect.y)].style();
+        let active_style = buffer[(active_rect.x, active_rect.y)].style();
 
-        assert_eq!(auto_style.fg, Some(app.palette.overlay0));
-        assert!(auto_style.add_modifier.contains(Modifier::DIM));
-        assert_eq!(custom_style.fg, Some(app.palette.panel_bg));
-        assert!(custom_style.add_modifier.contains(Modifier::BOLD));
+        assert_eq!(inactive_style.fg, Some(app.palette.overlay1));
+        assert_eq!(active_style.fg, Some(app.palette.accent));
     }
 
     #[test]
-    fn tab_bar_uses_surface_dim_when_panel_background_resets() {
+    fn tab_bar_active_marker_uses_accent_when_panel_background_resets() {
         let mut app = crate::app::state::AppState::test_new();
         let mut ws = Workspace::test_new("test");
         let custom_tab = ws.test_add_tab(Some("logs"));
@@ -903,112 +898,12 @@ mod tests {
         terminal.draw(|frame| render(&app, frame)).unwrap();
         let buffer = terminal.backend().buffer();
 
-        let custom_rect = app.view.tab_hit_areas[1];
-        let custom_style = buffer[(custom_rect.x + 1, custom_rect.y)].style();
+        let active_rect = app.view.tab_hit_areas[1];
+        let active_style = buffer[(active_rect.x, active_rect.y)].style();
 
-        assert_eq!(custom_style.bg, Some(app.palette.accent));
-        assert_eq!(custom_style.fg, Some(app.palette.surface_dim));
-        assert!(custom_style.add_modifier.contains(Modifier::BOLD));
-    }
-
-    #[test]
-    fn new_tab_button_tracks_rightmost_tab_when_tabs_fit() {
-        let mut app = crate::app::state::AppState::test_new();
-        let mut ws = Workspace::test_new("test");
-        ws.test_add_tab(Some("logs"));
-
-        app.workspaces = vec![ws];
-        app.active = Some(0);
-        app.selected = 0;
-        app.mode = Mode::Terminal;
-
-        compute_view(&mut app, Rect::new(0, 0, 80, 20));
-
-        let last_visible = app
-            .view
-            .tab_hit_areas
-            .iter()
-            .rev()
-            .find(|rect| rect.width > 0)
-            .copied()
-            .expect("last visible tab");
-
-        assert_eq!(
-            app.view.new_tab_hit_area.x,
-            last_visible.x + last_visible.width
-        );
-    }
-
-    #[test]
-    fn tab_bar_shows_scroll_controls_when_tabs_overflow() {
-        let mut app = crate::app::state::AppState::test_new();
-        let mut ws = Workspace::test_new("test");
-        for name in ["alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta"] {
-            ws.test_add_tab(Some(name));
-        }
-
-        app.workspaces = vec![ws];
-        app.active = Some(0);
-        app.selected = 0;
-        app.mode = Mode::Terminal;
-        app.tab_scroll_follow_active = false;
-        app.tab_scroll = 2;
-
-        compute_view(&mut app, Rect::new(0, 0, 65, 20));
-
-        assert!(app.view.tab_scroll_left_hit_area.width > 0);
-        assert!(app.view.tab_scroll_right_hit_area.width > 0);
-        assert_eq!(app.view.tab_hit_areas[0].width, 0);
-        assert_eq!(app.view.tab_hit_areas[1].width, 0);
-        assert!(app.view.tab_hit_areas[2].width > 0);
-        assert!(app.view.new_tab_hit_area.width > 0);
-
-        let last_visible = app
-            .view
-            .tab_hit_areas
-            .iter()
-            .rev()
-            .find(|rect| rect.width > 0)
-            .copied()
-            .expect("last visible tab");
-
-        assert_eq!(
-            app.view.tab_scroll_right_hit_area.x,
-            last_visible.x + last_visible.width
-        );
-        assert_eq!(
-            app.view.new_tab_hit_area.x,
-            app.view.tab_scroll_right_hit_area.x + app.view.tab_scroll_right_hit_area.width
-        );
-    }
-
-    #[test]
-    fn tab_bar_clamps_manual_scroll_at_last_visible_tab() {
-        let mut app = crate::app::state::AppState::test_new();
-        let mut ws = Workspace::test_new("test");
-        for name in [
-            "one", "two", "three", "four", "five", "six", "seven", "eight",
-        ] {
-            ws.test_add_tab(Some(name));
-        }
-
-        app.workspaces = vec![ws];
-        app.active = Some(0);
-        app.selected = 0;
-        app.mode = Mode::Terminal;
-        app.tab_scroll_follow_active = false;
-        app.tab_scroll = usize::MAX;
-
-        compute_view(&mut app, Rect::new(0, 0, 65, 20));
-
-        let last_idx = app.workspaces[0].tabs.len() - 1;
-        assert!(app.view.tab_hit_areas[last_idx].width > 0);
-        let clamped_scroll = app.tab_scroll;
-
-        app.scroll_tabs_right();
-
-        assert_eq!(app.tab_scroll, clamped_scroll);
-        assert!(app.view.tab_hit_areas[last_idx].width > 0);
+        // The active marker stays visible via the accent foreground (no fill),
+        // even when the panel background resets to the terminal default.
+        assert_eq!(active_style.fg, Some(app.palette.accent));
     }
 
     #[test]
