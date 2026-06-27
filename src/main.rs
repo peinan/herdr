@@ -284,6 +284,10 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # Draw borders around split panes.
 # pane_borders = true
 
+# Draw a border around the pane even when only one pane is open.
+# Has no effect unless pane_borders is enabled.
+# single_pane_border = false
+
 # Keep split panes visually separated instead of sharing divider borders.
 # pane_gaps = true
 

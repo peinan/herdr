@@ -111,6 +111,7 @@ fn shrink_for_one_cell_gap(size: u16) -> u16 {
 pub(crate) fn apply_pane_chrome(
     panes: Vec<PaneInfo>,
     pane_borders: bool,
+    single_pane_border: bool,
     pane_gaps: bool,
 ) -> Vec<PaneInfo> {
     let multi_pane = panes.len() > 1;
@@ -130,7 +131,8 @@ pub(crate) fn apply_pane_chrome(
                 }
             }
 
-            info.borders = if !multi_pane || !pane_borders {
+            let borders_enabled = pane_borders && (multi_pane || single_pane_border);
+            info.borders = if !borders_enabled {
                 Borders::NONE
             } else {
                 let mut borders = Borders::ALL;
@@ -196,7 +198,7 @@ pub(super) fn resize_tab_panes(
     if tab.zoomed {
         let focused_id = tab.layout.focused();
         if let Some((terminal_id, rt)) = runtime_for_tab_pane(terminal_runtimes, tab, focused_id) {
-            let borders = if multi_pane && app.pane_borders {
+            let borders = if app.pane_borders && (multi_pane || app.single_pane_border) {
                 Borders::ALL
             } else {
                 Borders::NONE
@@ -215,7 +217,12 @@ pub(super) fn resize_tab_panes(
         return;
     }
 
-    for info in apply_pane_chrome(tab.layout.panes(area), app.pane_borders, app.pane_gaps) {
+    for info in apply_pane_chrome(
+        tab.layout.panes(area),
+        app.pane_borders,
+        app.single_pane_border,
+        app.pane_gaps,
+    ) {
         let pane_inner = pane_inner_rect(info.rect, info.borders);
 
         if let Some((terminal_id, rt)) = runtime_for_tab_pane(terminal_runtimes, tab, info.id) {
@@ -251,7 +258,7 @@ pub(super) fn compute_pane_infos(
 
     if ws.zoomed {
         let focused_id = ws.layout.focused();
-        let borders = if multi_pane && app.pane_borders {
+        let borders = if app.pane_borders && (multi_pane || app.single_pane_border) {
             Borders::ALL
         } else {
             Borders::NONE
@@ -284,7 +291,12 @@ pub(super) fn compute_pane_infos(
         }];
     }
 
-    let mut pane_infos = apply_pane_chrome(ws.layout.panes(area), app.pane_borders, app.pane_gaps);
+    let mut pane_infos = apply_pane_chrome(
+        ws.layout.panes(area),
+        app.pane_borders,
+        app.single_pane_border,
+        app.pane_gaps,
+    );
 
     for info in &mut pane_infos {
         let pane_inner = pane_inner_rect(info.rect, info.borders);
@@ -991,6 +1003,7 @@ mod tests {
             workspace.tabs[0].layout.panes(Rect::new(0, 0, 100, 20)),
             true,
             false,
+            false,
         );
         let left = infos.iter().find(|info| info.id == root).unwrap();
         let right = infos.iter().find(|info| info.id == right).unwrap();
@@ -1011,6 +1024,7 @@ mod tests {
             workspace.tabs[0].layout.panes(Rect::new(0, 0, 100, 20)),
             true,
             false,
+            false,
         );
         let top = infos.iter().find(|info| info.id == root).unwrap();
         let bottom = infos.iter().find(|info| info.id == bottom).unwrap();
@@ -1030,6 +1044,7 @@ mod tests {
         let infos = apply_pane_chrome(
             workspace.tabs[0].layout.panes(Rect::new(0, 0, 100, 20)),
             true,
+            false,
             true,
         );
         let left = infos.iter().find(|info| info.id == root).unwrap();
@@ -1049,6 +1064,7 @@ mod tests {
 
         let infos = apply_pane_chrome(
             workspace.tabs[0].layout.panes(Rect::new(0, 0, 100, 20)),
+            false,
             false,
             true,
         );
@@ -1070,12 +1086,34 @@ mod tests {
             workspace.tabs[0].layout.panes(Rect::new(0, 0, 100, 20)),
             false,
             false,
+            false,
         );
 
         for info in infos {
             assert!(info.borders.is_empty());
             assert_eq!(pane_inner_rect(info.rect, info.borders), info.rect);
         }
+    }
+
+    #[test]
+    fn single_pane_border_shows_full_border_only_when_enabled() {
+        let workspace = Workspace::test_new("test");
+        let area = Rect::new(0, 0, 100, 20);
+
+        // Default: a lone pane has no border.
+        let infos = apply_pane_chrome(workspace.tabs[0].layout.panes(area), true, false, false);
+        assert_eq!(infos.len(), 1);
+        assert!(infos[0].borders.is_empty());
+
+        // single_pane_border draws a full box around the lone pane.
+        let infos = apply_pane_chrome(workspace.tabs[0].layout.panes(area), true, true, false);
+        assert_eq!(infos.len(), 1);
+        assert_eq!(infos[0].borders, Borders::ALL);
+
+        // pane_borders disabled wins over single_pane_border.
+        let infos = apply_pane_chrome(workspace.tabs[0].layout.panes(area), false, true, false);
+        assert_eq!(infos.len(), 1);
+        assert!(infos[0].borders.is_empty());
     }
 
     #[test]
