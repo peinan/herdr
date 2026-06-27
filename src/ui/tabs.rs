@@ -1,33 +1,24 @@
-use ratatui::{
-    layout::Rect,
-    style::{Modifier, Style},
-    widgets::Paragraph,
-    Frame,
-};
+use ratatui::{layout::Rect, style::Style, widgets::Paragraph, Frame};
 
-use super::widgets::panel_contrast_fg;
 use crate::app::AppState;
 
-const MIN_TAB_WIDTH: u16 = 8;
-const NEW_TAB_WIDTH: u16 = 3;
-const TAB_SCROLL_BUTTON_WIDTH: u16 = 3;
+/// Width (in cells) of a single tab marker slot: the glyph plus one trailing
+/// space. Also the click target width for switching to that tab. When the strip
+/// is right-aligned, the last slot's trailing space leaves a one-cell gap
+/// before the right edge.
+const TAB_MARKER_WIDTH: u16 = 2;
+
+/// Active tab marker. Nerd Font glyph (Material Design Icons range); requires a
+/// Nerd Font to render (otherwise the terminal shows a missing-glyph box).
+const TAB_MARKER_ACTIVE: char = '\u{F09DE}';
+/// Inactive tab marker. Nerd Font glyph (Codicon range); requires a Nerd Font.
+const TAB_MARKER_INACTIVE: char = '\u{EABC}';
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct TabBarView {
     pub scroll: usize,
     pub tab_hit_areas: Vec<Rect>,
-    pub scroll_left_hit_area: Rect,
-    pub scroll_right_hit_area: Rect,
     pub new_tab_hit_area: Rect,
-}
-
-fn tab_width(ws: &crate::workspace::Workspace, tab_idx: usize) -> u16 {
-    (tab_chrome_label(ws, tab_idx).chars().count() as u16 + 4).max(MIN_TAB_WIDTH)
-}
-
-fn tab_chrome_label(ws: &crate::workspace::Workspace, tab_idx: usize) -> String {
-    ws.tab_display_name(tab_idx)
-        .unwrap_or_else(|| (tab_idx + 1).to_string())
 }
 
 fn layout_tab_hit_areas(ws: &crate::workspace::Workspace, area: Rect, scroll: usize) -> Vec<Rect> {
@@ -38,15 +29,13 @@ fn layout_tab_hit_areas(ws: &crate::workspace::Workspace, area: Rect, scroll: us
 
     let mut x = area.x;
     let right = area.x + area.width;
-    for (idx, rect) in rects.iter_mut().enumerate().skip(scroll) {
+    for rect in rects.iter_mut().skip(scroll) {
         if x >= right {
             break;
         }
-        let desired = tab_width(ws, idx);
-        let remaining = right.saturating_sub(x);
-        let width = desired.min(remaining).max(1);
+        let width = TAB_MARKER_WIDTH.min(right.saturating_sub(x)).max(1);
         *rect = Rect::new(x, area.y, width, 1);
-        x = x.saturating_add(width + 1);
+        x = x.saturating_add(TAB_MARKER_WIDTH);
     }
     rects
 }
@@ -79,15 +68,6 @@ fn centered_tab_scroll(ws: &crate::workspace::Workspace, area: Rect) -> usize {
     best_scroll
 }
 
-fn trailing_tab_controls_x(tab_hit_areas: &[Rect], fallback_x: u16) -> u16 {
-    tab_hit_areas
-        .iter()
-        .rev()
-        .find(|rect| rect.width > 0)
-        .map(|rect| rect.x + rect.width)
-        .unwrap_or(fallback_x)
-}
-
 fn max_tab_scroll(ws: &crate::workspace::Workspace, area: Rect) -> usize {
     (0..ws.tabs.len())
         .find(|&scroll| {
@@ -103,139 +83,59 @@ pub(crate) fn compute_tab_bar_view(
     area: Rect,
     current_scroll: usize,
     follow_active: bool,
-    mouse_chrome: bool,
+    _mouse_chrome: bool,
 ) -> TabBarView {
     if area.width == 0 || area.height == 0 {
         return TabBarView::default();
     }
 
-    if !mouse_chrome {
-        let max_scroll = max_tab_scroll(ws, area);
+    let total_w = (ws.tabs.len() as u16).saturating_mul(TAB_MARKER_WIDTH);
+    let (markers_area, scroll) = if total_w <= area.width {
+        // Right-align the whole strip; the last slot's trailing space leaves a
+        // one-cell gap before the right edge.
+        let x = area.x + area.width.saturating_sub(total_w);
+        (Rect::new(x, area.y, total_w, area.height), 0)
+    } else {
+        // Overflow: fill the bar and keep the active marker visible.
+        let markers_area = Rect::new(area.x, area.y, area.width, area.height);
+        let max_scroll = max_tab_scroll(ws, markers_area);
         let scroll = if follow_active {
-            centered_tab_scroll(ws, area).min(max_scroll)
+            centered_tab_scroll(ws, markers_area).min(max_scroll)
         } else {
             current_scroll.min(max_scroll)
         };
-        return TabBarView {
-            scroll,
-            tab_hit_areas: layout_tab_hit_areas(ws, area, scroll),
-            scroll_left_hit_area: Rect::default(),
-            scroll_right_hit_area: Rect::default(),
-            new_tab_hit_area: Rect::default(),
-        };
-    }
-
-    let area_right = area.x + area.width;
-    let all_tabs_area = Rect::new(
-        area.x,
-        area.y,
-        area.width.saturating_sub(NEW_TAB_WIDTH),
-        area.height,
-    );
-    let all_tabs = layout_tab_hit_areas(ws, all_tabs_area, 0);
-    let overflow = all_tabs.iter().any(|rect| rect.width == 0);
-    if !overflow {
-        let new_tab_x = trailing_tab_controls_x(&all_tabs, area.x);
-        let new_tab_hit_area = Rect::new(
-            new_tab_x,
-            area.y,
-            area_right.saturating_sub(new_tab_x).min(NEW_TAB_WIDTH),
-            1,
-        );
-        return TabBarView {
-            scroll: 0,
-            tab_hit_areas: all_tabs,
-            scroll_left_hit_area: Rect::default(),
-            scroll_right_hit_area: Rect::default(),
-            new_tab_hit_area,
-        };
-    }
-
-    let left_hit_area = Rect::new(area.x, area.y, TAB_SCROLL_BUTTON_WIDTH.min(area.width), 1);
-    let tab_area_x = left_hit_area.x + left_hit_area.width;
-    let reserved_trailing_width = NEW_TAB_WIDTH.saturating_add(TAB_SCROLL_BUTTON_WIDTH);
-    let tab_area_right = area_right.saturating_sub(reserved_trailing_width);
-    let tab_area = Rect::new(
-        tab_area_x,
-        area.y,
-        tab_area_right.saturating_sub(tab_area_x),
-        area.height,
-    );
-
-    let max_scroll = max_tab_scroll(ws, tab_area);
-    let scroll = if follow_active {
-        centered_tab_scroll(ws, tab_area).min(max_scroll)
-    } else {
-        current_scroll.min(max_scroll)
+        (markers_area, scroll)
     };
-    let tab_hit_areas = layout_tab_hit_areas(ws, tab_area, scroll);
-    let trailing_x = trailing_tab_controls_x(&tab_hit_areas, tab_area_x).min(tab_area_right);
-    let right_hit_area = Rect::new(
-        trailing_x,
-        area.y,
-        area_right
-            .saturating_sub(trailing_x)
-            .min(TAB_SCROLL_BUTTON_WIDTH),
-        1,
-    );
-    let new_tab_x = right_hit_area.x + right_hit_area.width;
-    let new_tab_hit_area = Rect::new(
-        new_tab_x,
-        area.y,
-        area_right.saturating_sub(new_tab_x).min(NEW_TAB_WIDTH),
-        1,
-    );
 
     TabBarView {
         scroll,
-        tab_hit_areas,
-        scroll_left_hit_area: left_hit_area,
-        scroll_right_hit_area: right_hit_area,
-        new_tab_hit_area,
+        tab_hit_areas: layout_tab_hit_areas(ws, markers_area, scroll),
+        // The "+" button is hidden in this variation.
+        new_tab_hit_area: Rect::default(),
     }
 }
 
-fn tab_drop_indicator_x(
-    app: &AppState,
-    ws: &crate::workspace::Workspace,
-    insert_idx: usize,
-) -> Option<u16> {
-    let mut visible_tabs = app
+/// Column for the drag-to-reorder drop indicator, derived purely from the
+/// visible marker rects.
+fn tab_drop_indicator_x(app: &AppState, insert_idx: usize) -> Option<u16> {
+    let visible: Vec<(usize, Rect)> = app
         .view
         .tab_hit_areas
         .iter()
         .enumerate()
-        .filter(|(_, rect)| rect.width > 0);
-    let first_visible = visible_tabs.clone().next()?;
-    let last_visible = visible_tabs.next_back().unwrap_or(first_visible);
+        .filter(|(_, rect)| rect.width > 0)
+        .map(|(idx, rect)| (idx, *rect))
+        .collect();
+    let (first_idx, first_rect) = *visible.first()?;
+    let (_, last_rect) = *visible.last()?;
 
-    if insert_idx == 0 {
-        return Some(if first_visible.0 == 0 {
-            first_visible.1.x
-        } else {
-            app.view.tab_scroll_left_hit_area.x + app.view.tab_scroll_left_hit_area.width
-        });
+    if insert_idx <= first_idx {
+        return Some(first_rect.x);
     }
-
-    if let Some((_, rect)) = app
-        .view
-        .tab_hit_areas
-        .iter()
-        .enumerate()
-        .find(|(idx, rect)| *idx == insert_idx && rect.width > 0)
-    {
+    if let Some((_, rect)) = visible.iter().find(|(idx, _)| *idx == insert_idx) {
         return Some(rect.x.saturating_sub(1));
     }
-
-    if insert_idx >= ws.tabs.len() {
-        return Some(if last_visible.0 + 1 >= ws.tabs.len() {
-            last_visible.1.x + last_visible.1.width
-        } else {
-            app.view.tab_scroll_right_hit_area.x.saturating_sub(1)
-        });
-    }
-
-    None
+    Some(last_rect.x + last_rect.width)
 }
 
 pub(super) fn render_tab_bar(app: &AppState, frame: &mut Frame, area: Rect) {
@@ -256,89 +156,30 @@ pub(super) fn render_tab_bar(app: &AppState, frame: &mut Frame, area: Rect) {
         area,
     );
 
-    let first_visible_idx = app
-        .view
-        .tab_hit_areas
-        .iter()
-        .enumerate()
-        .find(|(_, rect)| rect.width > 0)
-        .map(|(idx, _)| idx);
-    let last_visible_idx = app
-        .view
-        .tab_hit_areas
-        .iter()
-        .enumerate()
-        .rev()
-        .find(|(_, rect)| rect.width > 0)
-        .map(|(idx, _)| idx);
-    let can_scroll_left = app.view.tab_scroll_left_hit_area.width > 0 && app.tab_scroll > 0;
-    let can_scroll_right = app.view.tab_scroll_right_hit_area.width > 0
-        && last_visible_idx.is_some_and(|idx| idx + 1 < ws.tabs.len());
-
-    if app.mouse_capture && app.view.tab_scroll_left_hit_area.width > 0 {
-        let style = if can_scroll_left {
-            Style::default().fg(p.overlay1).bg(p.surface0)
-        } else {
-            Style::default()
-                .fg(p.overlay0)
-                .bg(p.surface0)
-                .add_modifier(Modifier::DIM)
-        };
-        frame.render_widget(
-            Paragraph::new(" < ").style(style),
-            app.view.tab_scroll_left_hit_area,
-        );
-    }
-
-    if app.mouse_capture && app.view.tab_scroll_right_hit_area.width > 0 {
-        let style = if can_scroll_right {
-            Style::default().fg(p.overlay1).bg(p.surface0)
-        } else {
-            Style::default()
-                .fg(p.overlay0)
-                .bg(p.surface0)
-                .add_modifier(Modifier::DIM)
-        };
-        frame.render_widget(
-            Paragraph::new(" > ").style(style),
-            app.view.tab_scroll_right_hit_area,
-        );
-    }
-
-    for (idx, tab) in ws.tabs.iter().enumerate() {
-        let Some(rect) = app.view.tab_hit_areas.get(idx).copied() else {
-            break;
-        };
+    // Right-aligned tab markers: one glyph per tab, distinguished by colour
+    // (active accent, inactive grey). The active marker turns yellow in
+    // prefix-highlight mode. The tab title and "+" button are not shown.
+    for (idx, rect) in app.view.tab_hit_areas.iter().enumerate() {
         if rect.width == 0 {
             continue;
         }
-        let active = idx == ws.active_tab;
-        let style = if active {
-            let active_bg = if app.prefix_highlight_active() {
+        let (glyph, fg) = if idx == ws.active_tab {
+            let fg = if app.prefix_highlight_active() {
                 p.yellow
             } else {
                 p.accent
             };
-            let base = Style::default().fg(panel_contrast_fg(p)).bg(active_bg);
-            if tab.is_auto_named() {
-                base.add_modifier(Modifier::DIM)
-            } else {
-                base.add_modifier(Modifier::BOLD)
-            }
-        } else if tab.is_auto_named() {
-            Style::default()
-                .fg(p.overlay0)
-                .bg(p.surface0)
-                .add_modifier(Modifier::DIM)
+            (TAB_MARKER_ACTIVE, fg)
         } else {
-            Style::default().fg(p.overlay1).bg(p.surface0)
+            (TAB_MARKER_INACTIVE, p.overlay1)
         };
-        let width = rect.width as usize;
-        let name = tab_chrome_label(ws, idx);
-        let text = format!(" {:width$}", name, width = width.saturating_sub(1));
-        frame.render_widget(Paragraph::new(text).style(style), rect);
+        let mut buf = [0u8; 4];
+        frame.buffer_mut()[(rect.x, rect.y)]
+            .set_symbol(glyph.encode_utf8(&mut buf))
+            .set_style(Style::default().fg(fg));
     }
 
+    // Drag-to-reorder drop indicator.
     if let Some(crate::app::state::DragState {
         target:
             crate::app::state::DragTarget::TabReorder {
@@ -349,43 +190,11 @@ pub(super) fn render_tab_bar(app: &AppState, frame: &mut Frame, area: Rect) {
     }) = &app.drag
     {
         if *ws_idx == active_ws_idx {
-            if let Some(x) = tab_drop_indicator_x(app, ws, *insert_idx) {
+            if let Some(x) = tab_drop_indicator_x(app, *insert_idx) {
                 frame.buffer_mut()[(x.min(area.x + area.width.saturating_sub(1)), area.y)]
                     .set_symbol("│")
                     .set_style(Style::default().fg(p.accent));
             }
-        }
-    }
-
-    if app.mouse_capture && app.view.new_tab_hit_area.width > 0 {
-        frame.render_widget(
-            Paragraph::new(" + ").style(Style::default().fg(p.overlay1)),
-            app.view.new_tab_hit_area,
-        );
-    }
-
-    if first_visible_idx.is_some_and(|idx| idx > 0) {
-        let x = if app.mouse_capture && app.view.tab_scroll_left_hit_area.width > 0 {
-            app.view.tab_scroll_left_hit_area.x + app.view.tab_scroll_left_hit_area.width
-        } else {
-            area.x
-        };
-        if x < area.x + area.width {
-            frame.buffer_mut()[(x, area.y)]
-                .set_symbol("…")
-                .set_style(Style::default().fg(p.overlay0));
-        }
-    }
-    if last_visible_idx.is_some_and(|idx| idx + 1 < ws.tabs.len()) {
-        let x = if app.mouse_capture && app.view.tab_scroll_right_hit_area.width > 0 {
-            app.view.tab_scroll_right_hit_area.x.saturating_sub(1)
-        } else {
-            area.x + area.width.saturating_sub(1)
-        };
-        if x >= area.x && x < area.x + area.width {
-            frame.buffer_mut()[(x, area.y)]
-                .set_symbol("…")
-                .set_style(Style::default().fg(p.overlay0));
         }
     }
 }
@@ -435,13 +244,84 @@ mod tests {
     }
 
     #[test]
-    fn zoom_does_not_affect_tab_width() {
+    fn tab_bar_renders_active_and_inactive_markers() {
+        let mut app = AppState::test_new();
         let mut ws = Workspace::test_new("test");
-        ws.tabs[0].set_custom_name("abcdefgh".into());
+        ws.test_add_tab(Some("logs"));
+        ws.switch_tab(0); // active = auto-named tab 0
 
-        let unzoomed_width = tab_width(&ws, 0);
-        ws.tabs[0].zoomed = true;
+        app.workspaces = vec![ws];
+        app.active = Some(0);
+        app.view.tab_bar_rect = Rect::new(0, 0, 30, 1);
+        let view = compute_tab_bar_view(&app.workspaces[0], app.view.tab_bar_rect, 0, true, false);
+        app.view.tab_hit_areas = view.tab_hit_areas;
 
-        assert_eq!(tab_width(&ws, 0), unzoomed_width);
+        let backend = TestBackend::new(30, 1);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| render_tab_bar(&app, frame, app.view.tab_bar_rect))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+
+        let active_rect = app.view.tab_hit_areas[0];
+        let inactive_rect = app.view.tab_hit_areas[1];
+        let active_cell = &buffer[(active_rect.x, active_rect.y)];
+        let inactive_cell = &buffer[(inactive_rect.x, inactive_rect.y)];
+
+        assert_eq!(active_cell.symbol().chars().next(), Some(TAB_MARKER_ACTIVE));
+        assert_eq!(active_cell.style().fg, Some(app.palette.accent));
+        assert_eq!(
+            inactive_cell.symbol().chars().next(),
+            Some(TAB_MARKER_INACTIVE)
+        );
+        assert_eq!(inactive_cell.style().fg, Some(app.palette.overlay1));
+    }
+
+    #[test]
+    fn tab_markers_are_right_aligned_with_a_trailing_gap() {
+        let mut app = AppState::test_new();
+        let mut ws = Workspace::test_new("test");
+        ws.test_add_tab(Some("logs")); // 2 tabs
+        ws.switch_tab(0);
+
+        app.workspaces = vec![ws];
+        app.active = Some(0);
+        let bar = Rect::new(0, 0, 30, 1);
+        app.view.tab_bar_rect = bar;
+        let view = compute_tab_bar_view(&app.workspaces[0], bar, 0, true, true);
+        app.view.tab_hit_areas = view.tab_hit_areas;
+
+        // Last marker slot ends flush with the bar's right edge, so its trailing
+        // space is the one-cell gap; the rightmost glyph sits at width - 2.
+        let last = *app.view.tab_hit_areas.last().unwrap();
+        assert_eq!(last.x + last.width, bar.x + bar.width);
+        // No "+" button in this variation.
+        assert_eq!(view.new_tab_hit_area, Rect::default());
+    }
+
+    #[test]
+    fn auto_named_active_tab_shows_no_name() {
+        let mut app = AppState::test_new();
+        let mut ws = Workspace::test_new("test");
+        ws.test_add_tab(None); // both tabs auto-named
+        ws.switch_tab(0);
+
+        app.workspaces = vec![ws];
+        app.active = Some(0);
+        app.view.tab_bar_rect = Rect::new(0, 0, 30, 1);
+        let view = compute_tab_bar_view(&app.workspaces[0], app.view.tab_bar_rect, 0, true, false);
+        app.view.tab_hit_areas = view.tab_hit_areas;
+
+        let backend = TestBackend::new(30, 1);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| render_tab_bar(&app, frame, app.view.tab_bar_rect))
+            .unwrap();
+
+        let row = buffer_row_text(terminal.backend().buffer(), app.view.tab_bar_rect, 0);
+        assert!(
+            !row.contains('1'),
+            "tab title is hidden in this variation: {row:?}"
+        );
     }
 }

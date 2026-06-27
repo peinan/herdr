@@ -1177,39 +1177,6 @@ mod tests {
     }
 
     #[test]
-    fn clicking_tab_scroll_button_reveals_hidden_tabs_without_renaming() {
-        let mut app = app_for_mouse_test();
-        let mut ws = Workspace::test_new("test");
-        ws.test_add_tab(Some("logs"));
-        ws.test_add_tab(Some("review"));
-        ws.test_add_tab(Some("ops"));
-        ws.test_add_tab(Some("notes"));
-        app.state.workspaces = vec![ws];
-        app.state.active = Some(0);
-        app.state.selected = 0;
-        crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 65, 20));
-
-        let right = app.state.view.tab_scroll_right_hit_area;
-        assert!(right.width > 0);
-
-        app.handle_mouse(mouse(
-            MouseEventKind::Down(MouseButton::Left),
-            right.x + 1,
-            right.y,
-        ));
-
-        assert_eq!(app.state.tab_scroll, 1);
-        assert!(!app.state.tab_scroll_follow_active);
-        assert_eq!(app.state.workspaces[0].active_tab, 0);
-        assert_eq!(app.state.view.tab_hit_areas[0].width, 0);
-        assert!(app.state.workspaces[0].tabs[0].custom_name.is_none());
-        assert_eq!(
-            app.state.workspaces[0].tabs[1].custom_name.as_deref(),
-            Some("logs")
-        );
-    }
-
-    #[test]
     fn clicking_last_visible_tab_at_right_edge_does_not_overscroll() {
         let mut app = app_for_mouse_test();
         let mut ws = Workspace::test_new("test");
@@ -1260,7 +1227,9 @@ mod tests {
 
         let source = app.state.view.tab_hit_areas[0];
         let last = app.state.view.tab_hit_areas[2];
-        let drop_col = last.x + last.width;
+        // Markers are right-aligned flush to the bar edge, so dropping "after
+        // the last tab" targets the last marker's trailing cell (still on-bar).
+        let drop_col = last.x + last.width - 1;
 
         app.handle_mouse(mouse(
             MouseEventKind::Down(MouseButton::Left),
