@@ -798,6 +798,10 @@ pub struct UiConfig {
     /// Marker appended to the zoomed pane's border title (prefix+z). Set to an
     /// empty string to hide it. Default: "Z".
     pub zoom_indicator: String,
+    /// How prefix mode is indicated. "status_bar" shows the bottom hint bar
+    /// (default); "highlight" hides it and recolors the focused pane border and
+    /// active tab instead.
+    pub prefix_indicator: PrefixIndicatorConfig,
     /// Agent sidebar ordering. Saved values are "spaces" or "priority". Default: "spaces".
     pub agent_panel_sort: AgentPanelSortConfig,
     /// Accent color for highlights, borders, and navigation UI.
@@ -807,6 +811,17 @@ pub struct UiConfig {
     pub toast: ToastConfig,
     /// Play sounds when agents change state in background workspaces.
     pub sound: SoundConfig,
+}
+
+/// How prefix mode is indicated on screen while the prefix key is pending.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PrefixIndicatorConfig {
+    /// Show the bottom hint bar while prefix is pending (current behavior).
+    #[default]
+    StatusBar,
+    /// Hide the bar; recolor the focused pane border and active tab instead.
+    Highlight,
 }
 
 /// Cursor shape (DECSCUSR) used for the forced IME anchor.
@@ -992,6 +1007,7 @@ impl Default for UiConfig {
             dim_inactive_panes: true,
             sidebar_divider: true,
             zoom_indicator: "Z".into(),
+            prefix_indicator: PrefixIndicatorConfig::StatusBar,
             agent_panel_sort: AgentPanelSortConfig::Spaces,
             accent: "cyan".into(),
             toast: ToastConfig::default(),
@@ -1206,6 +1222,10 @@ agent_panel_scope = "current"
         assert!(default_config.ui.dim_inactive_panes);
         assert!(default_config.ui.sidebar_divider);
         assert_eq!(default_config.ui.zoom_indicator, "Z");
+        assert_eq!(
+            default_config.ui.prefix_indicator,
+            PrefixIndicatorConfig::StatusBar
+        );
 
         let toml = r#"
 [ui]
@@ -1215,6 +1235,7 @@ show_agent_labels_on_pane_borders = true
 dim_inactive_panes = false
 sidebar_divider = false
 zoom_indicator = "ZOOM*"
+prefix_indicator = "highlight"
 "#;
         let config: Config = toml::from_str(toml).unwrap();
         assert!(!config.ui.pane_borders);
@@ -1223,6 +1244,7 @@ zoom_indicator = "ZOOM*"
         assert!(!config.ui.dim_inactive_panes);
         assert!(!config.ui.sidebar_divider);
         assert_eq!(config.ui.zoom_indicator, "ZOOM*");
+        assert_eq!(config.ui.prefix_indicator, PrefixIndicatorConfig::Highlight);
     }
 
     #[test]

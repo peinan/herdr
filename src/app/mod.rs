@@ -608,6 +608,7 @@ impl App {
             dim_inactive_panes: config.ui.dim_inactive_panes,
             sidebar_divider: config.ui.sidebar_divider,
             zoom_indicator: config.ui.zoom_indicator.clone(),
+            prefix_indicator: config.ui.prefix_indicator,
             pane_history_persistence: config.experimental.pane_history,
             reveal_hidden_cursor_for_cjk_ime: config.experimental.reveal_hidden_cursor_for_cjk_ime,
             cjk_ime_agent_filter_configured: !config.experimental.cjk_ime_agents.is_empty(),
@@ -1347,6 +1348,7 @@ impl App {
                 self.state.dim_inactive_panes = config.ui.dim_inactive_panes;
                 self.state.sidebar_divider = config.ui.sidebar_divider;
                 self.state.zoom_indicator = config.ui.zoom_indicator.clone();
+                self.state.prefix_indicator = config.ui.prefix_indicator;
                 self.state.agent_panel_sort =
                     agent_panel_sort_from_config(config.ui.agent_panel_sort);
                 self.state.agent_panel_scroll = 0;

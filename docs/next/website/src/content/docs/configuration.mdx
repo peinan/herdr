@@ -324,6 +324,7 @@ pane_gaps = true
 show_agent_labels_on_pane_borders = false
 sidebar_divider = true
 zoom_indicator = "Z"
+prefix_indicator = "status_bar"
 agent_panel_sort = "spaces"
 accent = "cyan"
 ```
@@ -351,6 +352,8 @@ Set `show_agent_labels_on_pane_borders = true` if you want detected agent labels
 Set `sidebar_divider = false` to hide the vertical divider line between the sidebar and the main pane area.
 
 `zoom_indicator` is the marker shown in the zoomed pane's border title when you zoom a pane with `prefix+z`. It defaults to `Z` and is appended after the pane's existing label (or shown alone when the pane has no label). Set it to an empty string to hide the marker.
+
+`prefix_indicator` controls how Herdr signals that the prefix key is pending. The default `status_bar` shows the bottom hint bar (`esc cancel`, `send prefix`, and so on). Set it to `highlight` to hide that bar and instead recolor the focused pane border and the active tab, giving a quieter prefix-mode cue at the cost of the inline key hints.
 
 ## Notifications
 

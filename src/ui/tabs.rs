@@ -314,7 +314,12 @@ pub(super) fn render_tab_bar(app: &AppState, frame: &mut Frame, area: Rect) {
         }
         let active = idx == ws.active_tab;
         let style = if active {
-            let base = Style::default().fg(panel_contrast_fg(p)).bg(p.accent);
+            let active_bg = if app.prefix_highlight_active() {
+                p.yellow
+            } else {
+                p.accent
+            };
+            let base = Style::default().fg(panel_contrast_fg(p)).bg(active_bg);
             if tab.is_auto_named() {
                 base.add_modifier(Modifier::DIM)
             } else {

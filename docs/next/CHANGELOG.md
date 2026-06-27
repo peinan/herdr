@@ -5,6 +5,7 @@
 ### Added
 - Added `ui.sidebar_divider` to hide the vertical divider line between the sidebar and the main pane area.
 - Added `ui.zoom_indicator` to configure the marker shown in the zoomed pane's border title. It defaults to `Z` and an empty string hides it.
+- Added `ui.prefix_indicator`. The default `status_bar` keeps the prefix-mode hint bar; `highlight` hides it and recolors the focused pane border and active tab instead.
 
 ### Changed
 - The zoom marker now appears in the zoomed pane's border title instead of the tab label, so it stays visible while looking at the zoomed pane.

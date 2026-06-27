@@ -299,6 +299,10 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # Marker appended to the zoomed pane's border title (prefix+z). Empty string hides it.
 # zoom_indicator = "Z"
 
+# How prefix mode is indicated: "status_bar" shows the bottom hint bar; "highlight"
+# hides it and recolors the focused pane border and active tab instead.
+# prefix_indicator = "status_bar"
+
 # Agent panel ordering: "spaces" (grouped by space) or "priority" (attention queue).
 # "workspaces" is accepted as an alias for "spaces".
 # agent_panel_sort = "spaces"
