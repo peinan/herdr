@@ -89,6 +89,7 @@ pub(crate) use self::{
 };
 use crate::app::state::ViewLayout;
 use crate::app::{AppState, Mode};
+use crate::config::PrefixIndicatorConfig;
 use crate::terminal::TerminalRuntimeRegistry;
 
 const COLLAPSED_WIDTH: u16 = 4; // num + space + dot + separator
@@ -405,7 +406,11 @@ pub fn render_with_runtime_registry(
             render_mobile_panel(app, terminal_runtimes, frame, frame.area())
         }
         Mode::Navigate => render_navigate_overlay(app, frame, terminal_area),
-        Mode::Prefix => render_prefix_overlay(app, frame, terminal_area),
+        Mode::Prefix => {
+            if app.prefix_indicator == PrefixIndicatorConfig::StatusBar {
+                render_prefix_overlay(app, frame, terminal_area);
+            }
+        }
         Mode::Copy => render_copy_mode_overlay(app, frame, terminal_area),
         Mode::Resize => render_resize_overlay(app, frame, terminal_area),
         Mode::ConfirmClose => render_confirm_close_overlay(app, frame, terminal_area),
@@ -1161,6 +1166,27 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect::<String>();
         assert!(rendered.contains("PREFIX"));
+    }
+
+    #[test]
+    fn prefix_highlight_mode_suppresses_status_bar() {
+        let mut app = crate::app::state::AppState::test_new();
+        app.mode = Mode::Prefix;
+        app.prefix_indicator = PrefixIndicatorConfig::Highlight;
+        app.view.terminal_area = ratatui::layout::Rect::new(0, 0, 60, 4);
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(60, 4))
+            .expect("test terminal");
+
+        terminal.draw(|frame| render(&app, frame)).expect("draw ui");
+
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(!rendered.contains("PREFIX"));
     }
 
     #[test]

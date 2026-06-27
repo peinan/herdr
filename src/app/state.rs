@@ -1,4 +1,6 @@
-use crate::config::{Keybinds, NewTerminalCwdConfig, SoundConfig, ToastConfig, ToastDelivery};
+use crate::config::{
+    Keybinds, NewTerminalCwdConfig, PrefixIndicatorConfig, SoundConfig, ToastConfig, ToastDelivery,
+};
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::layout::{Direction, Rect};
 use ratatui::style::Color;
@@ -1370,6 +1372,9 @@ pub struct AppState {
     /// Marker appended to the zoomed pane's border title (prefix+z). Empty
     /// hides it. Projected from `[ui] zoom_indicator`.
     pub zoom_indicator: String,
+    /// How prefix mode is indicated on screen. Projected from
+    /// `[ui] prefix_indicator`.
+    pub prefix_indicator: PrefixIndicatorConfig,
     pub pane_history_persistence: bool,
     /// Expose the focused pane's cursor anchor to the outer terminal even when
     /// the pane requested `?25l`. See `[experimental] reveal_hidden_cursor_for_cjk_ime`.
@@ -1521,6 +1526,13 @@ impl AppState {
 
     pub fn is_prefix_key(&self, key: crate::input::TerminalKey) -> bool {
         crate::config::terminal_key_matches_combo(key, (self.prefix_code, self.prefix_mods))
+    }
+
+    /// True when prefix mode should be signalled by recoloring the focused
+    /// pane border and active tab instead of drawing the bottom hint bar.
+    /// Driven by `[ui] prefix_indicator = "highlight"`.
+    pub fn prefix_highlight_active(&self) -> bool {
+        self.mode == Mode::Prefix && self.prefix_indicator == PrefixIndicatorConfig::Highlight
     }
 
     pub fn estimate_pane_size(&self) -> (u16, u16) {
@@ -1732,6 +1744,7 @@ impl AppState {
             dim_inactive_panes: true,
             sidebar_divider: true,
             zoom_indicator: "Z".into(),
+            prefix_indicator: PrefixIndicatorConfig::StatusBar,
             pane_history_persistence: false,
             reveal_hidden_cursor_for_cjk_ime: false,
             cjk_ime_agent_filter_configured: false,
@@ -2126,6 +2139,23 @@ impl AppState {
 mod tests {
     use super::*;
     use crossterm::event::KeyEvent;
+
+    #[test]
+    fn prefix_highlight_active_requires_prefix_mode_and_highlight() {
+        let mut app = AppState::test_new();
+
+        // Default indicator keeps the status bar even while prefix is pending.
+        app.mode = Mode::Prefix;
+        assert!(!app.prefix_highlight_active());
+
+        // Highlight indicator activates while prefix is pending...
+        app.prefix_indicator = PrefixIndicatorConfig::Highlight;
+        assert!(app.prefix_highlight_active());
+
+        // ...but only while prefix is pending.
+        app.mode = Mode::Terminal;
+        assert!(!app.prefix_highlight_active());
+    }
 
     #[test]
     fn agent_terminal_keeps_final_child_cursor_exposed() {

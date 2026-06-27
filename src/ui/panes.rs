@@ -436,7 +436,11 @@ fn render_pane_borders(app: &AppState, ws: &crate::workspace::Workspace, frame: 
         let cell = &mut buf[(x, y)];
         cell.set_symbol(symbol);
         let color = if focused {
-            app.palette.accent
+            if app.prefix_highlight_active() {
+                app.palette.yellow
+            } else {
+                app.palette.accent
+            }
         } else {
             app.palette.overlay0
         };
@@ -606,7 +610,11 @@ fn render_pane_border_titles(app: &AppState, ws: &crate::workspace::Workspace, f
             continue;
         }
         let color = if info.is_focused {
-            app.palette.accent
+            if app.prefix_highlight_active() {
+                app.palette.yellow
+            } else {
+                app.palette.accent
+            }
         } else {
             app.palette.overlay0
         };
