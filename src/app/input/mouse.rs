@@ -436,14 +436,6 @@ impl AppState {
                     }
                 }
 
-                if self.on_tab_scroll_left_button(mouse.column, mouse.row) {
-                    self.scroll_tabs_left();
-                    return None;
-                }
-                if self.on_tab_scroll_right_button(mouse.column, mouse.row) {
-                    self.scroll_tabs_right();
-                    return None;
-                }
                 if let (Some(ws_idx), Some(tab_idx)) =
                     (self.active, self.tab_at(mouse.column, mouse.row))
                 {
@@ -1182,24 +1174,6 @@ impl AppState {
             && col < area.x + area.width
     }
 
-    pub(super) fn on_tab_scroll_left_button(&self, col: u16, row: u16) -> bool {
-        let area = self.view.tab_scroll_left_hit_area;
-        area.width > 0
-            && row >= area.y
-            && row < area.y + area.height
-            && col >= area.x
-            && col < area.x + area.width
-    }
-
-    pub(super) fn on_tab_scroll_right_button(&self, col: u16, row: u16) -> bool {
-        let area = self.view.tab_scroll_right_hit_area;
-        area.width > 0
-            && row >= area.y
-            && row < area.y + area.height
-            && col >= area.x
-            && col < area.x + area.width
-    }
-
     pub(super) fn tab_drop_index_at(&self, col: u16, row: u16) -> Option<usize> {
         if !self.on_tab_bar(col, row) {
             return None;
@@ -1215,30 +1189,8 @@ impl AppState {
         let (first_idx, first_rect) = *visible_tabs.first()?;
         let (last_idx, last_rect) = *visible_tabs.last()?;
 
-        if self.on_tab_scroll_left_button(col, row) {
-            return Some(0);
-        }
-        if self.on_tab_scroll_right_button(col, row) {
-            return self
-                .active
-                .and_then(|idx| self.workspaces.get(idx))
-                .map(|ws| ws.tabs.len());
-        }
-
-        let left_edge = if first_idx == 0 {
-            first_rect.x
-        } else {
-            self.view.tab_scroll_left_hit_area.x + self.view.tab_scroll_left_hit_area.width
-        };
-        let right_edge = if self
-            .active
-            .and_then(|idx| self.workspaces.get(idx))
-            .is_some_and(|ws| last_idx + 1 >= ws.tabs.len())
-        {
-            last_rect.x + last_rect.width
-        } else {
-            self.view.tab_scroll_right_hit_area.x.saturating_sub(1)
-        };
+        let left_edge = first_rect.x;
+        let right_edge = last_rect.x + last_rect.width;
 
         if col <= left_edge {
             return Some(first_idx);
@@ -3079,7 +3031,6 @@ mod tests {
         app.state.mode = Mode::Terminal;
 
         crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 65, 20));
-        assert!(app.state.view.tab_scroll_right_hit_area.width > 0);
         let tab_bar = app.state.view.tab_bar_rect;
 
         app.handle_mouse(mouse(
