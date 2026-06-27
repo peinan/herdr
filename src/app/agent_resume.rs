@@ -129,6 +129,7 @@ impl App {
             tab,
             terminal_area,
             self.state.pane_borders,
+            self.state.single_pane_border,
             self.state.pane_gaps,
         );
 
@@ -288,16 +289,22 @@ fn derived_pending_agent_resume_pane_infos(
     tab: &crate::workspace::Tab,
     terminal_area: Rect,
     pane_borders: bool,
+    single_pane_border: bool,
     pane_gaps: bool,
 ) -> Vec<crate::layout::PaneInfo> {
-    crate::ui::apply_pane_chrome(tab.layout.panes(terminal_area), pane_borders, pane_gaps)
-        .into_iter()
-        .map(|mut info| {
-            let pane_inner = crate::ui::pane_inner_rect(info.rect, info.borders);
-            info.inner_rect = stable_terminal_inner_rect(pane_inner);
-            info
-        })
-        .collect()
+    crate::ui::apply_pane_chrome(
+        tab.layout.panes(terminal_area),
+        pane_borders,
+        single_pane_border,
+        pane_gaps,
+    )
+    .into_iter()
+    .map(|mut info| {
+        let pane_inner = crate::ui::pane_inner_rect(info.rect, info.borders);
+        info.inner_rect = stable_terminal_inner_rect(pane_inner);
+        info
+    })
+    .collect()
 }
 
 fn stable_terminal_inner_rect(pane_inner: Rect) -> Rect {

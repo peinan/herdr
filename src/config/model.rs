@@ -785,6 +785,9 @@ pub struct UiConfig {
     pub prompt_new_tab_name: bool,
     /// Draw borders around split panes. Default: true.
     pub pane_borders: bool,
+    /// Draw a border around the pane even when only one pane is open. Has no
+    /// effect unless `pane_borders` is enabled. Default: false.
+    pub single_pane_border: bool,
     /// Keep split panes visually separated instead of sharing divider borders. Default: true.
     pub pane_gaps: bool,
     /// Show agent labels in split pane borders when no manual pane label is set. Default: false.
@@ -1002,6 +1005,7 @@ impl Default for UiConfig {
             confirm_close: true,
             prompt_new_tab_name: true,
             pane_borders: true,
+            single_pane_border: false,
             pane_gaps: true,
             show_agent_labels_on_pane_borders: false,
             dim_inactive_panes: true,
@@ -1217,6 +1221,7 @@ agent_panel_scope = "current"
     fn pane_appearance_defaults_and_parse() {
         let default_config = Config::default();
         assert!(default_config.ui.pane_borders);
+        assert!(!default_config.ui.single_pane_border);
         assert!(default_config.ui.pane_gaps);
         assert!(!default_config.ui.show_agent_labels_on_pane_borders);
         assert!(default_config.ui.dim_inactive_panes);
@@ -1230,6 +1235,7 @@ agent_panel_scope = "current"
         let toml = r#"
 [ui]
 pane_borders = false
+single_pane_border = true
 pane_gaps = true
 show_agent_labels_on_pane_borders = true
 dim_inactive_panes = false
@@ -1239,6 +1245,7 @@ prefix_indicator = "highlight"
 "#;
         let config: Config = toml::from_str(toml).unwrap();
         assert!(!config.ui.pane_borders);
+        assert!(config.ui.single_pane_border);
         assert!(config.ui.pane_gaps);
         assert!(config.ui.show_agent_labels_on_pane_borders);
         assert!(!config.ui.dim_inactive_panes);

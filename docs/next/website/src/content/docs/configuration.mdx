@@ -320,6 +320,7 @@ mouse_scroll_lines = 3
 confirm_close = true
 prompt_new_tab_name = true
 pane_borders = true
+single_pane_border = false
 pane_gaps = true
 show_agent_labels_on_pane_borders = false
 sidebar_divider = true
@@ -346,6 +347,8 @@ Set `redraw_on_focus_gained = false` to avoid the visible full-screen refresh wh
 Set `mouse_scroll_lines` to change how many pane scrollback lines each mouse wheel notch scrolls. The default is 3. Pane apps that request mouse reporting still receive wheel events directly. Alternate-screen apps have no scrollback to scroll; see [Scrollback](#scrollback).
 
 Set `pane_borders = false` to remove split pane borders. Set `pane_gaps = false` to make split panes share compact divider borders. With borders disabled, pane gaps use one blank terminal cell between panes. Terminal cells are usually taller than they are wide, so a one-row gap between top/bottom panes can look larger than a one-column gap between left/right panes.
+
+Set `single_pane_border = true` to keep a border around the pane even when a tab has only one pane. By default a lone pane has no border. This setting has no effect when `pane_borders = false`.
 
 Set `show_agent_labels_on_pane_borders = true` if you want detected agent labels in split pane borders when no manual pane label is set.
 

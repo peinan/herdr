@@ -1625,6 +1625,7 @@ impl App {
         let panes = crate::ui::apply_pane_chrome(
             tab.layout.panes(area),
             self.state.pane_borders,
+            self.state.single_pane_border,
             self.state.pane_gaps,
         )
         .into_iter()
