@@ -5,7 +5,6 @@ use ratatui::{
     Frame,
 };
 
-use super::widgets::panel_contrast_fg;
 use crate::app::AppState;
 
 const MIN_TAB_WIDTH: u16 = 8;
@@ -314,24 +313,21 @@ pub(super) fn render_tab_bar(app: &AppState, frame: &mut Frame, area: Rect) {
         }
         let active = idx == ws.active_tab;
         let style = if active {
-            let active_bg = if app.prefix_highlight_active() {
+            let active_fg = if app.prefix_highlight_active() {
                 p.yellow
             } else {
                 p.accent
             };
-            let base = Style::default().fg(panel_contrast_fg(p)).bg(active_bg);
+            let base = Style::default().fg(active_fg);
             if tab.is_auto_named() {
                 base.add_modifier(Modifier::DIM)
             } else {
                 base.add_modifier(Modifier::BOLD)
             }
         } else if tab.is_auto_named() {
-            Style::default()
-                .fg(p.overlay0)
-                .bg(p.surface0)
-                .add_modifier(Modifier::DIM)
+            Style::default().fg(p.overlay0).add_modifier(Modifier::DIM)
         } else {
-            Style::default().fg(p.overlay1).bg(p.surface0)
+            Style::default().fg(p.overlay1)
         };
         let width = rect.width as usize;
         let name = tab_chrome_label(ws, idx);

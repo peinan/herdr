@@ -879,12 +879,16 @@ mod tests {
 
         assert_eq!(auto_style.fg, Some(app.palette.overlay0));
         assert!(auto_style.add_modifier.contains(Modifier::DIM));
-        assert_eq!(custom_style.fg, Some(app.palette.panel_bg));
+        // Tabs no longer paint their own background; the tab-bar fill shows through.
+        assert_eq!(auto_style.bg, Some(app.palette.panel_bg));
+        assert_eq!(custom_style.fg, Some(app.palette.accent));
         assert!(custom_style.add_modifier.contains(Modifier::BOLD));
+        // The active tab is distinguished by the accent foreground, not a fill.
+        assert_eq!(custom_style.bg, Some(app.palette.panel_bg));
     }
 
     #[test]
-    fn tab_bar_uses_surface_dim_when_panel_background_resets() {
+    fn tab_bar_active_uses_accent_fg_when_panel_background_resets() {
         let mut app = crate::app::state::AppState::test_new();
         let mut ws = Workspace::test_new("test");
         let custom_tab = ws.test_add_tab(Some("logs"));
@@ -906,8 +910,9 @@ mod tests {
         let custom_rect = app.view.tab_hit_areas[1];
         let custom_style = buffer[(custom_rect.x + 1, custom_rect.y)].style();
 
-        assert_eq!(custom_style.bg, Some(app.palette.accent));
-        assert_eq!(custom_style.fg, Some(app.palette.surface_dim));
+        // The active tab stays visible via the accent foreground (not a fill),
+        // even when the panel background resets to the terminal default.
+        assert_eq!(custom_style.fg, Some(app.palette.accent));
         assert!(custom_style.add_modifier.contains(Modifier::BOLD));
     }
 
