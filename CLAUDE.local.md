@@ -24,6 +24,17 @@
 
 `origin` は `peinan/herdr`。`upstream` リモートは無く、必要も無い。
 
+## フォーク独自機能のカタログ
+
+`develop` に積んだ自分用のカスタマイズ（設定オプション・キーバインド・UI 改修）は
+[`FORK_FEATURES.md`](./FORK_FEATURES.md) に一覧化してある。`master...develop` の差分を
+機能単位で整理したもので、機能一覧・追加した設定項目・変更履歴の表を持つ。
+`CLAUDE.local.md` と同じく `develop` 限定で、`master` には入れない。
+
+新しい機能を `develop` にランディングさせたら `FORK_FEATURES.md` を更新する —
+機能一覧の行、（設定を追加したなら）設定項目、変更履歴に、概要・PR 番号・機能コミットの
+短縮 SHA を追記する。冒頭の再生成コマンド（`git diff master...develop`）で差分を拾える。
+
 ## アップストリームを `master`、そして `develop` へ同期する
 
 `master` はアップストリームのミラーとしてのみ進み、`develop` はその変更を定期的に
@@ -114,6 +125,9 @@ gh api repos/peinan/herdr/pulls \
 owner プレフィックスの無い `head` は `peinan/herdr` 内に留まる。新規クローンで
 `develop` がローカルにしか無い場合は、先に `git push origin develop`。TTY がある
 場合の対話版: `gh pr create --repo peinan/herdr --base develop`。
+
+PR が `develop` にマージされたら、その機能を
+[`FORK_FEATURES.md`](./FORK_FEATURES.md) に追記する（上記「フォーク独自機能のカタログ」）。
 
 ## `AGENTS.md` から引き継ぐ規約（1 点だけ上書き）
 
