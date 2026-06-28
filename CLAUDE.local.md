@@ -1,74 +1,109 @@
-# Personal fork workflow (peinan/herdr)
+# 個人フォークの開発フロー (peinan/herdr)
 
-Fork-local instructions layered on top of `AGENTS.md` (the upstream-maintained
-conventions that `CLAUDE.md` symlinks to). `AGENTS.md` stays authoritative for
-engineering practice — code style, testing, screen detection, protocol, docs.
-This file only covers how *this fork* is branched, synced, and landed, and
-**wins over `AGENTS.md` wherever the two describe the same fork-local workflow**
-(notably branch targets and the "land on master" step).
+`AGENTS.md`（`CLAUDE.md` がシンボリックリンクしている、アップストリーム管理の
+規約）の上に重ねるフォーク固有の指示。コードスタイル・テスト・画面検出・
+プロトコル・ドキュメントといったエンジニアリング実務は引き続き `AGENTS.md` が
+正となる。このファイルが扱うのは *このフォーク* のブランチ運用・同期・取り込み
+だけで、**同じフォーク固有のワークフローについて両者が食い違う場合はこのファイルを
+優先する**（特にブランチの向き先と「`master` へ反映する」手順）。
 
-This file is committed on `develop` only. It never exists on `master`, so it
-never collides with upstream. Do not add it to `.gitignore`.
+このファイルは `develop` にのみコミットする。`master` には存在しないため、
+アップストリームと衝突しない。`.gitignore` には追加しないこと。
 
-## Fork model
+## フォークの構成
 
-Personal fork of upstream `ogulcancelik/herdr`. Follow upstream's engineering
-conventions by default; deviate only where this file says so. Two branches, two
-roles:
+アップストリーム `ogulcancelik/herdr` の個人フォーク。基本はアップストリームの
+エンジニアリング規約に従い、このファイルが明記した箇所だけ逸脱する。ブランチは
+2 本、役割も 2 つ:
 
-- **`master`** — mirrors upstream `ogulcancelik/herdr`. No personal commits ever
-  land here. Keep it a clean fast-forward of upstream.
-- **`develop`** — the personal integration line: all customization and feature
-  work, stacked on top of `master`. This is the default working branch.
+- **`master`** — アップストリーム `ogulcancelik/herdr` をミラーする。個人の
+  コミットは一切ここに入れない。常にアップストリームへのクリーンな fast-forward
+  を保つ。
+- **`develop`** — 個人の統合ライン。カスタマイズと機能開発はすべて `master` の
+  上に積む。これが既定の作業ブランチ。
 
-`origin` is `peinan/herdr`. There is no `upstream` remote, and none is needed.
+`origin` は `peinan/herdr`。`upstream` リモートは無く、必要も無い。
 
-## Syncing `master` from upstream
+## アップストリームを `master`、そして `develop` へ同期する
 
-1. On the `peinan/herdr` GitHub page, use **"Sync fork"** to fast-forward the
-   fork's `master` from `ogulcancelik/herdr`.
-2. Pull it down and carry the new upstream base into `develop`:
+`master` はアップストリームのミラーとしてのみ進み、`develop` はその変更を定期的に
+取り込む。これは `master → develop` の一方向の "merge up" であり、逆向きには
+しない。
+
+1. `peinan/herdr` の GitHub ページで **"Sync fork"** を使い、フォークの `master`
+   を `ogulcancelik/herdr` から fast-forward する。
+2. それをローカルに取り込み、新しいアップストリームのベースを `develop` に運ぶ:
 
 ```bash
-git checkout master && git pull          # fast-forward local master
-git checkout develop && git merge master # merge, not rebase: develop is published
-git push origin develop
+git checkout master && git pull          # ローカル master を fast-forward
+git checkout develop && git merge master # アップストリームを develop に取り込む
+just check                               # 検証 — ZIG が必要、「引き継ぐ規約」を参照
+git push origin develop                  # develop は保護なし、直接 push でよい
 ```
 
-Prefer **merge** over rebase: `develop` is pushed to `origin/develop` and may
-have open PRs/worktrees built on it, so its history must stay stable.
+`develop` はブランチ保護されていないため、このローカル merge + push が既定かつ
+最も簡単な経路。`master → develop` の PR は任意 — CI やレビュー可能な差分が
+欲しいときだけ使う。コンフリクト解消はどちらにせよローカルで行う。
 
-## Feature work: one worktree per feature
+### 注意点（定期的な `master → develop`）
 
-New features and customizations go in a dedicated worktree off `develop`, not in
-the main checkout.
+- **向きは一方向のみ。** 常に `master → develop`（`head=master`, `base=develop`）。
+  `develop` を `master` にマージしないこと — 個人のコミットが `master` に到達
+  すると "Sync fork" が fast-forward できなくなる。
+- **マージコミットにする。squash は禁止。** PR 経由にする場合は **マージコミット**
+  でマージする。リポジトリでは 3 種のマージ方式すべてが有効なので squash は
+  ワンクリックで選べてしまう — そして `master → develop` を squash すると、
+  アップストリームのコミット群が `master` の履歴とリンクを持たない新しい SHA に
+  潰される。以降のマージのたびに git が同じアップストリーム変更を再適用し、永遠に
+  コンフリクトし続ける。ローカルの `git merge master` なら常に正しく処理される。
+- **`develop` を `master` に rebase しないこと。** `develop` は公開済みで、
+  worktree や機能ブランチが上に積まれている。rebase は個人コミットを書き換え、
+  それらを壊す。merge up で取り込む。
+- **コンフリクトはカスタマイズ箇所に集中する。** アップストリームと自分の UI 改修
+  （タブバー、ペイン枠、prefix/zoom インジケータ）は同じ描画・設定ファイルに触れる。
+  **両方** を取り込む形で解消すること — `-X ours`/`-X theirs` の一括指定は個人機能を
+  黙って落としたり、アップストリームの修正を巻き戻したりする。
+- **`just check` は UI 機能の欠落を検出できない。** 正しさの確認には実行するが、
+  マージ後に自分のカスタマイズがちゃんと描画されるかも目視する。
+- **アップストリーム管理のファイル（`AGENTS.md`, `README` など）に個人の変更を
+  入れない。** 取り込みのたびのコンフリクトを抑えるため — 個人設定を `AGENTS.md`
+  ではなくこのファイルに置いているのはそのため。
+- **開いている `feat/*` worktree が少ないときに取り込む。** `develop` が
+  アップストリームを取り込んだ後、進行中の機能ブランチは古いベースの上に残り、
+  ランディング前にそれぞれ `develop` のマージが必要になることがある。
 
-- **Location:** `../herdr-worktrees/<slug>` (sibling of the main checkout). The
-  directory `<slug>` is the branch name **without** the `feat/` prefix — branch
-  `feat/zoom-indicator` → `../herdr-worktrees/zoom-indicator`.
-- **Branch:** `feat/<slug>` off `develop`, or `issue/<id>-<slug>` when a GitHub
-  issue exists.
-- Do all edits, tests, and commits inside the worktree.
+## 機能開発: 機能ごとに worktree を 1 つ
+
+新しい機能やカスタマイズは、メインのチェックアウトではなく `develop` から切った
+専用 worktree で行う。
+
+- **場所:** `../herdr-worktrees/<slug>`（メインチェックアウトの兄弟ディレクトリ）。
+  ディレクトリ名 `<slug>` はブランチ名から `feat/` を**除いた**もの — ブランチ
+  `feat/zoom-indicator` → `../herdr-worktrees/zoom-indicator`。
+- **ブランチ:** `develop` から `feat/<slug>`。GitHub issue がある場合は
+  `issue/<id>-<slug>`。
+- 編集・テスト・コミットはすべて worktree 内で行う。
 
 ```bash
 git worktree add ../herdr-worktrees/<slug> -b feat/<slug> develop
 ```
 
-Opening a PR is encouraged — the work is disposable. If an approach doesn't pan
-out, just delete the branch and worktree; nothing is lost.
+PR を作るのは推奨 — この作業は使い捨ててよい。方針が合わなければブランチと
+worktree を消すだけでよく、失うものは無い。
 
 ```bash
 git worktree remove ../herdr-worktrees/<slug>
-git branch -D feat/<slug>          # and: git push origin --delete feat/<slug>
+git branch -D feat/<slug>          # 併せて: git push origin --delete feat/<slug>
 ```
 
-## Pull requests (intra-fork → `develop`)
+## プルリクエスト（フォーク内 → `develop`）
 
-PRs target **`develop` inside the fork**, never upstream and never `master`.
+PR は**フォーク内の `develop`** を向き先にする。アップストリームにも `master` にも
+向けない。
 
-`gh` defaults a fork PR to the upstream parent, and `gh pr create` **hangs** in
-non-interactive/background runs (it prompts for the base repo with no TTY).
-Create PRs via the API instead — non-interactive and intra-fork by construction:
+`gh` はフォークの PR を既定でアップストリームの親に向ける。さらに `gh pr create`
+は非対話・バックグラウンド実行で**ハングする**（TTY が無い状態でベースリポジトリの
+選択を促すため）。代わりに API で作る — 非対話で、構造上フォーク内に閉じる:
 
 ```bash
 gh api repos/peinan/herdr/pulls \
@@ -76,21 +111,23 @@ gh api repos/peinan/herdr/pulls \
   -f head=<branch> -f base=develop --jq '.html_url'
 ```
 
-`head` with no owner prefix stays in `peinan/herdr`. If `develop` is local-only
-on a fresh clone, `git push origin develop` first. Interactive equivalent, only
-with a real TTY: `gh pr create --repo peinan/herdr --base develop`.
+owner プレフィックスの無い `head` は `peinan/herdr` 内に留まる。新規クローンで
+`develop` がローカルにしか無い場合は、先に `git push origin develop`。TTY がある
+場合の対話版: `gh pr create --repo peinan/herdr --base develop`。
 
-## Carried over from `AGENTS.md` (with one override)
+## `AGENTS.md` から引き継ぐ規約（1 点だけ上書き）
 
-- **Override the "land on master" step.** `AGENTS.md` (Multi-agent isolation)
-  says to fast-forward a shared checkout and push `origin/master`. In this fork,
-  personal work lands on `develop` via the intra-fork PR above — never by
-  pushing `master`. `master` only moves via upstream sync.
-- **Commit style still applies:** lowercase conventional commits, no emoji, **no
-  AI co-author line**. Use `refs #<n>` (not `fixes`/`closes`) and only for real
-  issues, not discussions. Propose the commit message and get alignment first.
-- **Builds/tests need `ZIG` set** — the mise-installed zig is not on the
-  non-interactive PATH:
+- **「`master` へ反映する」手順は上書きする。** `AGENTS.md`（Multi-agent
+  isolation）は共有チェックアウトを fast-forward して `origin/master` に push せよ
+  と書くが、このフォークでは個人の作業は上記のフォーク内 PR で `develop` に
+  ランディングする — `master` に push することはしない。`master` はアップストリーム
+  同期でのみ動く。
+- **コミット規約はそのまま適用:** 小文字の conventional commits、絵文字なし、
+  **AI の co-author 行なし**。`refs #<n>`（`fixes`/`closes` ではなく）は実際の
+  issue のみに使い、discussion には使わない。コミットメッセージは事前に提案して
+  合意を取る。
+- **ビルド・テストには `ZIG` の設定が必要** — mise 管理の zig は非対話シェルの
+  PATH に乗らない:
 
 ```bash
 ZIG=~/.local/share/mise/installs/zig/latest/bin/zig just check
