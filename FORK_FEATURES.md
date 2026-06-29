@@ -57,7 +57,7 @@ git diff master...develop -- src/config/model.rs # 追加した設定フィー�
 
 ```toml
 [ui]
-pane_title_format = "$dir $process( ⋅ $branch$ahead_behind$git_status)"
+pane_title_format = "$dir $process( ⋅ $branch$ahead_behind$git_status)( $zoom)"
 ```
 
 - **変数**(該当なしは空文字に解決):
@@ -67,11 +67,12 @@ pane_title_format = "$dir $process( ⋅ $branch$ahead_behind$git_status)"
   - `$branch` git ブランチ(detached HEAD は短縮 SHA フォールバック)
   - `$ahead_behind` 上流との差(`⇡2⇣1`、0 は省略)
   - `$git_status` ワーキングツリー状態(`=`衝突 `!`変更 `+`ステージ `?`未追跡)
-  - `$zoom` ズームマーカー(`ui.zoom_indicator`) / `$label` 手動ラベル(`pane rename`)
+  - `$zoom` ズームマーカー(`ui.zoom_indicator`、zoom 中のみ非空) / `$label` 手動ラベル(`pane rename`)
 - **条件付きグループ** `( … )`: 中の変数が**すべて空**ならグループ全体(区切り文字・記号含む)を非表示。ネスト可。
   上の例はリポジトリ外では ` ⋅ ` ごと消える。
 - **エスケープ**: `\$` `\(` `\)` `\\`。名前境界の明示は `${name}` 形式。
 - **優先順位**: OSC タイトル > 手動ラベル(`pane rename`) > この書式。書式が空なら従来挙動のまま(完全に不変)。
+- **zoom マーカー**: 書式を指定したときは `$zoom` が配置を制御(末尾への自動付加は抑止)。書式が空(デフォルト)のときだけ従来どおり末尾へ自動付加。
 - プロセス名・git はすべて herdr 側で検出(シェルフック不要)。git は約1.5秒ポーリングで
   エージェント内の `git checkout` 等にも追従。`$git_status`(dirty)は毎ポーリング再計算。
   per-pane git は repo 単位キーなので、同一リポジトリの別 worktree のペインは各自のブランチを表示。

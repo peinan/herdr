@@ -740,7 +740,11 @@ fn render_pane_border_titles(app: &AppState, ws: &crate::workspace::Workspace, f
         // When the tab is zoomed, `compute_pane_infos` emits a single pane info
         // for the focused pane, so `is_focused` identifies the zoomed pane.
         let zoomed_here = ws.zoomed && info.is_focused;
-        let show_marker = zoomed_here && !app.zoom_indicator.is_empty();
+        // A custom format owns the title, including the zoom marker via `$zoom`;
+        // only the legacy (no-format) path auto-appends the indicator so the two
+        // never double up.
+        let show_marker =
+            zoomed_here && !app.zoom_indicator.is_empty() && app.pane_title_format.is_empty();
         let label = match (base, show_marker) {
             (Some(base), true) => format!("{base} {}", app.zoom_indicator),
             (Some(base), false) => base,
@@ -1135,10 +1139,16 @@ mod tests {
         );
     }
 
-    fn render_title_row_with_format(format: &str, cwd: &str, manual_label: Option<&str>) -> String {
+    fn render_title_row_with_format(
+        format: &str,
+        cwd: &str,
+        manual_label: Option<&str>,
+        zoomed: bool,
+    ) -> String {
         let width: u16 = 30;
         let mut app = AppState::test_new();
         app.mode = Mode::Terminal;
+        app.zoom_indicator = "Z".to_string();
         app.pane_title_format = crate::ui::pane_title::parse(format).expect("parse format");
         app.view.terminal_area = Rect::new(0, 0, width, 3);
         app.view.pane_infos = vec![PaneInfo {
@@ -1147,10 +1157,11 @@ mod tests {
             inner_rect: Rect::default(),
             scrollbar_rect: None,
             borders: Borders::ALL,
-            is_focused: false,
+            is_focused: zoomed,
         }];
 
-        let ws = Workspace::test_new("test");
+        let mut ws = Workspace::test_new("test");
+        ws.tabs[0].zoomed = zoomed;
         let terminal_id = ws.tabs[0].panes[&PaneId::from_raw(1)]
             .attached_terminal_id
             .clone();
@@ -1182,7 +1193,7 @@ mod tests {
 
     #[test]
     fn custom_pane_title_format_renders_dir() {
-        let row = render_title_row_with_format("$dir", "/home/user/herdr", None);
+        let row = render_title_row_with_format("$dir", "/home/user/herdr", None, false);
         assert!(row.contains("herdr"), "border row: {row:?}");
     }
 
@@ -1190,9 +1201,27 @@ mod tests {
     fn manual_label_takes_precedence_over_pane_title_format() {
         // A manual pane label wins over the custom format, matching the
         // `effective_title` > `manual_label` > format precedence.
-        let row = render_title_row_with_format("$dir", "/home/user/herdr", Some("pinned"));
+        let row = render_title_row_with_format("$dir", "/home/user/herdr", Some("pinned"), false);
         assert!(row.contains("pinned"), "border row: {row:?}");
         assert!(!row.contains("herdr"), "border row: {row:?}");
+    }
+
+    #[test]
+    fn zoom_var_renders_marker_once_in_format_mode() {
+        // `$zoom` expands to the indicator; the legacy auto-append is suppressed
+        // in format mode, so a zoomed pane shows the marker exactly once.
+        let row = render_title_row_with_format("$dir( $zoom)", "/home/user/herdr", None, true);
+        assert!(row.contains("herdr"), "row: {row:?}");
+        assert_eq!(row.matches('Z').count(), 1, "row: {row:?}");
+    }
+
+    #[test]
+    fn zoom_marker_absent_without_zoom_var_in_format_mode() {
+        // Without `$zoom` the format owns the title and no marker is auto-added,
+        // even when zoomed.
+        let row = render_title_row_with_format("$dir", "/home/user/herdr", None, true);
+        assert!(row.contains("herdr"), "row: {row:?}");
+        assert_eq!(row.matches('Z').count(), 0, "row: {row:?}");
     }
 
     #[test]

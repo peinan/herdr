@@ -298,8 +298,10 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # ${var}) variables, and conditional groups ( ... ) that disappear when every
 # variable inside resolves empty. Variables: $dir $cwd $process $agent $branch
 # $ahead_behind $git_status $zoom $label. Escape metacharacters with \$ \( \) \\.
-# An OSC-set title or a manual pane name still take precedence. Empty disables it.
-# pane_title_format = ""
+# An OSC-set title or a manual pane name still take precedence; empty (default)
+# keeps the built-in label. With a format set, $zoom places the zoom marker and
+# the auto-append is suppressed. Example:
+# pane_title_format = "$dir $process( ⋅ $branch$ahead_behind$git_status)( $zoom)"
 
 # Dim panes that are not focused, providing an active-pane highlight even outside prefix mode.
 # dim_inactive_panes = true
