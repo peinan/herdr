@@ -82,6 +82,9 @@ pub struct TerminalState {
     pub persisted_agent_session: Option<crate::agent_resume::PersistedAgentSession>,
     pub manual_label: Option<String>,
     pub agent_name: Option<String>,
+    /// Resolved basename of the current foreground process (alias/symlink/runtime
+    /// wrapper stripped). Display-only; not persisted to the session.
+    pub foreground_process: Option<String>,
     hook_report_sequences: HashMap<String, u64>,
     suppressed_full_lifecycle_hook_reports: HashMap<String, SuppressedFullLifecycleHookReport>,
     stale_full_lifecycle_hook_sessions: HashMap<String, Vec<StaleFullLifecycleHookSession>>,
@@ -108,6 +111,7 @@ impl TerminalState {
             persisted_agent_session: None,
             manual_label: None,
             agent_name: None,
+            foreground_process: None,
             hook_report_sequences: HashMap::new(),
             suppressed_full_lifecycle_hook_reports: HashMap::new(),
             stale_full_lifecycle_hook_sessions: HashMap::new(),
@@ -137,6 +141,12 @@ impl TerminalState {
     ) -> Self {
         self.pending_agent_resume_plan = Some(plan);
         self
+    }
+
+    /// Record the resolved foreground process name. Display-only state read by
+    /// the pane title renderer; does not affect agent detection or persistence.
+    pub fn set_foreground_process(&mut self, name: Option<String>) {
+        self.foreground_process = name;
     }
 
     #[cfg(test)]
@@ -1203,6 +1213,21 @@ mod tests {
             .join(name)
             .display()
             .to_string()
+    }
+
+    #[test]
+    fn set_foreground_process_round_trips() {
+        let mut terminal = test_terminal();
+        assert_eq!(terminal.foreground_process, None);
+
+        terminal.set_foreground_process(Some("claude".to_string()));
+        assert_eq!(terminal.foreground_process.as_deref(), Some("claude"));
+
+        terminal.set_foreground_process(Some("nvim".to_string()));
+        assert_eq!(terminal.foreground_process.as_deref(), Some("nvim"));
+
+        terminal.set_foreground_process(None);
+        assert_eq!(terminal.foreground_process, None);
     }
 
     #[test]

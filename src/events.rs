@@ -66,6 +66,12 @@ pub enum AppEvent {
         process_exited: bool,
         observed_at: Instant,
     },
+    /// The resolved foreground process name in a pane changed. Tracks plain
+    /// programs too (e.g. zsh -> nvim -> zsh), independent of agent identity.
+    ForegroundProcessChanged {
+        pane_id: PaneId,
+        process_name: Option<String>,
+    },
     /// Hook-authoritative agent state was reported for a pane.
     HookStateReported {
         pane_id: PaneId,

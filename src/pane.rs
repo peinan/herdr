@@ -171,6 +171,26 @@ async fn publish_state_changed_event(
     }
 }
 
+async fn publish_foreground_process_changed(
+    state_events: mpsc::Sender<AppEvent>,
+    pane_id: PaneId,
+    process_name: Option<String>,
+) {
+    if let Err(e) = state_events
+        .send(AppEvent::ForegroundProcessChanged {
+            pane_id,
+            process_name,
+        })
+        .await
+    {
+        warn!(
+            pane = pane_id.raw(),
+            err = %e,
+            "failed to deliver ForegroundProcessChanged event"
+        );
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct AgentDetectionPublishUpdate {
     state: AgentState,
@@ -405,6 +425,9 @@ struct ProcessProbeResult {
     foreground_is_pane_shell: bool,
     agent: Option<Agent>,
     process_name: Option<String>,
+    /// Resolved basename of the foreground process group leader, independent of
+    /// agent identification (see [`crate::detect::foreground_process_name`]).
+    foreground_process_name: Option<String>,
 }
 
 fn agent_hint_for_foreground_job_members(
@@ -450,6 +473,7 @@ fn process_probe_result(
         foreground_is_pane_shell: job.processes.iter().any(|process| process.pid == pid),
         agent: Some(agent),
         process_name: Some(process_name),
+        foreground_process_name: crate::detect::foreground_process_name(job),
     }
 }
 
@@ -511,6 +535,7 @@ fn probe_foreground_process_from_jobs(
             foreground_is_pane_shell: job.processes.iter().any(|process| process.pid == pid),
             agent: identified.as_ref().map(|(agent, _)| *agent),
             process_name: identified.map(|(_, process_name)| process_name),
+            foreground_process_name: crate::detect::foreground_process_name(job),
         };
     }
 
@@ -519,6 +544,7 @@ fn probe_foreground_process_from_jobs(
         foreground_is_pane_shell: false,
         agent: None,
         process_name: None,
+        foreground_process_name: None,
     }
 }
 
@@ -566,6 +592,7 @@ fn spawn_basic_detection_task(
         let mut foreground_shell_exit_reported = false;
         let mut release_was_active = false;
         let mut last_detection_text = String::new();
+        let mut last_foreground_process_name: Option<String> = None;
         let mut last_screen_scan_detection_content_seq = None;
         let mut agent_startup_grace_until = None;
         let mut pending_idle = PendingIdleConfirmation::default();
@@ -594,6 +621,7 @@ fn spawn_basic_detection_task(
                     foreground_shell_exit_reported = false;
                     release_was_active = false;
                     last_detection_text.clear();
+                    last_foreground_process_name = None;
                     last_screen_scan_detection_content_seq = None;
                     agent_startup_grace_until = None;
                     pending_idle.clear();
@@ -644,6 +672,7 @@ fn spawn_basic_detection_task(
                 let probe = probe_foreground_process(pid, foreground_pgid);
                 let process_group_id = probe.process_group_id;
                 let foreground_is_pane_shell = probe.foreground_is_pane_shell;
+                let foreground_process_name = probe.foreground_process_name;
                 let mut new_agent = probe.agent;
                 if let Some(suppressed_agent) = suppressed_agent {
                     if new_agent == Some(suppressed_agent) {
@@ -651,6 +680,15 @@ fn spawn_basic_detection_task(
                     } else if let Ok(mut pending_release) = pending_release_for_task.lock() {
                         *pending_release = None;
                     }
+                }
+                if foreground_process_name != last_foreground_process_name {
+                    last_foreground_process_name = foreground_process_name.clone();
+                    publish_foreground_process_changed(
+                        state_events.clone(),
+                        pane_id,
+                        foreground_process_name,
+                    )
+                    .await;
                 }
                 let previous_agent = agent_presence.current_agent();
                 let changed = match foreground_shell_agent_action(
@@ -1906,6 +1944,7 @@ impl PaneRuntime {
                 let mut last_visible_working = false;
                 let mut last_visible_signal_refresh = None;
                 let mut last_detection_text = String::new();
+                let mut last_foreground_process_name: Option<String> = None;
                 let mut last_screen_scan_detection_content_seq = None;
                 let mut agent_startup_grace_until = None;
                 let mut pending_idle = PendingIdleConfirmation::default();
@@ -1944,6 +1983,7 @@ impl PaneRuntime {
                             last_visible_working = false;
                             last_visible_signal_refresh = None;
                             last_detection_text.clear();
+                            last_foreground_process_name = None;
                             last_screen_scan_detection_content_seq = None;
                             agent_startup_grace_until = None;
                             pending_idle.clear();
@@ -1996,6 +2036,7 @@ impl PaneRuntime {
                             let process_name = probe.process_name;
                             let process_group_id = probe.process_group_id;
                             let foreground_is_pane_shell = probe.foreground_is_pane_shell;
+                            let foreground_process_name = probe.foreground_process_name;
                             let mut new_agent = probe.agent;
 
                             if let Some(suppressed_agent) = suppressed_agent {
@@ -2006,6 +2047,16 @@ impl PaneRuntime {
                                 {
                                     *pending_release = None;
                                 }
+                            }
+
+                            if foreground_process_name != last_foreground_process_name {
+                                last_foreground_process_name = foreground_process_name.clone();
+                                publish_foreground_process_changed(
+                                    state_events.clone(),
+                                    pane_id,
+                                    foreground_process_name,
+                                )
+                                .await;
                             }
 
                             let previous_agent = agent_presence.current_agent();

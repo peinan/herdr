@@ -194,6 +194,25 @@ pub fn identify_agent_in_job(job: &crate::platform::ForegroundJob) -> Option<(Ag
     best.map(|(_, agent, name)| (agent, name))
 }
 
+/// Resolve the display name of the foreground process group leader, with
+/// aliases, symlinks, and language-runtime wrappers stripped to the underlying
+/// program (e.g. `cl` -> `claude`, `node /path/.../claude` -> `claude`).
+///
+/// Unlike [`identify_agent_in_job`], this is not gated on the process being a
+/// known agent: plain programs such as `nvim`, `zsh`, or `cargo` return their
+/// own basename. Returns `None` only when the job has no processes.
+pub fn foreground_process_name(job: &crate::platform::ForegroundJob) -> Option<String> {
+    if let Some(leader) = job
+        .processes
+        .iter()
+        .find(|process| process.pid == job.process_group_id)
+    {
+        return Some(normalized_process_name(leader));
+    }
+
+    job.processes.first().map(normalized_process_name)
+}
+
 /// Detect the state of an agent from the live terminal tail snapshot.
 /// If `agent` is `None`, returns `Unknown`.
 #[cfg(test)]
@@ -704,6 +723,77 @@ mod tests {
             identify_agent_in_job(&job),
             Some((Agent::Codex, "codex".to_string()))
         );
+    }
+
+    #[test]
+    fn foreground_process_name_resolves_alias_to_real_binary() {
+        // `alias cl=claude`: argv0 carries the resolved binary even though the
+        // process name is the alias the user typed.
+        let leader = crate::platform::ForegroundProcess {
+            pid: 42,
+            name: "cl".to_string(),
+            argv0: Some("claude".to_string()),
+            argv: Some(vec!["cl".to_string()]),
+            cmdline: Some("cl".to_string()),
+        };
+        let job = crate::platform::ForegroundJob {
+            process_group_id: 42,
+            processes: vec![leader],
+        };
+
+        assert_eq!(foreground_process_name(&job), Some("claude".to_string()));
+    }
+
+    #[test]
+    fn foreground_process_name_unwraps_node_runtime_wrapper() {
+        let job = crate::platform::ForegroundJob {
+            process_group_id: 42,
+            processes: vec![foreground_process(
+                42,
+                "node",
+                &["node", "/usr/lib/node_modules/.bin/claude"],
+            )],
+        };
+
+        assert_eq!(foreground_process_name(&job), Some("claude".to_string()));
+    }
+
+    #[test]
+    fn foreground_process_name_returns_basename_for_plain_programs() {
+        let nvim = crate::platform::ForegroundJob {
+            process_group_id: 7,
+            processes: vec![foreground_process(7, "nvim", &["nvim", "src/pane.rs"])],
+        };
+        assert_eq!(foreground_process_name(&nvim), Some("nvim".to_string()));
+
+        let zsh = crate::platform::ForegroundJob {
+            process_group_id: 9,
+            processes: vec![foreground_process(9, "zsh", &["zsh"])],
+        };
+        assert_eq!(foreground_process_name(&zsh), Some("zsh".to_string()));
+    }
+
+    #[test]
+    fn foreground_process_name_falls_back_to_first_member_without_leader() {
+        let job = crate::platform::ForegroundJob {
+            process_group_id: 100,
+            processes: vec![
+                foreground_process(7, "cargo", &["cargo", "build"]),
+                foreground_process(8, "rustc", &["rustc"]),
+            ],
+        };
+
+        assert_eq!(foreground_process_name(&job), Some("cargo".to_string()));
+    }
+
+    #[test]
+    fn foreground_process_name_is_none_for_empty_job() {
+        let job = crate::platform::ForegroundJob {
+            process_group_id: 1,
+            processes: vec![],
+        };
+
+        assert_eq!(foreground_process_name(&job), None);
     }
 
     #[test]

@@ -2387,6 +2387,15 @@ impl AppState {
                 })
                 .into_iter()
                 .collect(),
+            AppEvent::ForegroundProcessChanged {
+                pane_id,
+                process_name,
+            } => {
+                // Display-only metadata read by the pane title renderer. It does
+                // not affect agent state, so it produces no PaneStateUpdate.
+                self.set_pane_foreground_process(pane_id, process_name);
+                Vec::new()
+            }
             AppEvent::HookStateReported {
                 pane_id,
                 source,
@@ -2579,6 +2588,28 @@ impl AppState {
             presentation: change.presentation.clone(),
         };
         Some(update)
+    }
+
+    /// Store the resolved foreground process name on a pane's terminal. Display-only
+    /// state, so it bypasses the agent-state mutation pipeline in
+    /// [`Self::update_terminal_state`].
+    fn set_pane_foreground_process(&mut self, pane_id: PaneId, process_name: Option<String>) {
+        let Some(ws_idx) = self
+            .workspaces
+            .iter()
+            .position(|ws| ws.pane_state(pane_id).is_some())
+        else {
+            return;
+        };
+        let Some(terminal_id) = self.workspaces[ws_idx]
+            .pane_state(pane_id)
+            .map(|pane| pane.attached_terminal_id.clone())
+        else {
+            return;
+        };
+        if let Some(terminal) = self.terminals.get_mut(&terminal_id) {
+            terminal.set_foreground_process(process_name);
+        }
     }
 
     pub(crate) fn publish_pane_process_exit_if_agent(
