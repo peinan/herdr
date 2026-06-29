@@ -16,12 +16,13 @@ git diff --stat master...develop                 # 変更ファイル一覧
 git diff master...develop -- src/config/model.rs # 追加した設定フィールド
 ```
 
-最終更新: 2026-06-28
+最終更新: 2026-06-30
 
 ## 機能一覧
 
 | 機能 | 切替 | 概要 | 追加日 | PR / コミット |
 |------|------|------|--------|--------------|
+| ペインタイトル書式 | `ui.pane_title_format` | starship 風 `$var`＋条件付きグループ `(...)` でペイン枠タイトルを自由記述。真のプロセス名・per-pane git(branch/ahead-behind/dirty) を herdr ネイティブ検出から描画 | 2026-06-30 | `cccf16b`,`5f082c6`,`6c7cf39` |
 | 単独ペインの枠 | `ui.single_pane_border` | ペインが 1 つだけでも枠を描く | 2026-06-27 | #11 / `47a97f9` |
 | 非アクティブペイン減光 | `ui.dim_inactive_panes` | 非フォーカスのペインを薄くしてアクティブを強調(既定で挙動変更) | 2026-06-26 | #2 / `321db15` |
 | サイドバー区切り線 | `ui.sidebar_divider` | サイドバー/ペイン領域の縦区切り線の表示切替 | 2026-06-26 | #3 / `46a8de6` |
@@ -40,6 +41,7 @@ git diff master...develop -- src/config/model.rs # 追加した設定フィー�
 
 | キー | 型 | 既定値 | 説明 |
 |------|----|--------|------|
+| `ui.pane_title_format` | string | `""` | ペイン枠タイトルの書式(starship 風)。空=従来挙動(オプトイン)。詳細は下の補足参照 |
 | `ui.single_pane_border` | bool | `false` | ペインが 1 つだけのタブでも枠を描く。`ui.pane_borders = false` のときは無効 |
 | `ui.dim_inactive_panes` | bool | `true` | 非フォーカスのペインを減光。prefix/コマンドモード外でも効く。**アップストリーム既定からの挙動変更** |
 | `ui.sidebar_divider` | bool | `true` | サイドバーとメインのペイン領域のあいだの縦区切り線。`false` で非表示 |
@@ -47,6 +49,32 @@ git diff master...develop -- src/config/model.rs # 追加した設定フィー�
 | `ui.prefix_indicator` | enum | `"status_bar"` | prefix 待機の表示。`status_bar`=下部ヒントバー / `highlight`=バーを隠しフォーカス枠+アクティブタブを再着色 |
 | `keys.repeat_timeout` | u64 (ms) | `500` | repeatable バインドがアーム状態を保つ時間。`0` は既定にクランプ |
 | `keys.<action>`(テーブル形式) | `{ key, repeat }` | `repeat = false` | `{ key = "prefix+n", repeat = true }` で tmux `bind -r` 風の繰り返しを有効化。文字列/配列形式は repeat しない |
+
+## 補足: ペインタイトル書式 (`pane_title_format`)
+
+`.zshrc` のフック(`herdr pane rename`)を使わず、herdr がネイティブ検出した情報から
+ペイン枠タイトルを描く。starship のサブセット書式。
+
+```toml
+[ui]
+pane_title_format = "$dir $process( ⋅ $branch$ahead_behind$git_status)"
+```
+
+- **変数**(該当なしは空文字に解決):
+  - `$dir` cwd の basename(`$HOME` は `~`) / `$cwd` フルパス(先頭 `$HOME` を `~` 省略)
+  - `$process` 真のフォアグラウンドプロセス名(alias/symlink/ランタイムラッパ解決済み。`cl`→`claude`、素の `nvim`/`zsh` も)
+  - `$agent` 検出エージェントラベル
+  - `$branch` git ブランチ(detached HEAD は短縮 SHA フォールバック)
+  - `$ahead_behind` 上流との差(`⇡2⇣1`、0 は省略)
+  - `$git_status` ワーキングツリー状態(`=`衝突 `!`変更 `+`ステージ `?`未追跡)
+  - `$zoom` ズームマーカー(`ui.zoom_indicator`) / `$label` 手動ラベル(`pane rename`)
+- **条件付きグループ** `( … )`: 中の変数が**すべて空**ならグループ全体(区切り文字・記号含む)を非表示。ネスト可。
+  上の例はリポジトリ外では ` ⋅ ` ごと消える。
+- **エスケープ**: `\$` `\(` `\)` `\\`。名前境界の明示は `${name}` 形式。
+- **優先順位**: OSC タイトル > 手動ラベル(`pane rename`) > この書式。書式が空なら従来挙動のまま(完全に不変)。
+- プロセス名・git はすべて herdr 側で検出(シェルフック不要)。git は約1.5秒ポーリングで
+  エージェント内の `git checkout` 等にも追従。`$git_status`(dirty)は毎ポーリング再計算。
+  per-pane git は repo 単位キーなので、同一リポジトリの別 worktree のペインは各自のブランチを表示。
 
 ## 補足: repeatable prefix バインド
 
@@ -69,6 +97,11 @@ repeat_timeout = 500
 ## 変更履歴
 
 新しい順。詳細は各表を参照。
+
+### 2026-06-30
+- `pane_title_format` 追加(starship 風のペインタイトル書式)。真のフォアグラウンドプロセス名・
+  per-pane git(branch/ahead-behind/ワーキングツリー状態)を herdr ネイティブ検出から描画。
+  シェルフック不要・`git checkout` 追従 — `cccf16b`, `5f082c6`, `6c7cf39`
 
 ### 2026-06-28
 - `CLAUDE.local.md`(フォーク運用ルール)を追加・日本語化 — `541eb1c`, `926ccc1`
