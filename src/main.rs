@@ -294,6 +294,13 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # Show detected/reported agent labels in split pane borders when no manual pane name is set.
 # show_agent_labels_on_pane_borders = false
 
+# Custom pane border title. A starship-style subset: literal text, $var (or
+# ${var}) variables, and conditional groups ( ... ) that disappear when every
+# variable inside resolves empty. Variables: $dir $cwd $process $agent $branch
+# $ahead_behind $git_status $zoom $label. Escape metacharacters with \$ \( \) \\.
+# An OSC-set title or a manual pane name still take precedence. Empty disables it.
+# pane_title_format = ""
+
 # Dim panes that are not focused, providing an active-pane highlight even outside prefix mode.
 # dim_inactive_panes = true
 

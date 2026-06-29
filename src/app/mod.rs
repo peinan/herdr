@@ -242,6 +242,19 @@ fn parse_cjk_ime_agents(names: &[String]) -> Vec<crate::detect::Agent> {
     out
 }
 
+/// Parse `[ui] pane_title_format` for startup, logging and falling back to the
+/// empty (feature-off) format on error. The live-reload path parses inline so
+/// it can surface the error through `ConfigReloadReport.diagnostics` instead.
+fn parse_pane_title_format(format: &str) -> Vec<crate::ui::pane_title::Segment> {
+    match crate::ui::pane_title::parse(format) {
+        Ok(segments) => segments,
+        Err(err) => {
+            tracing::warn!(error = %err, "invalid [ui] pane_title_format; ignoring");
+            Vec::new()
+        }
+    }
+}
+
 fn normalize_theme_name(name: &str) -> String {
     name.to_lowercase().replace([' ', '_'], "-")
 }
@@ -604,6 +617,7 @@ impl App {
             single_pane_border: config.ui.single_pane_border,
             pane_gaps: config.ui.pane_gaps,
             show_agent_labels_on_pane_borders: config.ui.show_agent_labels_on_pane_borders,
+            pane_title_format: parse_pane_title_format(&config.ui.pane_title_format),
             dim_inactive_panes: config.ui.dim_inactive_panes,
             sidebar_divider: config.ui.sidebar_divider,
             zoom_indicator: config.ui.zoom_indicator.clone(),
@@ -1346,6 +1360,15 @@ impl App {
                 self.state.pane_gaps = config.ui.pane_gaps;
                 self.state.show_agent_labels_on_pane_borders =
                     config.ui.show_agent_labels_on_pane_borders;
+                match crate::ui::pane_title::parse(&config.ui.pane_title_format) {
+                    Ok(segments) => self.state.pane_title_format = segments,
+                    Err(err) => {
+                        diagnostics.push(format!(
+                            "ui.pane_title_format is invalid ({err}); keeping the default pane title"
+                        ));
+                        self.state.pane_title_format = Vec::new();
+                    }
+                }
                 self.state.dim_inactive_panes = config.ui.dim_inactive_panes;
                 self.state.sidebar_divider = config.ui.sidebar_divider;
                 self.state.zoom_indicator = config.ui.zoom_indicator.clone();

@@ -1366,6 +1366,9 @@ pub struct AppState {
     pub single_pane_border: bool,
     pub pane_gaps: bool,
     pub show_agent_labels_on_pane_borders: bool,
+    /// Parsed `[ui] pane_title_format`. Empty means the feature is off and pane
+    /// borders use the default label path.
+    pub pane_title_format: Vec<crate::ui::pane_title::Segment>,
     pub dim_inactive_panes: bool,
     pub sidebar_divider: bool,
     /// Marker appended to the zoomed pane's border title (prefix+z). Empty
@@ -1581,9 +1584,6 @@ impl AppState {
     /// `crate::workspace::git_status_cache_key` and indexes `git_status_by_repo`,
     /// so panes in different linked worktrees of the same repository resolve to
     /// their own branch/working-tree state.
-    // Consumed by the pane title rendering work landing separately; no in-tree
-    // caller yet.
-    #[allow(dead_code)]
     pub fn pane_git_status(
         &self,
         cwd: &std::path::Path,
@@ -1763,6 +1763,7 @@ impl AppState {
             single_pane_border: false,
             pane_gaps: false,
             show_agent_labels_on_pane_borders: false,
+            pane_title_format: Vec::new(),
             dim_inactive_panes: true,
             sidebar_divider: true,
             zoom_indicator: "Z".into(),

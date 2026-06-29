@@ -583,6 +583,143 @@ fn line_touches_pane(x: u16, y: u16, info: &PaneInfo, pane_gaps: bool) -> bool {
         || (x == shared_right && y == shared_bottom)
 }
 
+/// Build the base border label from `app.pane_title_format`.
+///
+/// Precedence: an OSC-set terminal title or a manual pane label always win over
+/// the custom format, matching the default `border_label` precedence for those
+/// two. Otherwise the format is expanded against the pane's [`TitleFacts`]. An
+/// empty expansion yields `None` so the caller draws nothing (or just the zoom
+/// marker), consistent with the default path.
+fn custom_pane_border_label(
+    app: &AppState,
+    ws: &crate::workspace::Workspace,
+    info: &PaneInfo,
+    terminal: &crate::terminal::TerminalState,
+) -> Option<String> {
+    if let Some(title) = terminal.effective_title() {
+        return Some(title);
+    }
+    if let Some(label) = terminal.manual_label.clone() {
+        return Some(label);
+    }
+    let facts = build_title_facts(app, ws, info, terminal);
+    let expanded = crate::ui::pane_title::expand(&app.pane_title_format, &facts);
+    (!expanded.is_empty()).then_some(expanded)
+}
+
+/// Resolve every [`TitleField`] for one pane from per-pane runtime state.
+///
+/// [`TitleField`]: crate::ui::pane_title::TitleField
+fn build_title_facts(
+    app: &AppState,
+    ws: &crate::workspace::Workspace,
+    info: &PaneInfo,
+    terminal: &crate::terminal::TerminalState,
+) -> crate::ui::pane_title::TitleFacts {
+    let agent = terminal
+        .effective_display_agent()
+        .or_else(|| terminal.effective_agent_label().map(str::to_string))
+        .unwrap_or_default();
+    let zoomed_here = ws.zoomed && info.is_focused;
+    let zoom = if zoomed_here && !app.zoom_indicator.is_empty() {
+        app.zoom_indicator.clone()
+    } else {
+        String::new()
+    };
+
+    // Per-pane git status keyed on the pane cwd, so panes in different linked
+    // worktrees of one repo keep distinct branches. `$branch` falls back to the
+    // short commit when HEAD is detached.
+    let git = app.pane_git_status(&terminal.cwd);
+    let branch = git
+        .and_then(|status| {
+            status
+                .branch
+                .clone()
+                .or_else(|| status.short_commit.clone())
+        })
+        .unwrap_or_default();
+    let ahead_behind = git
+        .and_then(|status| status.ahead_behind)
+        .map(|(ahead, behind)| format_ahead_behind(ahead, behind))
+        .unwrap_or_default();
+    let git_status = git
+        .map(|status| format_git_status(&status.working_tree))
+        .unwrap_or_default();
+
+    crate::ui::pane_title::TitleFacts {
+        dir: title_dir(&terminal.cwd),
+        cwd: title_cwd(&terminal.cwd),
+        process: terminal.foreground_process.clone().unwrap_or_default(),
+        agent,
+        branch,
+        ahead_behind,
+        git_status,
+        zoom,
+        label: terminal.manual_label.clone().unwrap_or_default(),
+    }
+}
+
+/// Basename of `cwd` for `$dir`; the home directory renders as `~`.
+fn title_dir(cwd: &std::path::Path) -> String {
+    if let Ok(home) = std::env::var("HOME") {
+        if cwd == std::path::Path::new(&home) {
+            return "~".to_string();
+        }
+    }
+    cwd.file_name()
+        .and_then(|name| name.to_str())
+        .map(str::to_string)
+        .unwrap_or_default()
+}
+
+/// Full `cwd` for `$cwd`, with a leading `$HOME` abbreviated to `~`.
+fn title_cwd(cwd: &std::path::Path) -> String {
+    if let Ok(home) = std::env::var("HOME") {
+        let home = std::path::Path::new(&home);
+        if cwd == home {
+            return "~".to_string();
+        }
+        if let Ok(rest) = cwd.strip_prefix(home) {
+            return format!("~/{}", rest.display());
+        }
+    }
+    cwd.display().to_string()
+}
+
+/// Format ahead/behind counts for `$ahead_behind` (e.g. `⇡2⇣1`). Empty when
+/// both are zero.
+fn format_ahead_behind(ahead: usize, behind: usize) -> String {
+    let mut out = String::new();
+    if ahead > 0 {
+        out.push_str(&format!("⇡{ahead}"));
+    }
+    if behind > 0 {
+        out.push_str(&format!("⇣{behind}"));
+    }
+    out
+}
+
+/// Format working-tree status marks for `$git_status` (e.g. `!+?`). Empty when
+/// the tree is clean. Conflicts (`=`) lead, then modified (`!`), staged (`+`),
+/// and untracked (`?`), matching the starship-style marks used in the shell.
+fn format_git_status(working_tree: &crate::workspace::GitWorkingTree) -> String {
+    let mut out = String::new();
+    if working_tree.conflicted > 0 {
+        out.push('=');
+    }
+    if working_tree.modified > 0 {
+        out.push('!');
+    }
+    if working_tree.staged > 0 {
+        out.push('+');
+    }
+    if working_tree.untracked > 0 {
+        out.push('?');
+    }
+    out
+}
+
 fn render_pane_border_titles(app: &AppState, ws: &crate::workspace::Workspace, frame: &mut Frame) {
     let buf = frame.buffer_mut();
     let area = buf.area;
@@ -590,10 +727,16 @@ fn render_pane_border_titles(app: &AppState, ws: &crate::workspace::Workspace, f
         if !info.borders.contains(Borders::TOP) || info.rect.width <= 4 {
             continue;
         }
-        let base = ws
+        let terminal = ws
             .pane_state(info.id)
-            .and_then(|pane| app.terminals.get(&pane.attached_terminal_id))
-            .and_then(|terminal| terminal.border_label(app.show_agent_labels_on_pane_borders));
+            .and_then(|pane| app.terminals.get(&pane.attached_terminal_id));
+        let base = terminal.and_then(|terminal| {
+            if app.pane_title_format.is_empty() {
+                terminal.border_label(app.show_agent_labels_on_pane_borders)
+            } else {
+                custom_pane_border_label(app, ws, info, terminal)
+            }
+        });
         // When the tab is zoomed, `compute_pane_infos` emits a single pane info
         // for the focused pane, so `is_focused` identifies the zoomed pane.
         let zoomed_here = ws.zoomed && info.is_focused;
@@ -989,6 +1132,118 @@ mod tests {
         assert!(
             unlabeled.chars().all(|c| c == '─' || c == '┌' || c == '┐'),
             "border row: {unlabeled:?}"
+        );
+    }
+
+    fn render_title_row_with_format(format: &str, cwd: &str, manual_label: Option<&str>) -> String {
+        let width: u16 = 30;
+        let mut app = AppState::test_new();
+        app.mode = Mode::Terminal;
+        app.pane_title_format = crate::ui::pane_title::parse(format).expect("parse format");
+        app.view.terminal_area = Rect::new(0, 0, width, 3);
+        app.view.pane_infos = vec![PaneInfo {
+            id: PaneId::from_raw(1),
+            rect: Rect::new(0, 0, width, 3),
+            inner_rect: Rect::default(),
+            scrollbar_rect: None,
+            borders: Borders::ALL,
+            is_focused: false,
+        }];
+
+        let ws = Workspace::test_new("test");
+        let terminal_id = ws.tabs[0].panes[&PaneId::from_raw(1)]
+            .attached_terminal_id
+            .clone();
+        let mut terminal_state = TerminalState::new(terminal_id.clone(), cwd.into());
+        if let Some(label) = manual_label {
+            terminal_state.set_manual_label(label.into());
+        }
+        app.terminals.insert(terminal_id, terminal_state);
+
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, 3)).unwrap();
+        terminal
+            .draw(|frame| render_pane_borders(&app, &ws, frame))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        (0..width)
+            .map(|x| buffer[(x, 0)].symbol())
+            .collect::<String>()
+    }
+
+    #[test]
+    fn empty_pane_title_format_matches_default_border_label_path() {
+        // With no format set, the title must be exactly the legacy
+        // `border_label` output. `render_border_top_row` uses the default
+        // (empty) `pane_title_format`, so the manual label renders unchanged.
+        let row = render_border_top_row(false, false, "Z", Some("claude"));
+        assert!(row.contains("claude"), "border row: {row:?}");
+    }
+
+    #[test]
+    fn custom_pane_title_format_renders_dir() {
+        let row = render_title_row_with_format("$dir", "/home/user/herdr", None);
+        assert!(row.contains("herdr"), "border row: {row:?}");
+    }
+
+    #[test]
+    fn manual_label_takes_precedence_over_pane_title_format() {
+        // A manual pane label wins over the custom format, matching the
+        // `effective_title` > `manual_label` > format precedence.
+        let row = render_title_row_with_format("$dir", "/home/user/herdr", Some("pinned"));
+        assert!(row.contains("pinned"), "border row: {row:?}");
+        assert!(!row.contains("herdr"), "border row: {row:?}");
+    }
+
+    #[test]
+    fn format_ahead_behind_uses_arrow_glyphs() {
+        assert_eq!(format_ahead_behind(0, 0), "");
+        assert_eq!(format_ahead_behind(2, 0), "⇡2");
+        assert_eq!(format_ahead_behind(0, 3), "⇣3");
+        assert_eq!(format_ahead_behind(2, 1), "⇡2⇣1");
+    }
+
+    #[test]
+    fn format_git_status_marks_in_fixed_order() {
+        use crate::workspace::GitWorkingTree;
+        assert_eq!(format_git_status(&GitWorkingTree::default()), "");
+        assert_eq!(
+            format_git_status(&GitWorkingTree {
+                modified: 1,
+                ..Default::default()
+            }),
+            "!"
+        );
+        assert_eq!(
+            format_git_status(&GitWorkingTree {
+                staged: 2,
+                ..Default::default()
+            }),
+            "+"
+        );
+        assert_eq!(
+            format_git_status(&GitWorkingTree {
+                untracked: 1,
+                ..Default::default()
+            }),
+            "?"
+        );
+        assert_eq!(
+            format_git_status(&GitWorkingTree {
+                conflicted: 1,
+                ..Default::default()
+            }),
+            "="
+        );
+        // Conflict leads, then modified, staged, untracked.
+        assert_eq!(
+            format_git_status(&GitWorkingTree {
+                staged: 1,
+                modified: 1,
+                untracked: 1,
+                conflicted: 1,
+            }),
+            "=!+?"
         );
     }
 

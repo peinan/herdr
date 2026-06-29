@@ -792,6 +792,11 @@ pub struct UiConfig {
     pub pane_gaps: bool,
     /// Show agent labels in split pane borders when no manual pane label is set. Default: false.
     pub show_agent_labels_on_pane_borders: bool,
+    /// Custom pane border title format. A starship-style subset: literal text,
+    /// `$var` / `${var}` variables, and conditional groups `( … )` that drop
+    /// when every variable inside resolves empty. Empty disables it and keeps
+    /// the default label. Default: "".
+    pub pane_title_format: String,
     /// Dim panes that are not focused, providing an active-pane highlight even
     /// outside prefix/command modes. Default: true.
     pub dim_inactive_panes: bool,
@@ -1008,6 +1013,7 @@ impl Default for UiConfig {
             single_pane_border: false,
             pane_gaps: true,
             show_agent_labels_on_pane_borders: false,
+            pane_title_format: String::new(),
             dim_inactive_panes: true,
             sidebar_divider: true,
             zoom_indicator: "Z".into(),
@@ -1224,6 +1230,7 @@ agent_panel_scope = "current"
         assert!(!default_config.ui.single_pane_border);
         assert!(default_config.ui.pane_gaps);
         assert!(!default_config.ui.show_agent_labels_on_pane_borders);
+        assert!(default_config.ui.pane_title_format.is_empty());
         assert!(default_config.ui.dim_inactive_panes);
         assert!(default_config.ui.sidebar_divider);
         assert_eq!(default_config.ui.zoom_indicator, "Z");
@@ -1238,6 +1245,7 @@ pane_borders = false
 single_pane_border = true
 pane_gaps = true
 show_agent_labels_on_pane_borders = true
+pane_title_format = "$dir $process"
 dim_inactive_panes = false
 sidebar_divider = false
 zoom_indicator = "ZOOM*"
@@ -1248,6 +1256,7 @@ prefix_indicator = "highlight"
         assert!(config.ui.single_pane_border);
         assert!(config.ui.pane_gaps);
         assert!(config.ui.show_agent_labels_on_pane_borders);
+        assert_eq!(config.ui.pane_title_format, "$dir $process");
         assert!(!config.ui.dim_inactive_panes);
         assert!(!config.ui.sidebar_divider);
         assert_eq!(config.ui.zoom_indicator, "ZOOM*");

@@ -11,6 +11,7 @@ mod menus;
 mod mobile;
 mod navigator;
 mod onboarding;
+pub mod pane_title;
 mod panes;
 mod release_notes;
 mod scrollbar;

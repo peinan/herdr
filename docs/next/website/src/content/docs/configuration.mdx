@@ -323,6 +323,7 @@ pane_borders = true
 single_pane_border = false
 pane_gaps = true
 show_agent_labels_on_pane_borders = false
+pane_title_format = ""
 sidebar_divider = true
 zoom_indicator = "Z"
 prefix_indicator = "status_bar"
@@ -351,6 +352,8 @@ Set `pane_borders = false` to remove split pane borders. Set `pane_gaps = false`
 Set `single_pane_border = true` to keep a border around the pane even when a tab has only one pane. By default a lone pane has no border. This setting has no effect when `pane_borders = false`.
 
 Set `show_agent_labels_on_pane_borders = true` if you want detected agent labels in split pane borders when no manual pane label is set.
+
+`pane_title_format` customizes the text drawn in a pane's border title. It uses a starship-style subset: literal text, `$var` (or `${var}`) variables, and conditional groups `( … )` that disappear entirely when every variable inside them resolves to nothing. Available variables are `$dir` (cwd basename), `$cwd` (full cwd, `$HOME` shown as `~`), `$process`, `$agent`, `$branch`, `$ahead_behind` (for example `↑2↓1`), `$git_status`, `$zoom`, and `$label`. Escape the metacharacters with `\$`, `\(`, `\)`, and `\\`. For example, `pane_title_format = "$dir $process( ⋅ $branch$ahead_behind$git_status)"` shows the directory and process, plus a git section that is omitted outside a repository. An OSC-set terminal title or a manual pane name still takes precedence over the format, and an empty value (the default) keeps the built-in label. An invalid format is ignored and reported as a config diagnostic.
 
 Set `sidebar_divider = false` to hide the vertical divider line between the sidebar and the main pane area.
 
