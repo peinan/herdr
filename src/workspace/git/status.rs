@@ -11,6 +11,17 @@ use super::{
     },
 };
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct GitWorkingTree {
+    pub staged: usize,
+    pub modified: usize,
+    pub untracked: usize,
+    pub conflicted: usize,
+}
+
+/// Length the HEAD oid is truncated to for `short_commit`.
+const SHORT_COMMIT_LEN: usize = 7;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GitStatusCacheEntry {
     pub fingerprint: GitStatusFingerprint,
@@ -60,17 +71,25 @@ pub fn git_status_snapshot_for_cwd(
                 branch: git_branch(cwd),
                 ahead_behind: None,
                 space,
+                working_tree: GitWorkingTree::default(),
+                short_commit: None,
             },
             None,
         );
     };
     let branch = fingerprint.branch_name().map(str::to_string);
+    let short_commit = fingerprint.short_commit();
+    // The working tree is recomputed on every refresh because dirty edits do
+    // not move the HEAD/upstream oids the fingerprint gates on.
+    let working_tree = git_working_tree_for_cwd(cwd);
 
     if let Some(cached) = cached.filter(|entry| entry.fingerprint == fingerprint) {
         let snapshot = WorkspaceGitStatusSnapshot {
             branch,
             ahead_behind: cached.snapshot.ahead_behind,
             space,
+            working_tree,
+            short_commit,
         };
         return (
             snapshot.clone(),
@@ -89,6 +108,8 @@ pub fn git_status_snapshot_for_cwd(
         branch,
         ahead_behind,
         space,
+        working_tree,
+        short_commit,
     };
     (
         snapshot.clone(),
@@ -134,6 +155,13 @@ impl GitStatusFingerprint {
         self.upstream
             .as_ref()
             .and_then(|upstream| upstream.oid.as_deref())
+    }
+
+    fn short_commit(&self) -> Option<String> {
+        self.head_oid().map(|oid| {
+            let len = oid.len().min(SHORT_COMMIT_LEN);
+            oid[..len].to_string()
+        })
     }
 }
 
@@ -240,6 +268,67 @@ fn parse_git_ahead_behind_output(stdout: &str) -> Option<(usize, usize)> {
     Some((ahead, behind))
 }
 
+fn git_working_tree_for_cwd(cwd: &Path) -> GitWorkingTree {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(cwd)
+        .args(["status", "--porcelain"])
+        .output();
+    let Ok(output) = output else {
+        return GitWorkingTree::default();
+    };
+    if !output.status.success() {
+        return GitWorkingTree::default();
+    }
+    let Ok(stdout) = String::from_utf8(output.stdout) else {
+        return GitWorkingTree::default();
+    };
+    parse_porcelain_status(&stdout)
+}
+
+/// Tally a `git status --porcelain` (v1) listing into working-tree counts.
+///
+/// Each entry begins with a two-character `XY` code: `X` is the index/staged
+/// state and `Y` the unstaged worktree state. Counts are not mutually
+/// exclusive — a path staged and then edited increments both `staged` and
+/// `modified`. Conflicts (`DD`, `AA`, or either side `U`) are counted only as
+/// `conflicted`, and untracked (`??`) only as `untracked`.
+fn parse_porcelain_status(stdout: &str) -> GitWorkingTree {
+    let mut tree = GitWorkingTree::default();
+    for line in stdout.lines() {
+        let mut chars = line.chars();
+        let Some(x) = chars.next() else {
+            continue;
+        };
+        let Some(y) = chars.next() else {
+            continue;
+        };
+
+        if x == '?' && y == '?' {
+            tree.untracked += 1;
+            continue;
+        }
+
+        if is_conflict(x, y) {
+            tree.conflicted += 1;
+            continue;
+        }
+
+        if x != ' ' && x != '?' {
+            tree.staged += 1;
+        }
+        if y != ' ' && y != '?' {
+            tree.modified += 1;
+        }
+    }
+    tree
+}
+
+/// Porcelain v1 unmerged states: both sides `U`, or the `DD`/`AA` pairs.
+fn is_conflict(x: char, y: char) -> bool {
+    x == 'U' || y == 'U' || (x == 'D' && y == 'D') || (x == 'A' && y == 'A')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -268,6 +357,8 @@ mod tests {
                 branch: Some("main".into()),
                 ahead_behind: Some((2, 1)),
                 space: git_space_metadata(&root),
+                working_tree: GitWorkingTree::default(),
+                short_commit: None,
             },
         };
 
@@ -291,6 +382,8 @@ mod tests {
                 branch: Some("main".into()),
                 ahead_behind: Some((4, 0)),
                 space: git_space_metadata(&root),
+                working_tree: GitWorkingTree::default(),
+                short_commit: None,
             },
         };
         std::fs::write(root.join(".git/HEAD"), "ref: refs/heads/feature\n").unwrap();
@@ -324,6 +417,8 @@ mod tests {
                 branch: Some("main".into()),
                 ahead_behind: Some((0, 3)),
                 space: git_space_metadata(&root),
+                working_tree: GitWorkingTree::default(),
+                short_commit: None,
             },
         };
         std::fs::write(root.join(".git/config"), "").unwrap();
@@ -446,5 +541,164 @@ mod tests {
         assert_eq!(updated.ahead_behind, Some((1, 0)));
 
         std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn parse_porcelain_status_counts_untracked() {
+        let tree = parse_porcelain_status("?? new.txt\n?? other.rs\n");
+        assert_eq!(
+            tree,
+            GitWorkingTree {
+                untracked: 2,
+                ..GitWorkingTree::default()
+            }
+        );
+    }
+
+    #[test]
+    fn parse_porcelain_status_counts_staged_only() {
+        // `A `/`M ` = staged with a clean worktree column.
+        let tree = parse_porcelain_status("A  added.txt\nM  changed.rs\n");
+        assert_eq!(
+            tree,
+            GitWorkingTree {
+                staged: 2,
+                ..GitWorkingTree::default()
+            }
+        );
+    }
+
+    #[test]
+    fn parse_porcelain_status_counts_modified_only() {
+        // ` M` = unstaged worktree modification, clean index column.
+        let tree = parse_porcelain_status(" M changed.rs\n");
+        assert_eq!(
+            tree,
+            GitWorkingTree {
+                modified: 1,
+                ..GitWorkingTree::default()
+            }
+        );
+    }
+
+    #[test]
+    fn parse_porcelain_status_counts_staged_and_modified_for_partially_staged_path() {
+        // `MM` = staged change plus a further unstaged edit on the same path:
+        // both columns are non-blank, so it counts toward staged and modified.
+        let tree = parse_porcelain_status("MM both.rs\n");
+        assert_eq!(
+            tree,
+            GitWorkingTree {
+                staged: 1,
+                modified: 1,
+                ..GitWorkingTree::default()
+            }
+        );
+    }
+
+    #[test]
+    fn parse_porcelain_status_counts_conflicts() {
+        // Each unmerged form maps to a single conflicted count, never staged or
+        // modified.
+        let tree = parse_porcelain_status("UU both.rs\nAA added.rs\nDD removed.rs\nDU half.rs\n");
+        assert_eq!(
+            tree,
+            GitWorkingTree {
+                conflicted: 4,
+                ..GitWorkingTree::default()
+            }
+        );
+    }
+
+    #[test]
+    fn parse_porcelain_status_counts_mixed_listing() {
+        let listing = "\
+M  staged.rs
+ M modified.rs
+MM partial.rs
+?? new.txt
+UU conflict.rs
+";
+        let tree = parse_porcelain_status(listing);
+        assert_eq!(
+            tree,
+            GitWorkingTree {
+                staged: 2,
+                modified: 2,
+                untracked: 1,
+                conflicted: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_porcelain_status_ignores_blank_and_short_lines() {
+        let tree = parse_porcelain_status("\n?\nM  ok.rs\n");
+        assert_eq!(
+            tree,
+            GitWorkingTree {
+                staged: 1,
+                ..GitWorkingTree::default()
+            }
+        );
+    }
+
+    #[test]
+    fn git_status_reports_working_tree_counts_and_short_commit() {
+        let root = temp_test_dir("working-tree-counts");
+        run_git(&root, &["init"]);
+        run_git(&root, &["config", "user.email", "herdr@example.invalid"]);
+        run_git(&root, &["config", "user.name", "Herdr Test"]);
+        std::fs::write(root.join("tracked.txt"), "one\n").unwrap();
+        run_git(&root, &["add", "tracked.txt"]);
+        run_git(&root, &["commit", "-m", "initial"]);
+
+        // Stage an edit, leave another unstaged, and add an untracked file.
+        std::fs::write(root.join("tracked.txt"), "two\n").unwrap();
+        run_git(&root, &["add", "tracked.txt"]);
+        std::fs::write(root.join("tracked.txt"), "three\n").unwrap();
+        std::fs::write(root.join("untracked.txt"), "new\n").unwrap();
+
+        let (snapshot, cache_entry) = git_status_snapshot_for_cwd(&root, None);
+        assert_eq!(
+            snapshot.working_tree,
+            GitWorkingTree {
+                staged: 1,
+                modified: 1,
+                untracked: 1,
+                conflicted: 0,
+            }
+        );
+        let head = git_rev_parse_verify(&root, "HEAD").unwrap();
+        assert_eq!(
+            snapshot.short_commit.as_deref(),
+            Some(&head[..SHORT_COMMIT_LEN])
+        );
+
+        // A second refresh hits the fingerprint cache (HEAD/upstream unchanged)
+        // but must still recompute the working tree: clean it and confirm the
+        // counts drop to zero. `reset --hard` clears both the staged change and
+        // the unstaged edit; the untracked file is removed separately.
+        run_git(&root, &["reset", "--hard", "HEAD"]);
+        std::fs::remove_file(root.join("untracked.txt")).unwrap();
+
+        let (refreshed, _) = git_status_snapshot_for_cwd(&root, cache_entry.as_ref());
+        assert_eq!(refreshed.working_tree, GitWorkingTree::default());
+        assert_eq!(
+            refreshed.short_commit.as_deref(),
+            Some(&head[..SHORT_COMMIT_LEN])
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn git_status_short_commit_is_none_without_repo() {
+        let root = temp_test_dir("no-repo-short-commit");
+        let (snapshot, cache_entry) = git_status_snapshot_for_cwd(&root, None);
+        assert_eq!(snapshot.short_commit, None);
+        assert_eq!(snapshot.working_tree, GitWorkingTree::default());
+        assert!(cache_entry.is_none());
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

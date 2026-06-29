@@ -41,6 +41,13 @@ impl App {
         {
             self.git_refresh_in_flight = false;
             for (key, entry) in cache_updates {
+                // Mirror the per-repo snapshot so pane title rendering can look
+                // up branch/working-tree state by a pane's resolved cwd. The
+                // workspace sidebar continues to read its own cached fields via
+                // apply_workspace_git_statuses below; this map is additive.
+                self.state
+                    .git_status_by_repo
+                    .insert(key.clone(), entry.snapshot.clone());
                 self.git_status_cache.insert(key, entry);
             }
             if self.git_refresh_due_after_in_flight {

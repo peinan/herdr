@@ -1439,6 +1439,13 @@ pub struct AppState {
     pub host_terminal_theme: TerminalTheme,
     /// Set when a persisted session snapshot would change.
     pub session_dirty: bool,
+    /// Latest git status snapshot per repository checkout, keyed by
+    /// `crate::workspace::git_status_cache_key`. Populated by the background git
+    /// refresh so pane title rendering can resolve a pane's cwd to its branch,
+    /// ahead/behind, working-tree counts, and short commit. Linked worktrees of
+    /// the same repository get distinct keys, so each carries its own branch.
+    pub git_status_by_repo:
+        std::collections::HashMap<std::path::PathBuf, crate::workspace::WorkspaceGitStatusSnapshot>,
     /// Terminal runtimes that should be shut down by the app/runtime layer
     /// after state has detached their terminal metadata.
     pub(crate) terminal_runtime_shutdowns: Vec<crate::terminal::TerminalId>,
@@ -1566,6 +1573,23 @@ impl AppState {
         }
         let terminal_id = self.workspaces.get(ws_idx)?.terminal_id(pane_id)?;
         terminal_runtimes.get(terminal_id)
+    }
+
+    /// Look up the git status snapshot for the repository containing `cwd`.
+    ///
+    /// Resolves `cwd` to its repository key with
+    /// `crate::workspace::git_status_cache_key` and indexes `git_status_by_repo`,
+    /// so panes in different linked worktrees of the same repository resolve to
+    /// their own branch/working-tree state.
+    // Consumed by the pane title rendering work landing separately; no in-tree
+    // caller yet.
+    #[allow(dead_code)]
+    pub fn pane_git_status(
+        &self,
+        cwd: &std::path::Path,
+    ) -> Option<&crate::workspace::WorkspaceGitStatusSnapshot> {
+        let key = crate::workspace::git_status_cache_key(cwd)?;
+        self.git_status_by_repo.get(&key)
     }
 
     #[cfg(test)]
@@ -1797,6 +1821,7 @@ impl AppState {
             global_menu: MenuListState::new(0),
             host_terminal_theme: TerminalTheme::default(),
             session_dirty: false,
+            git_status_by_repo: std::collections::HashMap::new(),
             terminal_runtime_shutdowns: Vec::new(),
         }
     }
@@ -2303,5 +2328,49 @@ mod tests {
                 "Collapse"
             ]
         );
+    }
+
+    #[test]
+    fn pane_git_status_resolves_cwd_to_repo_snapshot() {
+        let root = std::env::temp_dir().join(format!(
+            "herdr-pane-git-status-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let nested = root.join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(&root)
+            .arg("init")
+            .output()
+            .unwrap();
+
+        let key = crate::workspace::git_status_cache_key(&root).expect("repo cache key");
+        let snapshot = crate::workspace::WorkspaceGitStatusSnapshot {
+            branch: Some("main".into()),
+            ahead_behind: Some((1, 2)),
+            space: None,
+            working_tree: crate::workspace::GitWorkingTree {
+                modified: 3,
+                ..Default::default()
+            },
+            short_commit: Some("abc1234".into()),
+        };
+
+        let mut state = AppState::test_new();
+        state.git_status_by_repo.insert(key, snapshot.clone());
+
+        // A nested cwd inside the repo resolves to the same repo snapshot.
+        assert_eq!(state.pane_git_status(&nested), Some(&snapshot));
+        assert_eq!(state.pane_git_status(&root), Some(&snapshot));
+
+        // A path outside any repository has no snapshot.
+        assert_eq!(state.pane_git_status(std::path::Path::new("/")), None);
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

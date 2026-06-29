@@ -583,21 +583,45 @@ impl App {
     }
 
     fn workspace_git_refresh_items(&self) -> Vec<WorkspaceGitRefreshItem> {
-        self.state
-            .workspaces
-            .iter()
-            .filter_map(|ws| {
-                let cwd =
-                    ws.resolved_identity_cwd_from(&self.state.terminals, &self.terminal_runtimes)?;
-                let git_key = crate::workspace::git_status_cache_key(&cwd);
-                let cache_key = git_key.unwrap_or_else(|| cwd.clone());
-                Some(WorkspaceGitRefreshItem {
+        let mut items = Vec::new();
+        for ws in &self.state.workspaces {
+            // Workspace identity cwd drives the sidebar status (kept first so it
+            // owns the deduplicated job for its repo key).
+            if let Some(cwd) =
+                ws.resolved_identity_cwd_from(&self.state.terminals, &self.terminal_runtimes)
+            {
+                let cache_key =
+                    crate::workspace::git_status_cache_key(&cwd).unwrap_or_else(|| cwd.clone());
+                items.push(WorkspaceGitRefreshItem {
                     workspace_id: ws.id.clone(),
                     resolved_identity_cwd: cwd,
                     cache_key,
-                })
-            })
-            .collect()
+                });
+            }
+
+            // Each pane's resolved cwd so per-pane title rendering can resolve a
+            // repo snapshot. Linked worktrees of the same repository get distinct
+            // cache keys, so a pane in another worktree carries its own branch.
+            // Deduplication folds panes that share a repo into one git call.
+            for tab in &ws.tabs {
+                for &pane_id in tab.panes.keys() {
+                    let Some(cwd) =
+                        tab.cwd_for_pane(pane_id, &self.state.terminals, &self.terminal_runtimes)
+                    else {
+                        continue;
+                    };
+                    let Some(cache_key) = crate::workspace::git_status_cache_key(&cwd) else {
+                        continue;
+                    };
+                    items.push(WorkspaceGitRefreshItem {
+                        workspace_id: ws.id.clone(),
+                        resolved_identity_cwd: cwd,
+                        cache_key,
+                    });
+                }
+            }
+        }
+        items
     }
 
     pub(crate) fn drain_internal_events(&mut self) -> bool {
@@ -781,6 +805,57 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].cache_key, cwd);
         let _ = std::fs::remove_dir_all(&cwd);
+    }
+
+    #[test]
+    fn git_refresh_items_collect_pane_cwd_repo() {
+        let base = std::env::temp_dir().join(format!(
+            "herdr-pane-cwd-refresh-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        // identity_cwd points at a directory that is not a git repo, so any
+        // collected repo key must come from resolving the pane's cwd rather
+        // than the identity fallback.
+        let identity = base.join("plain");
+        let repo = base.join("repo");
+        std::fs::create_dir_all(&identity).unwrap();
+        std::fs::create_dir_all(&repo).unwrap();
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .arg("init")
+            .output()
+            .unwrap();
+
+        let mut app = super::super::App::new(
+            &crate::config::Config::default(),
+            true,
+            None,
+            tokio::sync::mpsc::unbounded_channel().1,
+            crate::api::EventHub::default(),
+        );
+        let mut ws = Workspace::test_new("test");
+        ws.identity_cwd = identity.clone();
+        let pane_id = ws.tabs[0].root_pane;
+        let terminal_id = ws.tabs[0].panes[&pane_id].attached_terminal_id.clone();
+        app.state.workspaces.push(ws);
+        app.state.ensure_test_terminals();
+        // Resolve the pane's shell cwd into the git repository.
+        app.state.terminals.get_mut(&terminal_id).unwrap().cwd = repo.clone();
+
+        let items = app.workspace_git_refresh_items();
+        let repo_key = crate::workspace::git_status_cache_key(&repo).unwrap();
+
+        assert!(
+            items.iter().any(|item| item.cache_key == repo_key),
+            "pane cwd repo should be collected: {items:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

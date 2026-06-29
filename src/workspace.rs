@@ -24,7 +24,7 @@ pub(crate) use self::tab::MovedPane;
 pub use self::{
     git::{
         derive_label_from_cwd, git_branch, git_space_metadata, git_status_cache_key,
-        GitSpaceMetadata, GitStatusCacheEntry,
+        GitSpaceMetadata, GitStatusCacheEntry, GitWorkingTree,
     },
     tab::{NewPane, Tab},
 };
@@ -52,6 +52,9 @@ pub struct WorkspaceGitStatusSnapshot {
     pub branch: Option<String>,
     pub ahead_behind: Option<(usize, usize)>,
     pub space: Option<GitSpaceMetadata>,
+    pub working_tree: GitWorkingTree,
+    /// Short HEAD SHA, populated on a branch or detached HEAD; `None` with no oid.
+    pub short_commit: Option<String>,
 }
 
 impl WorkspaceGitStatusSnapshot {

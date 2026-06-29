@@ -651,6 +651,7 @@ impl App {
             global_menu: state::MenuListState::new(0),
             host_terminal_theme: crate::terminal_theme::TerminalTheme::default(),
             session_dirty: false,
+            git_status_by_repo: HashMap::new(),
             terminal_runtime_shutdowns: Vec::new(),
         };
 
