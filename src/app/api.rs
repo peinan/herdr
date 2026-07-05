@@ -40,14 +40,27 @@ impl App {
         } = ev
         {
             self.git_refresh_in_flight = false;
+            // The pane title reads working-tree marks (`!?+=`) from
+            // `git_status_by_repo`. Those move on dirty edits without changing
+            // the branch/ahead-behind fields `apply_workspace_git_statuses`
+            // compares, so a working-tree-only change must request its own
+            // render or the marks stay stale until an unrelated redraw.
+            let mut git_status_changed = false;
             for (key, entry) in cache_updates {
                 // Mirror the per-repo snapshot so pane title rendering can look
                 // up branch/working-tree state by a pane's resolved cwd. The
                 // workspace sidebar continues to read its own cached fields via
                 // apply_workspace_git_statuses below; this map is additive.
-                self.state
+                let snapshot = entry.snapshot.clone();
+                if self
+                    .state
                     .git_status_by_repo
-                    .insert(key.clone(), entry.snapshot.clone());
+                    .insert(key.clone(), snapshot.clone())
+                    .as_ref()
+                    != Some(&snapshot)
+                {
+                    git_status_changed = true;
+                }
                 self.git_status_cache.insert(key, entry);
             }
             if self.git_refresh_due_after_in_flight {
@@ -60,6 +73,9 @@ impl App {
                 .state
                 .apply_workspace_git_statuses(&self.terminal_runtimes, results)
             {
+                git_status_changed = true;
+            }
+            if git_status_changed {
                 self.render_dirty.store(true, Ordering::Release);
                 self.render_notify.notify_one();
             }

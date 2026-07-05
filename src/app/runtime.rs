@@ -1,3 +1,4 @@
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use crossterm::terminal;
@@ -494,6 +495,17 @@ impl App {
             return;
         }
 
+        // Advance each pane's cached cwd from its live runtime cwd before
+        // collecting git targets. `terminal.cwd` is otherwise only moved by OSC 7
+        // reports, so a shell that emits none would pin the pane title (and its
+        // per-repo git lookup) to the spawn cwd. `cwd_for_pane` resolves the
+        // runtime cwd (report, else a process-cwd syscall), keeping the title on
+        // the same repo the refresh below computes.
+        if self.sync_pane_cwds() {
+            self.render_dirty.store(true, Ordering::Release);
+            self.render_notify.notify_one();
+        }
+
         let workspaces = self.workspace_git_refresh_items();
 
         if workspaces.is_empty() {
@@ -511,6 +523,52 @@ impl App {
                 cache_updates: output.cache_updates,
             });
         });
+    }
+
+    /// Refresh each pane's cached `terminal.cwd` from its live runtime cwd.
+    ///
+    /// The pane title and its per-repo git lookup both read `terminal.cwd`, which
+    /// is otherwise advanced only by OSC 7 cwd reports. Shells that emit no OSC 7
+    /// leave it pinned at the spawn cwd; resolving `cwd_for_pane` (runtime report,
+    /// else a `proc_pidinfo`/`/proc` process-cwd syscall) keeps `$dir`/`$cwd` and
+    /// the git status marks tracking the real cwd. Returns whether any changed.
+    fn sync_pane_cwds(&mut self) -> bool {
+        let mut updates: Vec<(crate::terminal::TerminalId, std::path::PathBuf)> = Vec::new();
+        for ws in &self.state.workspaces {
+            for tab in &ws.tabs {
+                for &pane_id in tab.panes.keys() {
+                    let Some(terminal_id) = tab.terminal_id(pane_id) else {
+                        continue;
+                    };
+                    let Some(cwd) =
+                        tab.cwd_for_pane(pane_id, &self.state.terminals, &self.terminal_runtimes)
+                    else {
+                        continue;
+                    };
+                    if !cwd.is_absolute() {
+                        continue;
+                    }
+                    if self
+                        .state
+                        .terminals
+                        .get(terminal_id)
+                        .is_some_and(|terminal| terminal.cwd != cwd)
+                    {
+                        updates.push((terminal_id.clone(), cwd));
+                    }
+                }
+            }
+        }
+        if updates.is_empty() {
+            return false;
+        }
+        for (terminal_id, cwd) in updates {
+            if let Some(terminal) = self.state.terminals.get_mut(&terminal_id) {
+                terminal.cwd = cwd;
+            }
+        }
+        self.state.mark_session_dirty();
+        true
     }
 
     pub(crate) fn mark_git_status_refresh_due(&mut self, now: Instant) {
@@ -910,6 +968,79 @@ mod tests {
             .git_refresh_deadline()
             .expect("refresh should be due once a workspace exists");
         assert!(deadline <= Instant::now());
+    }
+
+    #[test]
+    fn git_status_refresh_requests_render_on_working_tree_change() {
+        let repo = std::env::temp_dir().join(format!(
+            "herdr-git-render-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&repo).unwrap();
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .arg("init")
+            .output()
+            .expect("git init");
+
+        let (_snapshot, entry) = Workspace::git_status_snapshot_for_cwd_with_cache(&repo, None);
+        let entry = entry.expect("repo produces a git status cache entry");
+        let key = crate::workspace::git_status_cache_key(&repo).expect("repo cache key");
+
+        let mut app = super::super::App::new(
+            &crate::config::Config::default(),
+            true,
+            None,
+            tokio::sync::mpsc::unbounded_channel().1,
+            crate::api::EventHub::default(),
+        );
+
+        // A new per-repo snapshot must request a render even though no workspace
+        // matches `results` (empty) — the pane title reads this map directly.
+        app.render_dirty.store(false, Ordering::Release);
+        app.handle_internal_event(AppEvent::GitStatusRefreshed {
+            results: Vec::new(),
+            cache_updates: vec![(key.clone(), entry.clone())],
+        });
+        assert!(app.render_dirty.load(Ordering::Acquire));
+
+        // An identical snapshot is not a change: no render requested.
+        app.render_dirty.store(false, Ordering::Release);
+        app.handle_internal_event(AppEvent::GitStatusRefreshed {
+            results: Vec::new(),
+            cache_updates: vec![(key.clone(), entry.clone())],
+        });
+        assert!(!app.render_dirty.load(Ordering::Acquire));
+
+        // A working-tree-only change (dirty edit; branch/ahead-behind unchanged)
+        // must still request a render.
+        let mut dirty = entry;
+        dirty.snapshot.working_tree.modified += 1;
+        app.handle_internal_event(AppEvent::GitStatusRefreshed {
+            results: Vec::new(),
+            cache_updates: vec![(key, dirty)],
+        });
+        assert!(app.render_dirty.load(Ordering::Acquire));
+
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn sync_pane_cwds_is_noop_when_runtime_cwd_matches_cached() {
+        // With no runtime registered, `cwd_for_pane` falls back to the cached
+        // `terminal.cwd`, so the sync must find nothing to change and must not
+        // dirty the session (which would churn a render on every git tick).
+        let (mut app, _pane_id) = test_app_with_pane();
+        app.state.ensure_test_terminals();
+        app.state.session_dirty = false;
+
+        assert!(!app.sync_pane_cwds());
+        assert!(!app.state.session_dirty);
     }
 
     #[test]
