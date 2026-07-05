@@ -16,7 +16,7 @@ git diff --stat master...develop                 # 変更ファイル一覧
 git diff master...develop -- src/config/model.rs # 追加した設定フィールド
 ```
 
-最終更新: 2026-06-30
+最終更新: 2026-07-05
 
 ## 機能一覧
 
@@ -73,8 +73,10 @@ pane_title_format = "$dir $process( ⋅ $branch$ahead_behind$git_status)( $zoom)
 - **エスケープ**: `\$` `\(` `\)` `\\`。名前境界の明示は `${name}` 形式。
 - **優先順位**: OSC タイトル > 手動ラベル(`pane rename`) > この書式。書式が空なら従来挙動のまま(完全に不変)。
 - **zoom マーカー**: 書式を指定したときは `$zoom` が配置を制御(末尾への自動付加は抑止)。書式が空(デフォルト)のときだけ従来どおり末尾へ自動付加。
-- プロセス名・git はすべて herdr 側で検出(シェルフック不要)。git は約1.5秒ポーリングで
-  エージェント内の `git checkout` 等にも追従。`$git_status`(dirty)は毎ポーリング再計算。
+- cwd・プロセス名・git はすべて herdr 側で検出(シェルフック/OSC 7 不要)。`$dir`/`$cwd` は
+  git と同じ syscall ベースの cwd 解決に約1.5秒 tick で同期するので、`cd`(`rp` 等)や
+  エージェント内のディレクトリ移動に追従する。git も約1.5秒ポーリングで `git checkout` 等に
+  追従し、`$git_status`(dirty)は毎ポーリング再計算・作業ツリー変化でも即再描画。
   per-pane git は repo 単位キーなので、同一リポジトリの別 worktree のペインは各自のブランチを表示。
 
 ## 補足: repeatable prefix バインド
@@ -98,6 +100,11 @@ repeat_timeout = 500
 ## 変更履歴
 
 新しい順。詳細は各表を参照。
+
+### 2026-07-05
+- `pane_title_format` の cwd/git status 追従を修正。`$dir`/`$cwd` と per-pane git ルックアップが
+  OSC 7 非依存で実 cwd を追う(git と同じ syscall 解決を約1.5秒 tick で同期)。作業ツリーのみの
+  変化でも `$git_status` マークが約1.5秒で再描画されるように — PR #13 (`5b64b53`)
 
 ### 2026-06-30
 - `pane_title_format` 追加(starship 風のペインタイトル書式)。真のフォアグラウンドプロセス名・
