@@ -134,6 +134,18 @@ fn apply_terminal_dirty_patch(
     true
 }
 
+/// Re-apply the unfocused-pane dim (`Modifier::DIM`) to a retained dirty patch so
+/// the retained fast path matches the full render path's dimming. This is the same
+/// bit `protocol::wire::modifier_to_u16` emits for the full path, so they agree.
+fn apply_dim_to_patch(patch: &mut crate::pane::TerminalDirtyPatch) {
+    let dim = ratatui::style::Modifier::DIM.bits();
+    for (_, cells) in &mut patch.rows {
+        for cell in cells {
+            cell.modifier |= dim;
+        }
+    }
+}
+
 fn dirty_patch_intersects_hyperlinks(
     frame: &FrameData,
     area: Rect,
@@ -2906,6 +2918,14 @@ impl HeadlessServer {
             retained_fallback!("no_pane_info");
         }
 
+        let multi_pane = self
+            .app
+            .state
+            .workspaces
+            .get(ws_idx)
+            .is_some_and(|ws| ws.layout.pane_count() > 1);
+        let dim_inactive_panes = self.app.state.dim_inactive_panes;
+
         let mut touched = false;
         for info in pane_infos {
             if !rect_fits_frame(info.inner_rect, &frame) {
@@ -2925,11 +2945,24 @@ impl HeadlessServer {
                 crate::pane::TerminalDirtyPatchOutcome::Fallback => {
                     retained_fallback!("dirty_patch_fallback");
                 }
-                crate::pane::TerminalDirtyPatchOutcome::Patch(patch) => {
+                crate::pane::TerminalDirtyPatchOutcome::Patch(mut patch) => {
                     crate::render_prof::event("retained.pane_patch");
                     crate::render_prof::counter("retained.patch_rows", patch.rows.len() as u64);
                     if dirty_patch_intersects_hyperlinks(&frame, info.inner_rect, &patch) {
                         retained_fallback!("hyperlink_intersection");
+                    }
+                    // The full render path dims unfocused panes in a second pass
+                    // (`ui::panes::render_panes`); this retained fast path patches raw
+                    // ghostty cells, so it must re-apply the same dim or a busy unfocused
+                    // pane flickers bright<->dim as the two paths alternate per tick.
+                    // terminal_active = true: retained runs only in Mode::Terminal.
+                    if crate::ui::should_dim_pane(
+                        info.is_focused,
+                        multi_pane,
+                        dim_inactive_panes,
+                        true,
+                    ) {
+                        apply_dim_to_patch(&mut patch);
                     }
                     if !apply_terminal_dirty_patch(&mut frame, info.inner_rect, patch) {
                         retained_fallback!("patch_apply_failed");
@@ -3893,6 +3926,44 @@ mod tests {
 
     use crate::app::AppState;
     use crate::protocol::CursorState;
+
+    #[test]
+    fn apply_dim_to_patch_adds_dim_and_preserves_modifiers() {
+        use crate::protocol::CellData;
+        use ratatui::style::Modifier;
+
+        let mk = |modifier: u16| CellData {
+            symbol: " ".to_string(),
+            fg: 0,
+            bg: 0,
+            modifier,
+            skip: false,
+            hyperlink: None,
+        };
+        let bold = Modifier::BOLD.bits();
+        let mut patch = crate::pane::TerminalDirtyPatch {
+            rows: vec![(0, vec![mk(0), mk(bold)])],
+        };
+
+        apply_dim_to_patch(&mut patch);
+
+        let dim = Modifier::DIM.bits();
+        assert_eq!(patch.rows[0].1[0].modifier, dim);
+        assert_eq!(patch.rows[0].1[1].modifier, bold | dim);
+    }
+
+    /// The retained fast path ORs `Modifier::DIM.bits()` directly, while the full
+    /// render path adds `Modifier::DIM` and serializes via `modifier_to_u16`. Guard
+    /// that both produce the same bit so the two paths never disagree on dim.
+    #[test]
+    fn retained_dim_bit_matches_full_render_path() {
+        use ratatui::style::{Modifier, Style};
+
+        let full = crate::protocol::modifier_to_u16(
+            Style::default().add_modifier(Modifier::DIM).add_modifier,
+        );
+        assert_eq!(full, Modifier::DIM.bits());
+    }
 
     fn test_headless_server() -> HeadlessServer {
         let config = crate::config::Config::default();
