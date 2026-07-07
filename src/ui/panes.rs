@@ -332,7 +332,7 @@ pub(super) fn compute_pane_infos(
 /// With `dim_inactive_panes` enabled this is an always-on active-pane highlight;
 /// otherwise the dim only appears outside Terminal mode (e.g. while the
 /// prefix/command overlay is active).
-fn should_dim_pane(
+pub(crate) fn should_dim_pane(
     is_focused: bool,
     multi_pane: bool,
     dim_inactive_panes: bool,
