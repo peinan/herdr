@@ -1,5 +1,6 @@
 use crate::config::{
-    Keybinds, NewTerminalCwdConfig, PrefixIndicatorConfig, SoundConfig, ToastConfig, ToastDelivery,
+    Keybinds, NewTerminalCwdConfig, PanePadding, PrefixIndicatorConfig, SoundConfig, ToastConfig,
+    ToastDelivery,
 };
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::layout::{Direction, Rect};
@@ -1365,6 +1366,7 @@ pub struct AppState {
     pub pane_borders: bool,
     pub single_pane_border: bool,
     pub pane_gaps: bool,
+    pub pane_padding: PanePadding,
     pub show_agent_labels_on_pane_borders: bool,
     /// Parsed `[ui] pane_title_format`. Empty means the feature is off and pane
     /// borders use the default label path.
@@ -1762,6 +1764,7 @@ impl AppState {
             pane_borders: true,
             single_pane_border: false,
             pane_gaps: false,
+            pane_padding: PanePadding::default(),
             show_agent_labels_on_pane_borders: false,
             pane_title_format: Vec::new(),
             dim_inactive_panes: true,

@@ -131,6 +131,7 @@ impl App {
             self.state.pane_borders,
             self.state.single_pane_border,
             self.state.pane_gaps,
+            self.state.pane_padding,
         );
 
         if self.state.active == Some(ws_idx)
@@ -291,6 +292,7 @@ fn derived_pending_agent_resume_pane_infos(
     pane_borders: bool,
     single_pane_border: bool,
     pane_gaps: bool,
+    pane_padding: crate::config::PanePadding,
 ) -> Vec<crate::layout::PaneInfo> {
     crate::ui::apply_pane_chrome(
         tab.layout.panes(terminal_area),
@@ -300,7 +302,10 @@ fn derived_pending_agent_resume_pane_infos(
     )
     .into_iter()
     .map(|mut info| {
-        let pane_inner = crate::ui::pane_inner_rect(info.rect, info.borders);
+        let pane_inner = crate::ui::apply_pane_padding(
+            crate::ui::pane_inner_rect(info.rect, info.borders),
+            pane_padding,
+        );
         info.inner_rect = stable_terminal_inner_rect(pane_inner);
         info
     })

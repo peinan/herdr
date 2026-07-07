@@ -616,6 +616,7 @@ impl App {
             pane_borders: config.ui.pane_borders,
             single_pane_border: config.ui.single_pane_border,
             pane_gaps: config.ui.pane_gaps,
+            pane_padding: config.ui.pane_padding,
             show_agent_labels_on_pane_borders: config.ui.show_agent_labels_on_pane_borders,
             pane_title_format: parse_pane_title_format(&config.ui.pane_title_format),
             dim_inactive_panes: config.ui.dim_inactive_panes,
@@ -1358,6 +1359,7 @@ impl App {
                 self.state.pane_borders = config.ui.pane_borders;
                 self.state.single_pane_border = config.ui.single_pane_border;
                 self.state.pane_gaps = config.ui.pane_gaps;
+                self.state.pane_padding = config.ui.pane_padding;
                 self.state.show_agent_labels_on_pane_borders =
                     config.ui.show_agent_labels_on_pane_borders;
                 match crate::ui::pane_title::parse(&config.ui.pane_title_format) {
