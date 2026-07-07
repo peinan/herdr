@@ -16,7 +16,7 @@ git diff --stat master...develop                 # 変更ファイル一覧
 git diff master...develop -- src/config/model.rs # 追加した設定フィールド
 ```
 
-最終更新: 2026-07-05
+最終更新: 2026-07-07
 
 ## 機能一覧
 
@@ -100,6 +100,12 @@ repeat_timeout = 500
 ## 変更履歴
 
 新しい順。詳細は各表を参照。
+
+### 2026-07-07
+- `dim_inactive_panes` の減光を retained レンダリングの fast path でも再適用。フルレンダリングは
+  非フォーカスペインを 2 パス目で減光するが、dirty patch の fast path は素の ghostty セルを減光せず
+  描いていたため、忙しい非フォーカスペインが tick ごとに明滅(flicker)していた。両パスが一致するよう
+  fast path でも `Modifier::DIM` を再適用 — PR #14 (`76fa31b`)
 
 ### 2026-07-05
 - `pane_title_format` の cwd/git status 追従を修正。`$dir`/`$cwd` と per-pane git ルックアップが
