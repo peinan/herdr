@@ -790,6 +790,10 @@ pub struct UiConfig {
     pub single_pane_border: bool,
     /// Keep split panes visually separated instead of sharing divider borders. Default: true.
     pub pane_gaps: bool,
+    /// Padding, in cells, inside each pane between the border/edge and the
+    /// terminal content. Specified per side (`{ top, right, bottom, left }`);
+    /// omitted sides default to 0. Default: all zero (no padding).
+    pub pane_padding: PanePadding,
     /// Show agent labels in split pane borders when no manual pane label is set. Default: false.
     pub show_agent_labels_on_pane_borders: bool,
     /// Custom pane border title format. A starship-style subset: literal text,
@@ -819,6 +823,22 @@ pub struct UiConfig {
     pub toast: ToastConfig,
     /// Play sounds when agents change state in background workspaces.
     pub sound: SoundConfig,
+}
+
+/// Padding, in cells, inside each pane between the border/edge and the
+/// terminal content. Specified per side; any omitted side defaults to 0.
+/// Default: all zero (no padding).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct PanePadding {
+    /// Cells of padding above the content.
+    pub top: u16,
+    /// Cells of padding to the right of the content.
+    pub right: u16,
+    /// Cells of padding below the content.
+    pub bottom: u16,
+    /// Cells of padding to the left of the content.
+    pub left: u16,
 }
 
 /// How prefix mode is indicated on screen while the prefix key is pending.
@@ -1012,6 +1032,7 @@ impl Default for UiConfig {
             pane_borders: true,
             single_pane_border: false,
             pane_gaps: true,
+            pane_padding: PanePadding::default(),
             show_agent_labels_on_pane_borders: false,
             pane_title_format: String::new(),
             dim_inactive_panes: true,
@@ -1261,6 +1282,57 @@ prefix_indicator = "highlight"
         assert!(!config.ui.sidebar_divider);
         assert_eq!(config.ui.zoom_indicator, "ZOOM*");
         assert_eq!(config.ui.prefix_indicator, PrefixIndicatorConfig::Highlight);
+    }
+
+    #[test]
+    fn pane_padding_defaults_and_parses() {
+        // Default is all-zero (no padding).
+        assert_eq!(Config::default().ui.pane_padding, PanePadding::default());
+        assert_eq!(
+            PanePadding::default(),
+            PanePadding {
+                top: 0,
+                right: 0,
+                bottom: 0,
+                left: 0
+            }
+        );
+
+        // All sides specified.
+        let full: Config = toml::from_str(
+            r#"
+[ui]
+pane_padding = { top = 1, right = 2, bottom = 3, left = 4 }
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            full.ui.pane_padding,
+            PanePadding {
+                top: 1,
+                right: 2,
+                bottom: 3,
+                left: 4
+            }
+        );
+
+        // Omitted sides default to 0.
+        let partial: Config = toml::from_str(
+            r#"
+[ui]
+pane_padding = { left = 2 }
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            partial.ui.pane_padding,
+            PanePadding {
+                top: 0,
+                right: 0,
+                bottom: 0,
+                left: 2
+            }
+        );
     }
 
     #[test]

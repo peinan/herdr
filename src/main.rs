@@ -291,6 +291,10 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # Keep split panes visually separated instead of sharing divider borders.
 # pane_gaps = true
 
+# Padding, in cells, inside each pane between the border/edge and the terminal
+# content. Per side; omitted sides default to 0.
+# pane_padding = { top = 0, right = 0, bottom = 0, left = 0 }
+
 # Show detected/reported agent labels in split pane borders when no manual pane name is set.
 # show_agent_labels_on_pane_borders = false
 

@@ -11,6 +11,7 @@ use super::scrollbar::{render_pane_scrollbar, should_show_scrollbar};
 use super::widgets::panel_contrast_fg;
 use crate::app::state::Palette;
 use crate::app::{AppState, Mode};
+use crate::config::PanePadding;
 use crate::layout::PaneInfo;
 use crate::terminal::{TerminalRuntime, TerminalRuntimeRegistry};
 
@@ -62,6 +63,24 @@ fn stable_terminal_inner_rect(pane_inner: Rect) -> Rect {
         pane_inner.y,
         pane_inner.width.saturating_sub(1),
         pane_inner.height,
+    )
+}
+
+// Shrink a pane's inner rect by the configured per-side padding. Padding is
+// clamped so at least one cell of content remains; when a pane is too small to
+// honor both sides of an axis, the near side (left/top) is applied first.
+pub(crate) fn apply_pane_padding(rect: Rect, padding: PanePadding) -> Rect {
+    let max_h = rect.width.saturating_sub(1);
+    let left = padding.left.min(max_h);
+    let right = padding.right.min(max_h - left);
+    let max_v = rect.height.saturating_sub(1);
+    let top = padding.top.min(max_v);
+    let bottom = padding.bottom.min(max_v - top);
+    Rect::new(
+        rect.x + left,
+        rect.y + top,
+        rect.width - left - right,
+        rect.height - top - bottom,
     )
 }
 
@@ -203,7 +222,7 @@ pub(super) fn resize_tab_panes(
             } else {
                 Borders::NONE
             };
-            let pane_inner = pane_inner_rect(area, borders);
+            let pane_inner = apply_pane_padding(pane_inner_rect(area, borders), app.pane_padding);
             let inner_rect = stable_terminal_inner_rect(pane_inner);
             if !app.direct_attach_resize_locks.contains(terminal_id) {
                 rt.resize(
@@ -223,7 +242,8 @@ pub(super) fn resize_tab_panes(
         app.single_pane_border,
         app.pane_gaps,
     ) {
-        let pane_inner = pane_inner_rect(info.rect, info.borders);
+        let pane_inner =
+            apply_pane_padding(pane_inner_rect(info.rect, info.borders), app.pane_padding);
 
         if let Some((terminal_id, rt)) = runtime_for_tab_pane(terminal_runtimes, tab, info.id) {
             let inner_rect = stable_terminal_inner_rect(pane_inner);
@@ -263,7 +283,7 @@ pub(super) fn compute_pane_infos(
         } else {
             Borders::NONE
         };
-        let pane_inner = pane_inner_rect(area, borders);
+        let pane_inner = apply_pane_padding(pane_inner_rect(area, borders), app.pane_padding);
         let mut inner_rect = pane_inner;
         let mut scrollbar_rect = None;
         if let Some(rt) = app.runtime_for_pane_in_workspace(terminal_runtimes, ws_idx, focused_id) {
@@ -299,7 +319,8 @@ pub(super) fn compute_pane_infos(
     );
 
     for info in &mut pane_infos {
-        let pane_inner = pane_inner_rect(info.rect, info.borders);
+        let pane_inner =
+            apply_pane_padding(pane_inner_rect(info.rect, info.borders), app.pane_padding);
 
         let mut inner_rect = pane_inner;
         let mut scrollbar_rect = None;
@@ -1551,6 +1572,78 @@ mod tests {
         assert_eq!(info.rect, area);
         assert_eq!(info.scrollbar_rect, None);
         assert_eq!(info.inner_rect, Rect::new(10, 3, 39, 8));
+    }
+
+    #[test]
+    fn apply_pane_padding_offsets_and_shrinks() {
+        let rect = Rect::new(10, 5, 40, 20);
+        let padded = apply_pane_padding(
+            rect,
+            PanePadding {
+                top: 1,
+                right: 2,
+                bottom: 3,
+                left: 4,
+            },
+        );
+        assert_eq!(padded, Rect::new(14, 6, 34, 16));
+    }
+
+    #[test]
+    fn apply_pane_padding_zero_is_noop() {
+        let rect = Rect::new(10, 5, 40, 20);
+        assert_eq!(apply_pane_padding(rect, PanePadding::default()), rect);
+    }
+
+    #[test]
+    fn apply_pane_padding_clamps_to_keep_content() {
+        // Padding larger than the pane keeps at least 1x1, near sides (left/top) first.
+        let rect = Rect::new(0, 0, 3, 3);
+        let padded = apply_pane_padding(
+            rect,
+            PanePadding {
+                top: 5,
+                right: 5,
+                bottom: 5,
+                left: 5,
+            },
+        );
+        assert_eq!(padded, Rect::new(2, 2, 1, 1));
+    }
+
+    #[tokio::test]
+    async fn pane_padding_shrinks_and_offsets_pane_inner_rect() {
+        let mut app = AppState::test_new();
+        app.pane_padding = PanePadding {
+            top: 1,
+            right: 2,
+            bottom: 3,
+            left: 4,
+        };
+        let mut workspace = Workspace::test_new("test");
+        let root_pane = workspace.tabs[0].root_pane;
+        workspace.tabs[0].runtimes.insert(
+            root_pane,
+            TerminalRuntime::test_with_scrollback_bytes(40, 8, 1024, b"ready\n"),
+        );
+        app.workspaces = vec![workspace];
+        app.active = Some(0);
+
+        let area = Rect::new(10, 3, 40, 8);
+        let terminal_runtimes = TerminalRuntimeRegistry::new();
+        let infos = compute_pane_infos(
+            &app,
+            &terminal_runtimes,
+            area,
+            false,
+            crate::kitty_graphics::HostCellSize::default(),
+        );
+        let info = &infos[0];
+
+        // Lone pane has no border. Padding offsets the inner rect by (left, top)
+        // and shrinks it by (left+right, top+bottom): origin (14, 4), size (34, 4).
+        // The scrollbar gutter then reserves one more column on the right → width 33.
+        assert_eq!(info.inner_rect, Rect::new(14, 4, 33, 4));
     }
 
     #[tokio::test]
