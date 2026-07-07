@@ -801,9 +801,9 @@ pub struct UiConfig {
     /// when every variable inside resolves empty. Empty disables it and keeps
     /// the default label. Default: "".
     pub pane_title_format: String,
-    /// Dim panes that are not focused, providing an active-pane highlight even
-    /// outside prefix/command modes. When false (default) inactive panes dim
-    /// only in prefix/command mode. Default: false.
+    /// Dim inactive panes at all times for an active-pane highlight. When
+    /// false, inactive panes dim only in prefix/command mode (upstream
+    /// behavior). Default: false.
     pub dim_inactive_panes: bool,
     /// Draw the vertical divider line between the sidebar and the main pane
     /// area. Set to false to hide it. Default: true.
