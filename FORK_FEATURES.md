@@ -22,6 +22,7 @@ git diff master...develop -- src/config/model.rs # 追加した設定フィー�
 
 | 機能 | 切替 | 概要 | 追加日 | PR / コミット |
 |------|------|------|--------|--------------|
+| ペイン内余白 | `ui.pane_padding` | ペイン枠(または端)と端末内容の間に上下左右セル単位の余白。省略辺は 0、既定は余白なし | 2026-07-07 | #15 / `b23578e` |
 | ペインタイトル書式 | `ui.pane_title_format` | starship 風 `$var`＋条件付きグループ `(...)` でペイン枠タイトルを自由記述。真のプロセス名・per-pane git(branch/ahead-behind/dirty) を herdr ネイティブ検出から描画 | 2026-06-30 | `cccf16b`,`5f082c6`,`6c7cf39` |
 | 単独ペインの枠 | `ui.single_pane_border` | ペインが 1 つだけでも枠を描く | 2026-06-27 | #11 / `47a97f9` |
 | 非アクティブペイン減光 | `ui.dim_inactive_panes` | 非フォーカスのペインを薄くしてアクティブを強調(既定で挙動変更) | 2026-06-26 | #2 / `321db15` |
@@ -41,6 +42,7 @@ git diff master...develop -- src/config/model.rs # 追加した設定フィー�
 
 | キー | 型 | 既定値 | 説明 |
 |------|----|--------|------|
+| `ui.pane_padding` | table | `{}`(全 0) | ペイン枠(端)と端末内容の間の余白(セル)。`{ top, right, bottom, left }` で省略辺 0。狭いペインでは内容 1x1 を残しクランプ |
 | `ui.pane_title_format` | string | `""` | ペイン枠タイトルの書式(starship 風)。空=従来挙動(オプトイン)。詳細は下の補足参照 |
 | `ui.single_pane_border` | bool | `false` | ペインが 1 つだけのタブでも枠を描く。`ui.pane_borders = false` のときは無効 |
 | `ui.dim_inactive_panes` | bool | `true` | 非フォーカスのペインを減光。prefix/コマンドモード外でも効く。**アップストリーム既定からの挙動変更** |
@@ -102,6 +104,7 @@ repeat_timeout = 500
 新しい順。詳細は各表を参照。
 
 ### 2026-07-07
+- `ui.pane_padding` 追加。ペイン枠(または端)と端末内容の間に上下左右セル単位の余白を挿入(省略辺 0・既定は余白なし)。inner_rect を border の内側・scrollbar gutter の手前で縮めるため PTY サイズと描画が一致し、scrollbar は余白の内側に寄る。狭いペインは内容 1x1 を残しクランプ — PR #15 (`b23578e`)
 - `dim_inactive_panes` の減光を retained レンダリングの fast path でも再適用。フルレンダリングは
   非フォーカスペインを 2 パス目で減光するが、dirty patch の fast path は素の ghostty セルを減光せず
   描いていたため、忙しい非フォーカスペインが tick ごとに明滅(flicker)していた。両パスが一致するよう
