@@ -620,6 +620,7 @@ impl App {
             show_agent_labels_on_pane_borders: config.ui.show_agent_labels_on_pane_borders,
             pane_title_format: parse_pane_title_format(&config.ui.pane_title_format),
             dim_inactive_panes: config.ui.dim_inactive_panes,
+            show_pane_focus_marker: config.ui.show_pane_focus_marker,
             sidebar_divider: config.ui.sidebar_divider,
             zoom_indicator: config.ui.zoom_indicator.clone(),
             prefix_indicator: config.ui.prefix_indicator,
@@ -1372,6 +1373,7 @@ impl App {
                     }
                 }
                 self.state.dim_inactive_panes = config.ui.dim_inactive_panes;
+                self.state.show_pane_focus_marker = config.ui.show_pane_focus_marker;
                 self.state.sidebar_divider = config.ui.sidebar_divider;
                 self.state.zoom_indicator = config.ui.zoom_indicator.clone();
                 self.state.prefix_indicator = config.ui.prefix_indicator;

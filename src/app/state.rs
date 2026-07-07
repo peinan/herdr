@@ -1372,6 +1372,9 @@ pub struct AppState {
     /// borders use the default label path.
     pub pane_title_format: Vec<crate::ui::pane_title::Segment>,
     pub dim_inactive_panes: bool,
+    /// Show the `▌` marker at the start of the focused pane's border title.
+    /// Projected from `[ui] show_pane_focus_marker`.
+    pub show_pane_focus_marker: bool,
     pub sidebar_divider: bool,
     /// Marker appended to the zoomed pane's border title (prefix+z). Empty
     /// hides it. Projected from `[ui] zoom_indicator`.
@@ -1768,6 +1771,7 @@ impl AppState {
             show_agent_labels_on_pane_borders: false,
             pane_title_format: Vec::new(),
             dim_inactive_panes: true,
+            show_pane_focus_marker: true,
             sidebar_divider: true,
             zoom_indicator: "Z".into(),
             prefix_indicator: PrefixIndicatorConfig::StatusBar,
