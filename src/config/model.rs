@@ -805,6 +805,10 @@ pub struct UiConfig {
     /// false, inactive panes dim only in prefix/command mode (upstream
     /// behavior). Default: false.
     pub dim_inactive_panes: bool,
+    /// Show the `▌` marker at the start of the focused pane's border title.
+    /// Set to false to indicate focus with accent color and bold only.
+    /// Default: true.
+    pub show_pane_focus_marker: bool,
     /// Draw the vertical divider line between the sidebar and the main pane
     /// area. Set to false to hide it. Default: true.
     pub sidebar_divider: bool,
@@ -1037,6 +1041,7 @@ impl Default for UiConfig {
             show_agent_labels_on_pane_borders: false,
             pane_title_format: String::new(),
             dim_inactive_panes: false,
+            show_pane_focus_marker: true,
             sidebar_divider: true,
             zoom_indicator: "Z".into(),
             prefix_indicator: PrefixIndicatorConfig::StatusBar,
@@ -1254,6 +1259,7 @@ agent_panel_scope = "current"
         assert!(!default_config.ui.show_agent_labels_on_pane_borders);
         assert!(default_config.ui.pane_title_format.is_empty());
         assert!(!default_config.ui.dim_inactive_panes);
+        assert!(default_config.ui.show_pane_focus_marker);
         assert!(default_config.ui.sidebar_divider);
         assert_eq!(default_config.ui.zoom_indicator, "Z");
         assert_eq!(
@@ -1269,6 +1275,7 @@ pane_gaps = true
 show_agent_labels_on_pane_borders = true
 pane_title_format = "$dir $process"
 dim_inactive_panes = true
+show_pane_focus_marker = false
 sidebar_divider = false
 zoom_indicator = "ZOOM*"
 prefix_indicator = "highlight"
@@ -1280,6 +1287,7 @@ prefix_indicator = "highlight"
         assert!(config.ui.show_agent_labels_on_pane_borders);
         assert_eq!(config.ui.pane_title_format, "$dir $process");
         assert!(config.ui.dim_inactive_panes);
+        assert!(!config.ui.show_pane_focus_marker);
         assert!(!config.ui.sidebar_divider);
         assert_eq!(config.ui.zoom_indicator, "ZOOM*");
         assert_eq!(config.ui.prefix_indicator, PrefixIndicatorConfig::Highlight);

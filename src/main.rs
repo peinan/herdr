@@ -311,6 +311,10 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # (default), inactive panes dim only in prefix/command mode.
 # dim_inactive_panes = false
 
+# Show the ▌ marker at the start of the focused pane's border title. Set to
+# false to indicate focus with accent color and bold only.
+# show_pane_focus_marker = true
+
 # Draw the vertical divider between the sidebar and the main pane area.
 # sidebar_divider = true
 
