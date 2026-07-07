@@ -307,8 +307,9 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # the auto-append is suppressed. Example:
 # pane_title_format = "$dir $process( ⋅ $branch$ahead_behind$git_status)( $zoom)"
 
-# Dim panes that are not focused, providing an active-pane highlight even outside prefix mode.
-# dim_inactive_panes = true
+# Dim inactive panes at all times for an active-pane highlight. When false
+# (default), inactive panes dim only in prefix/command mode.
+# dim_inactive_panes = false
 
 # Draw the vertical divider between the sidebar and the main pane area.
 # sidebar_divider = true

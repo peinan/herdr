@@ -801,8 +801,9 @@ pub struct UiConfig {
     /// when every variable inside resolves empty. Empty disables it and keeps
     /// the default label. Default: "".
     pub pane_title_format: String,
-    /// Dim panes that are not focused, providing an active-pane highlight even
-    /// outside prefix/command modes. Default: true.
+    /// Dim inactive panes at all times for an active-pane highlight. When
+    /// false, inactive panes dim only in prefix/command mode (upstream
+    /// behavior). Default: false.
     pub dim_inactive_panes: bool,
     /// Draw the vertical divider line between the sidebar and the main pane
     /// area. Set to false to hide it. Default: true.
@@ -1035,7 +1036,7 @@ impl Default for UiConfig {
             pane_padding: PanePadding::default(),
             show_agent_labels_on_pane_borders: false,
             pane_title_format: String::new(),
-            dim_inactive_panes: true,
+            dim_inactive_panes: false,
             sidebar_divider: true,
             zoom_indicator: "Z".into(),
             prefix_indicator: PrefixIndicatorConfig::StatusBar,
@@ -1252,7 +1253,7 @@ agent_panel_scope = "current"
         assert!(default_config.ui.pane_gaps);
         assert!(!default_config.ui.show_agent_labels_on_pane_borders);
         assert!(default_config.ui.pane_title_format.is_empty());
-        assert!(default_config.ui.dim_inactive_panes);
+        assert!(!default_config.ui.dim_inactive_panes);
         assert!(default_config.ui.sidebar_divider);
         assert_eq!(default_config.ui.zoom_indicator, "Z");
         assert_eq!(
@@ -1267,7 +1268,7 @@ single_pane_border = true
 pane_gaps = true
 show_agent_labels_on_pane_borders = true
 pane_title_format = "$dir $process"
-dim_inactive_panes = false
+dim_inactive_panes = true
 sidebar_divider = false
 zoom_indicator = "ZOOM*"
 prefix_indicator = "highlight"
@@ -1278,7 +1279,7 @@ prefix_indicator = "highlight"
         assert!(config.ui.pane_gaps);
         assert!(config.ui.show_agent_labels_on_pane_borders);
         assert_eq!(config.ui.pane_title_format, "$dir $process");
-        assert!(!config.ui.dim_inactive_panes);
+        assert!(config.ui.dim_inactive_panes);
         assert!(!config.ui.sidebar_divider);
         assert_eq!(config.ui.zoom_indicator, "ZOOM*");
         assert_eq!(config.ui.prefix_indicator, PrefixIndicatorConfig::Highlight);
