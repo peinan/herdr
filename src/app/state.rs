@@ -1,6 +1,6 @@
 use crate::config::{
     Keybinds, NewTerminalCwdConfig, PanePadding, PrefixIndicatorConfig, SoundConfig, TabBarAlign,
-    TabBarPosition, TabBarStyle, ToastConfig, ToastDelivery,
+    TabBarPosition, TabBarStyle, ToastConfig, ToastDelivery, ZoomIndicatorPosition,
 };
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::layout::{Direction, Rect};
@@ -1383,6 +1383,9 @@ pub struct AppState {
     /// Marker appended to the zoomed pane's border title (prefix+z). Empty
     /// hides it. Projected from `[ui] zoom_indicator`.
     pub zoom_indicator: String,
+    /// Where the zoom marker is shown when a pane/tab is zoomed. Projected from
+    /// `[ui] zoom_indicator_position`.
+    pub zoom_indicator_position: ZoomIndicatorPosition,
     /// How prefix mode is indicated on screen. Projected from
     /// `[ui] prefix_indicator`.
     pub prefix_indicator: PrefixIndicatorConfig,
@@ -1562,6 +1565,14 @@ impl AppState {
     /// Driven by `[ui] prefix_indicator = "highlight"`.
     pub fn prefix_highlight_active(&self) -> bool {
         self.mode == Mode::Prefix && self.prefix_indicator == PrefixIndicatorConfig::Highlight
+    }
+
+    /// Marker to append to a zoomed tab's label, or `None` when the tab
+    /// position is disabled (`zoom_indicator_position` excludes the tab) or the
+    /// indicator is empty. Per-tab zoom state is checked by the tab bar.
+    pub(crate) fn tab_zoom_marker(&self) -> Option<&str> {
+        (self.zoom_indicator_position.shows_on_tab() && !self.zoom_indicator.is_empty())
+            .then_some(self.zoom_indicator.as_str())
     }
 
     pub fn estimate_pane_size(&self) -> (u16, u16) {
@@ -1791,6 +1802,7 @@ impl AppState {
             show_pane_focus_marker: true,
             sidebar_divider: true,
             zoom_indicator: "Z".into(),
+            zoom_indicator_position: ZoomIndicatorPosition::Tab,
             prefix_indicator: PrefixIndicatorConfig::StatusBar,
             tab_bar_style: TabBarStyle::Classic,
             tab_bar_position: TabBarPosition::Bottom,

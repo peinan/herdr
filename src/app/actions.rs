@@ -1499,6 +1499,7 @@ impl AppState {
             self.tab_bar_style,
             self.tab_bar_align,
             self.tab_bar_title,
+            self.tab_zoom_marker(),
         );
         self.tab_scroll = layout.scroll;
         self.view.tab_hit_areas = layout.tab_hit_areas;

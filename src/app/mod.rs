@@ -625,6 +625,7 @@ impl App {
             show_pane_focus_marker: config.ui.show_pane_focus_marker,
             sidebar_divider: config.ui.sidebar_divider,
             zoom_indicator: config.ui.zoom_indicator.clone(),
+            zoom_indicator_position: config.ui.zoom_indicator_position,
             prefix_indicator: config.ui.prefix_indicator,
             tab_bar_style: config.ui.tab_bar_style,
             tab_bar_position: config.ui.tab_bar_position,
@@ -1382,6 +1383,7 @@ impl App {
                 self.state.show_pane_focus_marker = config.ui.show_pane_focus_marker;
                 self.state.sidebar_divider = config.ui.sidebar_divider;
                 self.state.zoom_indicator = config.ui.zoom_indicator.clone();
+                self.state.zoom_indicator_position = config.ui.zoom_indicator_position;
                 self.state.prefix_indicator = config.ui.prefix_indicator;
                 self.state.tab_bar_style = config.ui.tab_bar_style;
                 self.state.tab_bar_position = config.ui.tab_bar_position;

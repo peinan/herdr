@@ -21,7 +21,7 @@ pub use self::{
         validated_sidebar_bounds, AgentPanelSortConfig, Config, ConfigReloadReport,
         ConfigReloadStatus, NewTerminalCwdConfig, PanePadding, PrefixIndicatorConfig,
         ShellModeConfig, TabBarAlign, TabBarPosition, TabBarStyle, ToastClipboardPosition,
-        ToastConfig, ToastDelivery, ToastHerdrPosition, UpdateChannelConfig,
+        ToastConfig, ToastDelivery, ToastHerdrPosition, UpdateChannelConfig, ZoomIndicatorPosition,
         MAX_TOAST_DELAY_SECONDS,
     },
     sound::SoundConfig,

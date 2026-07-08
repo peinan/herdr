@@ -20,7 +20,11 @@ pub(crate) struct TabBarView {
 }
 
 /// Lay out the tab bar for the active style. Presentation-only.
-#[allow(clippy::too_many_arguments)] // Style/align/title parameterize one layout pass.
+///
+/// `zoom_marker` is the string appended to zoomed tabs' labels (from
+/// `AppState::tab_zoom_marker`), or `None` when the tab position is disabled.
+/// It is folded into per-tab widths so the appended marker never overflows.
+#[allow(clippy::too_many_arguments)] // Style/align/title/zoom parameterize one layout pass.
 pub(crate) fn compute_tab_bar_view(
     ws: &crate::workspace::Workspace,
     area: Rect,
@@ -30,17 +34,29 @@ pub(crate) fn compute_tab_bar_view(
     style: TabBarStyle,
     align: TabBarAlign,
     title: bool,
+    zoom_marker: Option<&str>,
 ) -> TabBarView {
     if area.width == 0 || area.height == 0 {
         return TabBarView::default();
     }
     match style {
-        TabBarStyle::Classic => {
-            classic::compute(ws, area, current_scroll, follow_active, mouse_chrome)
-        }
-        TabBarStyle::Minimal => {
-            minimal::compute(ws, area, current_scroll, follow_active, align, title)
-        }
+        TabBarStyle::Classic => classic::compute(
+            ws,
+            area,
+            current_scroll,
+            follow_active,
+            mouse_chrome,
+            zoom_marker,
+        ),
+        TabBarStyle::Minimal => minimal::compute(
+            ws,
+            area,
+            current_scroll,
+            follow_active,
+            align,
+            title,
+            zoom_marker,
+        ),
     }
 }
 
