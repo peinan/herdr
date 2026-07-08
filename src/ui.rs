@@ -247,6 +247,7 @@ fn compute_view_internal(
                 app.tab_bar_style,
                 app.tab_bar_align,
                 app.tab_bar_title,
+                app.tab_zoom_marker(),
             )
         })
         .unwrap_or_default();

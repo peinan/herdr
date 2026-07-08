@@ -321,6 +321,10 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # Marker appended to the zoomed pane's border title (prefix+z). Empty string hides it.
 # zoom_indicator = "Z"
 
+# Where the zoom marker (zoom_indicator) appears when a pane/tab is zoomed:
+# "tab" (default), "pane", "both", or "none".
+# zoom_indicator_position = "tab"
+
 # How prefix mode is indicated: "status_bar" shows the bottom hint bar; "highlight"
 # hides it and recolors the focused pane border and active tab instead.
 # prefix_indicator = "status_bar"

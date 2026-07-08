@@ -16,24 +16,46 @@ const TAB_MARKER_ACTIVE: char = '\u{F09DE}';
 /// Inactive tab marker. Nerd Font glyph (Codicon range); requires a Nerd Font.
 const TAB_MARKER_INACTIVE: char = '\u{EABC}';
 
-fn tab_chrome_label(ws: &crate::workspace::Workspace, tab_idx: usize) -> String {
-    ws.tab_display_name(tab_idx)
-        .unwrap_or_else(|| (tab_idx + 1).to_string())
+/// Tab label as drawn (titled slots only), including the zoom marker (`… Z`)
+/// when this tab is zoomed and `zoom_marker` is set. Both the width pass and
+/// `render` call this, so a marked tab reserves room for its marker.
+fn tab_chrome_label(
+    ws: &crate::workspace::Workspace,
+    tab_idx: usize,
+    zoom_marker: Option<&str>,
+) -> String {
+    let base = ws
+        .tab_display_name(tab_idx)
+        .unwrap_or_else(|| (tab_idx + 1).to_string());
+    match zoom_marker.filter(|_| ws.tabs.get(tab_idx).is_some_and(|tab| tab.zoomed)) {
+        Some(marker) => format!("{base} {marker}"),
+        None => base,
+    }
 }
 
 /// Width of a single marker slot. Glyph-only slots are `TAB_MARKER_WIDTH`; when
-/// titles are shown a slot is `glyph + space + name + trailing space`.
-fn slot_width(ws: &crate::workspace::Workspace, tab_idx: usize, show_title: bool) -> u16 {
+/// titles are shown a slot is `glyph + space + name + trailing space`. The zoom
+/// marker only affects titled slots, so glyph-only strips never widen for it.
+fn slot_width(
+    ws: &crate::workspace::Workspace,
+    tab_idx: usize,
+    show_title: bool,
+    zoom_marker: Option<&str>,
+) -> u16 {
     if show_title {
-        (tab_chrome_label(ws, tab_idx).chars().count() as u16).saturating_add(3)
+        (tab_chrome_label(ws, tab_idx, zoom_marker).chars().count() as u16).saturating_add(3)
     } else {
         TAB_MARKER_WIDTH
     }
 }
 
-fn total_width(ws: &crate::workspace::Workspace, show_title: bool) -> u16 {
+fn total_width(
+    ws: &crate::workspace::Workspace,
+    show_title: bool,
+    zoom_marker: Option<&str>,
+) -> u16 {
     (0..ws.tabs.len())
-        .map(|idx| slot_width(ws, idx, show_title))
+        .map(|idx| slot_width(ws, idx, show_title, zoom_marker))
         .fold(0u16, |acc, w| acc.saturating_add(w))
 }
 
@@ -42,6 +64,7 @@ fn layout_tab_hit_areas(
     area: Rect,
     scroll: usize,
     show_title: bool,
+    zoom_marker: Option<&str>,
 ) -> Vec<Rect> {
     let mut rects = vec![Rect::default(); ws.tabs.len()];
     if area.width == 0 || area.height == 0 {
@@ -54,7 +77,7 @@ fn layout_tab_hit_areas(
         if x >= right {
             break;
         }
-        let desired = slot_width(ws, idx, show_title);
+        let desired = slot_width(ws, idx, show_title, zoom_marker);
         let width = desired.min(right.saturating_sub(x)).max(1);
         *rect = Rect::new(x, area.y, width, 1);
         x = x.saturating_add(desired);
@@ -62,13 +85,18 @@ fn layout_tab_hit_areas(
     rects
 }
 
-fn centered_tab_scroll(ws: &crate::workspace::Workspace, area: Rect, show_title: bool) -> usize {
+fn centered_tab_scroll(
+    ws: &crate::workspace::Workspace,
+    area: Rect,
+    show_title: bool,
+    zoom_marker: Option<&str>,
+) -> usize {
     let mut best_scroll = ws.active_tab;
     let mut best_distance = u16::MAX;
     let viewport_center = area.x.saturating_mul(2).saturating_add(area.width);
 
     for scroll in 0..=ws.active_tab {
-        let rects = layout_tab_hit_areas(ws, area, scroll, show_title);
+        let rects = layout_tab_hit_areas(ws, area, scroll, show_title, zoom_marker);
         let Some(active_rect) = rects.get(ws.active_tab).copied() else {
             continue;
         };
@@ -90,10 +118,15 @@ fn centered_tab_scroll(ws: &crate::workspace::Workspace, area: Rect, show_title:
     best_scroll
 }
 
-fn max_tab_scroll(ws: &crate::workspace::Workspace, area: Rect, show_title: bool) -> usize {
+fn max_tab_scroll(
+    ws: &crate::workspace::Workspace,
+    area: Rect,
+    show_title: bool,
+    zoom_marker: Option<&str>,
+) -> usize {
     (0..ws.tabs.len())
         .find(|&scroll| {
-            layout_tab_hit_areas(ws, area, scroll, show_title)
+            layout_tab_hit_areas(ws, area, scroll, show_title, zoom_marker)
                 .last()
                 .is_some_and(|rect| rect.width > 0)
         })
@@ -107,8 +140,9 @@ pub(super) fn compute(
     follow_active: bool,
     align: TabBarAlign,
     show_title: bool,
+    zoom_marker: Option<&str>,
 ) -> TabBarView {
-    let total_w = total_width(ws, show_title);
+    let total_w = total_width(ws, show_title, zoom_marker);
     let (markers_area, scroll) = if total_w <= area.width {
         // The strip fits: anchor it left or right. When right-aligned, the last
         // slot's trailing space leaves a one-cell gap before the right edge.
@@ -120,9 +154,9 @@ pub(super) fn compute(
     } else {
         // Overflow: fill the bar from the left and keep the active marker visible.
         let markers_area = Rect::new(area.x, area.y, area.width, area.height);
-        let max_scroll = max_tab_scroll(ws, markers_area, show_title);
+        let max_scroll = max_tab_scroll(ws, markers_area, show_title, zoom_marker);
         let scroll = if follow_active {
-            centered_tab_scroll(ws, markers_area, show_title).min(max_scroll)
+            centered_tab_scroll(ws, markers_area, show_title, zoom_marker).min(max_scroll)
         } else {
             current_scroll.min(max_scroll)
         };
@@ -131,7 +165,7 @@ pub(super) fn compute(
 
     TabBarView {
         scroll,
-        tab_hit_areas: layout_tab_hit_areas(ws, markers_area, scroll, show_title),
+        tab_hit_areas: layout_tab_hit_areas(ws, markers_area, scroll, show_title, zoom_marker),
         // The scroll buttons and "+" button are not shown in this style.
         ..Default::default()
     }
@@ -182,6 +216,7 @@ pub(super) fn render(app: &AppState, frame: &mut Frame, area: Rect) {
     // inactive grey). The active marker turns yellow in prefix-highlight mode.
     // When `tab_bar_title` is set, the tab name is rendered after the glyph.
     let show_title = app.tab_bar_title;
+    let zoom_marker = app.tab_zoom_marker();
     for (idx, rect) in app.view.tab_hit_areas.iter().enumerate() {
         if rect.width == 0 {
             continue;
@@ -197,7 +232,7 @@ pub(super) fn render(app: &AppState, frame: &mut Frame, area: Rect) {
             (TAB_MARKER_INACTIVE, p.overlay1)
         };
         if show_title {
-            let name = tab_chrome_label(ws, idx);
+            let name = tab_chrome_label(ws, idx, zoom_marker);
             frame.render_widget(
                 Paragraph::new(format!("{glyph} {name}")).style(Style::default().fg(fg)),
                 *rect,
@@ -246,7 +281,9 @@ mod tests {
     }
 
     #[test]
-    fn tab_bar_does_not_mark_zoomed_tabs() {
+    fn glyph_only_strip_never_marks_zoomed_tabs() {
+        // A glyph-only minimal strip renders no title text, so it never shows
+        // the zoom marker even under the default `tab` position.
         let mut app = AppState::test_new();
         let mut ws = Workspace::test_new("test");
         ws.tabs[0].zoomed = true;
@@ -255,7 +292,9 @@ mod tests {
 
         app.workspaces = vec![ws];
         app.active = Some(0);
+        app.tab_bar_title = false; // glyph-only
         app.view.tab_bar_rect = Rect::new(0, 0, 30, 1);
+        let marker = app.tab_zoom_marker();
         let view = compute(
             &app.workspaces[0],
             app.view.tab_bar_rect,
@@ -263,6 +302,7 @@ mod tests {
             true,
             TabBarAlign::Right,
             false,
+            marker,
         );
         app.view.tab_hit_areas = view.tab_hit_areas;
 
@@ -273,11 +313,55 @@ mod tests {
             .unwrap();
 
         let row = buffer_row_text(terminal.backend().buffer(), app.view.tab_bar_rect, 0);
-        assert!(!row.contains('Z'), "zoom marker should not appear: {row:?}");
+        assert!(
+            !row.contains('Z'),
+            "glyph-only strip must not show the marker: {row:?}"
+        );
         assert_eq!(app.workspaces[0].tab_display_name(0).as_deref(), Some("1"));
         assert_eq!(
             app.workspaces[0].tab_display_name(custom_tab).as_deref(),
             Some("test")
+        );
+    }
+
+    #[test]
+    fn titled_strip_marks_zoomed_tab() {
+        // With titles shown and the default `tab` position, a zoomed tab gets
+        // the marker appended after its name.
+        let mut app = AppState::test_new();
+        let mut ws = Workspace::test_new("test");
+        ws.tabs[0].set_custom_name("logs".into());
+        ws.tabs[0].zoomed = true;
+        ws.switch_tab(0);
+
+        app.workspaces = vec![ws];
+        app.active = Some(0);
+        app.tab_bar_title = true; // titles shown → marker can appear
+        let bar = Rect::new(0, 0, 30, 1);
+        app.view.tab_bar_rect = bar;
+        let marker = app.tab_zoom_marker();
+        let view = compute(
+            &app.workspaces[0],
+            bar,
+            0,
+            true,
+            TabBarAlign::Right,
+            true,
+            marker,
+        );
+        app.view.tab_hit_areas = view.tab_hit_areas;
+
+        let backend = TestBackend::new(30, 1);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| render(&app, frame, app.view.tab_bar_rect))
+            .unwrap();
+
+        let row = buffer_row_text(terminal.backend().buffer(), bar, 0);
+        assert!(row.contains("logs"), "tab name should render: {row:?}");
+        assert!(
+            row.contains('Z'),
+            "zoom marker should follow the title: {row:?}"
         );
     }
 
@@ -298,6 +382,7 @@ mod tests {
             true,
             TabBarAlign::Right,
             false,
+            None,
         );
         app.view.tab_hit_areas = view.tab_hit_areas;
 
@@ -333,7 +418,15 @@ mod tests {
         app.active = Some(0);
         let bar = Rect::new(0, 0, 30, 1);
         app.view.tab_bar_rect = bar;
-        let view = compute(&app.workspaces[0], bar, 0, true, TabBarAlign::Right, false);
+        let view = compute(
+            &app.workspaces[0],
+            bar,
+            0,
+            true,
+            TabBarAlign::Right,
+            false,
+            None,
+        );
         app.view.tab_hit_areas = view.tab_hit_areas;
 
         // Last marker slot ends flush with the bar's right edge, so its trailing
@@ -355,7 +448,15 @@ mod tests {
         app.active = Some(0);
         let bar = Rect::new(0, 0, 30, 1);
         app.view.tab_bar_rect = bar;
-        let view = compute(&app.workspaces[0], bar, 0, true, TabBarAlign::Left, false);
+        let view = compute(
+            &app.workspaces[0],
+            bar,
+            0,
+            true,
+            TabBarAlign::Left,
+            false,
+            None,
+        );
 
         // Left alignment anchors the first marker at the bar's left edge.
         let first = *view.tab_hit_areas.first().unwrap();
@@ -379,6 +480,7 @@ mod tests {
             true,
             TabBarAlign::Right,
             false,
+            None,
         );
         app.view.tab_hit_areas = view.tab_hit_areas;
 
@@ -407,7 +509,15 @@ mod tests {
         app.tab_bar_title = true;
         let bar = Rect::new(0, 0, 30, 1);
         app.view.tab_bar_rect = bar;
-        let view = compute(&app.workspaces[0], bar, 0, true, TabBarAlign::Right, true);
+        let view = compute(
+            &app.workspaces[0],
+            bar,
+            0,
+            true,
+            TabBarAlign::Right,
+            true,
+            None,
+        );
         app.view.tab_hit_areas = view.tab_hit_areas;
 
         let backend = TestBackend::new(30, 1);

@@ -1499,6 +1499,7 @@ impl AppState {
             self.tab_bar_style,
             self.tab_bar_align,
             self.tab_bar_title,
+            self.tab_zoom_marker(),
         );
         self.tab_scroll = layout.scroll;
         self.view.tab_hit_areas = layout.tab_hit_areas;
@@ -1698,6 +1699,10 @@ impl AppState {
         tab.zoomed = desired;
         let zoomed = tab.zoomed;
         self.mark_session_dirty();
+        // Zooming can change the tab's label width (the zoom marker under a
+        // `tab`/`both` position), so refresh the cached tab hit-areas to match,
+        // like the other tab mutations do.
+        self.refresh_tab_bar_view();
         Some(PaneZoomOutcome {
             changed: true,
             focus_changed,

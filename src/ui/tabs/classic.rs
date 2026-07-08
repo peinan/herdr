@@ -13,16 +13,33 @@ const MIN_TAB_WIDTH: u16 = 8;
 const NEW_TAB_WIDTH: u16 = 3;
 const TAB_SCROLL_BUTTON_WIDTH: u16 = 3;
 
-fn tab_width(ws: &crate::workspace::Workspace, tab_idx: usize) -> u16 {
-    (tab_chrome_label(ws, tab_idx).chars().count() as u16 + 4).max(MIN_TAB_WIDTH)
+fn tab_width(ws: &crate::workspace::Workspace, tab_idx: usize, zoom_marker: Option<&str>) -> u16 {
+    (tab_chrome_label(ws, tab_idx, zoom_marker).chars().count() as u16 + 4).max(MIN_TAB_WIDTH)
 }
 
-fn tab_chrome_label(ws: &crate::workspace::Workspace, tab_idx: usize) -> String {
-    ws.tab_display_name(tab_idx)
-        .unwrap_or_else(|| (tab_idx + 1).to_string())
+/// Tab label as drawn, including the zoom marker (`… Z`) when this tab is zoomed
+/// and `zoom_marker` is set. Both the width pass and `render` call this, so a
+/// marked tab reserves room for its marker instead of clipping it.
+fn tab_chrome_label(
+    ws: &crate::workspace::Workspace,
+    tab_idx: usize,
+    zoom_marker: Option<&str>,
+) -> String {
+    let base = ws
+        .tab_display_name(tab_idx)
+        .unwrap_or_else(|| (tab_idx + 1).to_string());
+    match zoom_marker.filter(|_| ws.tabs.get(tab_idx).is_some_and(|tab| tab.zoomed)) {
+        Some(marker) => format!("{base} {marker}"),
+        None => base,
+    }
 }
 
-fn layout_tab_hit_areas(ws: &crate::workspace::Workspace, area: Rect, scroll: usize) -> Vec<Rect> {
+fn layout_tab_hit_areas(
+    ws: &crate::workspace::Workspace,
+    area: Rect,
+    scroll: usize,
+    zoom_marker: Option<&str>,
+) -> Vec<Rect> {
     let mut rects = vec![Rect::default(); ws.tabs.len()];
     if area.width == 0 || area.height == 0 {
         return rects;
@@ -34,7 +51,7 @@ fn layout_tab_hit_areas(ws: &crate::workspace::Workspace, area: Rect, scroll: us
         if x >= right {
             break;
         }
-        let desired = tab_width(ws, idx);
+        let desired = tab_width(ws, idx, zoom_marker);
         let remaining = right.saturating_sub(x);
         let width = desired.min(remaining).max(1);
         *rect = Rect::new(x, area.y, width, 1);
@@ -43,13 +60,17 @@ fn layout_tab_hit_areas(ws: &crate::workspace::Workspace, area: Rect, scroll: us
     rects
 }
 
-fn centered_tab_scroll(ws: &crate::workspace::Workspace, area: Rect) -> usize {
+fn centered_tab_scroll(
+    ws: &crate::workspace::Workspace,
+    area: Rect,
+    zoom_marker: Option<&str>,
+) -> usize {
     let mut best_scroll = ws.active_tab;
     let mut best_distance = u16::MAX;
     let viewport_center = area.x.saturating_mul(2).saturating_add(area.width);
 
     for scroll in 0..=ws.active_tab {
-        let rects = layout_tab_hit_areas(ws, area, scroll);
+        let rects = layout_tab_hit_areas(ws, area, scroll, zoom_marker);
         let Some(active_rect) = rects.get(ws.active_tab).copied() else {
             continue;
         };
@@ -80,10 +101,14 @@ fn trailing_tab_controls_x(tab_hit_areas: &[Rect], fallback_x: u16) -> u16 {
         .unwrap_or(fallback_x)
 }
 
-fn max_tab_scroll(ws: &crate::workspace::Workspace, area: Rect) -> usize {
+fn max_tab_scroll(
+    ws: &crate::workspace::Workspace,
+    area: Rect,
+    zoom_marker: Option<&str>,
+) -> usize {
     (0..ws.tabs.len())
         .find(|&scroll| {
-            layout_tab_hit_areas(ws, area, scroll)
+            layout_tab_hit_areas(ws, area, scroll, zoom_marker)
                 .last()
                 .is_some_and(|rect| rect.width > 0)
         })
@@ -96,21 +121,22 @@ pub(super) fn compute(
     current_scroll: usize,
     follow_active: bool,
     mouse_chrome: bool,
+    zoom_marker: Option<&str>,
 ) -> TabBarView {
     if area.width == 0 || area.height == 0 {
         return TabBarView::default();
     }
 
     if !mouse_chrome {
-        let max_scroll = max_tab_scroll(ws, area);
+        let max_scroll = max_tab_scroll(ws, area, zoom_marker);
         let scroll = if follow_active {
-            centered_tab_scroll(ws, area).min(max_scroll)
+            centered_tab_scroll(ws, area, zoom_marker).min(max_scroll)
         } else {
             current_scroll.min(max_scroll)
         };
         return TabBarView {
             scroll,
-            tab_hit_areas: layout_tab_hit_areas(ws, area, scroll),
+            tab_hit_areas: layout_tab_hit_areas(ws, area, scroll, zoom_marker),
             scroll_left_hit_area: Rect::default(),
             scroll_right_hit_area: Rect::default(),
             new_tab_hit_area: Rect::default(),
@@ -124,7 +150,7 @@ pub(super) fn compute(
         area.width.saturating_sub(NEW_TAB_WIDTH),
         area.height,
     );
-    let all_tabs = layout_tab_hit_areas(ws, all_tabs_area, 0);
+    let all_tabs = layout_tab_hit_areas(ws, all_tabs_area, 0, zoom_marker);
     let overflow = all_tabs.iter().any(|rect| rect.width == 0);
     if !overflow {
         let new_tab_x = trailing_tab_controls_x(&all_tabs, area.x);
@@ -154,13 +180,13 @@ pub(super) fn compute(
         area.height,
     );
 
-    let max_scroll = max_tab_scroll(ws, tab_area);
+    let max_scroll = max_tab_scroll(ws, tab_area, zoom_marker);
     let scroll = if follow_active {
-        centered_tab_scroll(ws, tab_area).min(max_scroll)
+        centered_tab_scroll(ws, tab_area, zoom_marker).min(max_scroll)
     } else {
         current_scroll.min(max_scroll)
     };
-    let tab_hit_areas = layout_tab_hit_areas(ws, tab_area, scroll);
+    let tab_hit_areas = layout_tab_hit_areas(ws, tab_area, scroll, zoom_marker);
     let trailing_x = trailing_tab_controls_x(&tab_hit_areas, tab_area_x).min(tab_area_right);
     let right_hit_area = Rect::new(
         trailing_x,
@@ -242,6 +268,7 @@ pub(super) fn render(app: &AppState, frame: &mut Frame, area: Rect) {
     };
 
     let p = &app.palette;
+    let zoom_marker = app.tab_zoom_marker();
 
     frame.render_widget(
         Paragraph::new(" ".repeat(area.width as usize)).style(Style::default().bg(p.panel_bg)),
@@ -326,7 +353,7 @@ pub(super) fn render(app: &AppState, frame: &mut Frame, area: Rect) {
             Style::default().fg(p.overlay1).bg(p.surface0)
         };
         let width = rect.width as usize;
-        let name = tab_chrome_label(ws, idx);
+        let name = tab_chrome_label(ws, idx, zoom_marker);
         let text = format!(" {:width$}", name, width = width.saturating_sub(1));
         frame.render_widget(Paragraph::new(text).style(style), rect);
     }
@@ -386,6 +413,7 @@ pub(super) fn render(app: &AppState, frame: &mut Frame, area: Rect) {
 mod tests {
     use super::*;
     use crate::app::state::AppState;
+    use crate::config::ZoomIndicatorPosition;
     use crate::workspace::Workspace;
     use ratatui::{backend::TestBackend, Terminal};
 
@@ -398,7 +426,7 @@ mod tests {
     }
 
     #[test]
-    fn tab_bar_does_not_mark_zoomed_tabs() {
+    fn tab_bar_marks_zoomed_tabs_under_tab_position() {
         let mut app = AppState::test_new();
         let mut ws = Workspace::test_new("test");
         ws.tabs[0].zoomed = true;
@@ -407,18 +435,28 @@ mod tests {
 
         app.workspaces = vec![ws];
         app.active = Some(0);
-        app.view.tab_bar_rect = Rect::new(0, 0, 30, 1);
-        let view = compute(&app.workspaces[0], app.view.tab_bar_rect, 0, true, false);
+        // test_new defaults to zoom_indicator "Z" and position `Tab`.
+        app.view.tab_bar_rect = Rect::new(0, 0, 40, 1);
+        let marker = app.tab_zoom_marker();
+        let view = compute(
+            &app.workspaces[0],
+            app.view.tab_bar_rect,
+            0,
+            true,
+            false,
+            marker,
+        );
         app.view.tab_hit_areas = view.tab_hit_areas;
 
-        let backend = TestBackend::new(30, 1);
+        let backend = TestBackend::new(40, 1);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
             .draw(|frame| render(&app, frame, app.view.tab_bar_rect))
             .unwrap();
 
         let row = buffer_row_text(terminal.backend().buffer(), app.view.tab_bar_rect, 0);
-        assert!(!row.contains('Z'), "zoom marker should not appear: {row:?}");
+        assert!(row.contains('Z'), "zoom marker should appear: {row:?}");
+        // The marker is decoration only; it does not rename the tab.
         assert_eq!(app.workspaces[0].tab_display_name(0).as_deref(), Some("1"));
         assert_eq!(
             app.workspaces[0].tab_display_name(custom_tab).as_deref(),
@@ -427,13 +465,48 @@ mod tests {
     }
 
     #[test]
-    fn zoom_does_not_affect_tab_width() {
+    fn tab_bar_omits_zoom_marker_when_position_excludes_tab() {
+        let mut app = AppState::test_new();
+        let mut ws = Workspace::test_new("test");
+        ws.tabs[0].zoomed = true;
+
+        app.workspaces = vec![ws];
+        app.active = Some(0);
+        // Pane position keeps the marker off the tab bar.
+        app.zoom_indicator_position = ZoomIndicatorPosition::Pane;
+        app.view.tab_bar_rect = Rect::new(0, 0, 40, 1);
+        let marker = app.tab_zoom_marker();
+        let view = compute(
+            &app.workspaces[0],
+            app.view.tab_bar_rect,
+            0,
+            true,
+            false,
+            marker,
+        );
+        app.view.tab_hit_areas = view.tab_hit_areas;
+
+        let backend = TestBackend::new(40, 1);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| render(&app, frame, app.view.tab_bar_rect))
+            .unwrap();
+
+        let row = buffer_row_text(terminal.backend().buffer(), app.view.tab_bar_rect, 0);
+        assert!(!row.contains('Z'), "zoom marker must be hidden: {row:?}");
+    }
+
+    #[test]
+    fn zoom_marker_widens_tab_only_when_shown() {
         let mut ws = Workspace::test_new("test");
         ws.tabs[0].set_custom_name("abcdefgh".into());
 
-        let unzoomed_width = tab_width(&ws, 0);
+        let unzoomed_width = tab_width(&ws, 0, None);
         ws.tabs[0].zoomed = true;
 
-        assert_eq!(tab_width(&ws, 0), unzoomed_width);
+        // Without a tab marker, zoom leaves the width unchanged.
+        assert_eq!(tab_width(&ws, 0, None), unzoomed_width);
+        // With a marker, a zoomed tab reserves room for the appended " Z".
+        assert_eq!(tab_width(&ws, 0, Some("Z")), unzoomed_width + 2);
     }
 }

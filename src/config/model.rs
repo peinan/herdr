@@ -815,6 +815,11 @@ pub struct UiConfig {
     /// Marker appended to the zoomed pane's border title (prefix+z). Set to an
     /// empty string to hide it. Default: "Z".
     pub zoom_indicator: String,
+    /// Where the zoom marker (`zoom_indicator`) is shown when a pane/tab is
+    /// zoomed (prefix+z): on the active tab's label ("tab", default), the
+    /// zoomed pane's border title ("pane"), "both", or "none". "none" hides the
+    /// marker regardless of `zoom_indicator`.
+    pub zoom_indicator_position: ZoomIndicatorPosition,
     /// How prefix mode is indicated. "status_bar" shows the bottom hint bar
     /// (default); "highlight" hides it and recolors the focused pane border and
     /// active tab instead.
@@ -869,6 +874,34 @@ pub enum PrefixIndicatorConfig {
     StatusBar,
     /// Hide the bar; recolor the focused pane border and active tab instead.
     Highlight,
+}
+
+/// Where the zoom marker (`ui.zoom_indicator`) appears when a pane/tab is
+/// zoomed (prefix+z).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ZoomIndicatorPosition {
+    /// Append the marker to the zoomed tab's label (default, upstream-like).
+    #[default]
+    Tab,
+    /// Append the marker to the zoomed pane's border title.
+    Pane,
+    /// Show the marker on both the tab label and the pane border title.
+    Both,
+    /// Never show the marker.
+    None,
+}
+
+impl ZoomIndicatorPosition {
+    /// Whether the marker is shown on the zoomed pane's border title.
+    pub fn shows_on_pane(self) -> bool {
+        matches!(self, Self::Pane | Self::Both)
+    }
+
+    /// Whether the marker is shown on the zoomed tab's label.
+    pub fn shows_on_tab(self) -> bool {
+        matches!(self, Self::Tab | Self::Both)
+    }
 }
 
 /// Tab bar visual style.
@@ -1088,6 +1121,7 @@ impl Default for UiConfig {
             show_pane_focus_marker: true,
             sidebar_divider: true,
             zoom_indicator: "Z".into(),
+            zoom_indicator_position: ZoomIndicatorPosition::Tab,
             prefix_indicator: PrefixIndicatorConfig::StatusBar,
             tab_bar_style: TabBarStyle::Classic,
             tab_bar_position: TabBarPosition::Bottom,
@@ -1311,6 +1345,10 @@ agent_panel_scope = "current"
         assert!(default_config.ui.sidebar_divider);
         assert_eq!(default_config.ui.zoom_indicator, "Z");
         assert_eq!(
+            default_config.ui.zoom_indicator_position,
+            ZoomIndicatorPosition::Tab
+        );
+        assert_eq!(
             default_config.ui.prefix_indicator,
             PrefixIndicatorConfig::StatusBar
         );
@@ -1330,6 +1368,7 @@ dim_inactive_panes = true
 show_pane_focus_marker = false
 sidebar_divider = false
 zoom_indicator = "ZOOM*"
+zoom_indicator_position = "pane"
 prefix_indicator = "highlight"
 tab_bar_style = "minimal"
 tab_bar_position = "top"
@@ -1346,6 +1385,10 @@ tab_bar_title = true
         assert!(!config.ui.show_pane_focus_marker);
         assert!(!config.ui.sidebar_divider);
         assert_eq!(config.ui.zoom_indicator, "ZOOM*");
+        assert_eq!(
+            config.ui.zoom_indicator_position,
+            ZoomIndicatorPosition::Pane
+        );
         assert_eq!(config.ui.prefix_indicator, PrefixIndicatorConfig::Highlight);
         assert_eq!(config.ui.tab_bar_style, TabBarStyle::Minimal);
         assert_eq!(config.ui.tab_bar_position, TabBarPosition::Top);
