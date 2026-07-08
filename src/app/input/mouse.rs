@@ -436,6 +436,14 @@ impl AppState {
                     }
                 }
 
+                if self.on_tab_scroll_left_button(mouse.column, mouse.row) {
+                    self.scroll_tabs_left();
+                    return None;
+                }
+                if self.on_tab_scroll_right_button(mouse.column, mouse.row) {
+                    self.scroll_tabs_right();
+                    return None;
+                }
                 if let (Some(ws_idx), Some(tab_idx)) =
                     (self.active, self.tab_at(mouse.column, mouse.row))
                 {
@@ -1174,6 +1182,24 @@ impl AppState {
             && col < area.x + area.width
     }
 
+    pub(super) fn on_tab_scroll_left_button(&self, col: u16, row: u16) -> bool {
+        let area = self.view.tab_scroll_left_hit_area;
+        area.width > 0
+            && row >= area.y
+            && row < area.y + area.height
+            && col >= area.x
+            && col < area.x + area.width
+    }
+
+    pub(super) fn on_tab_scroll_right_button(&self, col: u16, row: u16) -> bool {
+        let area = self.view.tab_scroll_right_hit_area;
+        area.width > 0
+            && row >= area.y
+            && row < area.y + area.height
+            && col >= area.x
+            && col < area.x + area.width
+    }
+
     pub(super) fn tab_drop_index_at(&self, col: u16, row: u16) -> Option<usize> {
         if !self.on_tab_bar(col, row) {
             return None;
@@ -1189,8 +1215,38 @@ impl AppState {
         let (first_idx, first_rect) = *visible_tabs.first()?;
         let (last_idx, last_rect) = *visible_tabs.last()?;
 
-        let left_edge = first_rect.x;
-        let right_edge = last_rect.x + last_rect.width;
+        // The classic style reserves scroll-button edges on overflow; the
+        // minimal style has no scroll chrome, so its edges are the marker rects.
+        let (left_edge, right_edge) = match self.tab_bar_style {
+            crate::config::TabBarStyle::Classic => {
+                if self.on_tab_scroll_left_button(col, row) {
+                    return Some(0);
+                }
+                if self.on_tab_scroll_right_button(col, row) {
+                    return self
+                        .active
+                        .and_then(|idx| self.workspaces.get(idx))
+                        .map(|ws| ws.tabs.len());
+                }
+
+                let left_edge = if first_idx == 0 {
+                    first_rect.x
+                } else {
+                    self.view.tab_scroll_left_hit_area.x + self.view.tab_scroll_left_hit_area.width
+                };
+                let right_edge = if self
+                    .active
+                    .and_then(|idx| self.workspaces.get(idx))
+                    .is_some_and(|ws| last_idx + 1 >= ws.tabs.len())
+                {
+                    last_rect.x + last_rect.width
+                } else {
+                    self.view.tab_scroll_right_hit_area.x.saturating_sub(1)
+                };
+                (left_edge, right_edge)
+            }
+            crate::config::TabBarStyle::Minimal => (first_rect.x, last_rect.x + last_rect.width),
+        };
 
         if col <= left_edge {
             return Some(first_idx);
@@ -1877,8 +1933,8 @@ mod tests {
         crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 106, 20));
         let info = app.state.view.pane_infos[0].clone();
         assert!(info.inner_rect.x > 0, "sidebar offset should be present");
-        // The tab bar now sits at the bottom, so the top pane is flush with the
-        // top of the screen (no tab-bar y-offset).
+        // The top pane is flush with the top of the terminal area, whichever
+        // edge the tab bar is anchored to.
         assert_eq!(info.inner_rect.y, app.state.view.terminal_area.y);
 
         app.state.handle_pane_mouse_only(
@@ -1919,8 +1975,8 @@ mod tests {
         crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 106, 20));
         let info = app.state.view.pane_infos[0].clone();
         assert!(info.inner_rect.x > 0, "sidebar offset should be present");
-        // The tab bar now sits at the bottom, so the top pane is flush with the
-        // top of the screen (no tab-bar y-offset).
+        // The top pane is flush with the top of the terminal area, whichever
+        // edge the tab bar is anchored to.
         assert_eq!(info.inner_rect.y, app.state.view.terminal_area.y);
 
         app.handle_mouse(mouse(
@@ -3246,6 +3302,29 @@ mod tests {
             viewport.x + 2,
             viewport.y + 5,
         ));
+        assert_eq!(app.state.mode, Mode::Terminal);
+        assert!(!app.state.creating_new_tab);
+        assert!(app.state.request_new_tab);
+        assert!(app.state.requested_new_tab_name.is_none());
+    }
+
+    #[test]
+    fn desktop_new_tab_button_skips_dialog_when_prompt_disabled() {
+        let mut app = app_for_mouse_test();
+        app.state.workspaces = vec![Workspace::test_new("one")];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = Mode::Terminal;
+        app.state.prompt_new_tab_name = false;
+
+        crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 120, 40));
+        let new_tab_area = app.state.view.new_tab_hit_area;
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            new_tab_area.x + 1,
+            new_tab_area.y,
+        ));
+
         assert_eq!(app.state.mode, Mode::Terminal);
         assert!(!app.state.creating_new_tab);
         assert!(app.state.request_new_tab);

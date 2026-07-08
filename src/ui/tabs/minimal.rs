@@ -1,11 +1,13 @@
 use ratatui::{layout::Rect, style::Style, widgets::Paragraph, Frame};
 
+use super::TabBarView;
 use crate::app::AppState;
+use crate::config::TabBarAlign;
 
-/// Width (in cells) of a single tab marker slot: the glyph plus one trailing
-/// space. Also the click target width for switching to that tab. When the strip
-/// is right-aligned, the last slot's trailing space leaves a one-cell gap
-/// before the right edge.
+/// Width (in cells) of a single glyph-only marker slot: the glyph plus one
+/// trailing space. Also the click target width for switching to that tab. When
+/// the strip is right-aligned, the last slot's trailing space leaves a one-cell
+/// gap before the right edge.
 const TAB_MARKER_WIDTH: u16 = 2;
 
 /// Active tab marker. Nerd Font glyph (Material Design Icons range); requires a
@@ -14,14 +16,33 @@ const TAB_MARKER_ACTIVE: char = '\u{F09DE}';
 /// Inactive tab marker. Nerd Font glyph (Codicon range); requires a Nerd Font.
 const TAB_MARKER_INACTIVE: char = '\u{EABC}';
 
-#[derive(Debug, Clone, Default)]
-pub(crate) struct TabBarView {
-    pub scroll: usize,
-    pub tab_hit_areas: Vec<Rect>,
-    pub new_tab_hit_area: Rect,
+fn tab_chrome_label(ws: &crate::workspace::Workspace, tab_idx: usize) -> String {
+    ws.tab_display_name(tab_idx)
+        .unwrap_or_else(|| (tab_idx + 1).to_string())
 }
 
-fn layout_tab_hit_areas(ws: &crate::workspace::Workspace, area: Rect, scroll: usize) -> Vec<Rect> {
+/// Width of a single marker slot. Glyph-only slots are `TAB_MARKER_WIDTH`; when
+/// titles are shown a slot is `glyph + space + name + trailing space`.
+fn slot_width(ws: &crate::workspace::Workspace, tab_idx: usize, show_title: bool) -> u16 {
+    if show_title {
+        (tab_chrome_label(ws, tab_idx).chars().count() as u16).saturating_add(3)
+    } else {
+        TAB_MARKER_WIDTH
+    }
+}
+
+fn total_width(ws: &crate::workspace::Workspace, show_title: bool) -> u16 {
+    (0..ws.tabs.len())
+        .map(|idx| slot_width(ws, idx, show_title))
+        .fold(0u16, |acc, w| acc.saturating_add(w))
+}
+
+fn layout_tab_hit_areas(
+    ws: &crate::workspace::Workspace,
+    area: Rect,
+    scroll: usize,
+    show_title: bool,
+) -> Vec<Rect> {
     let mut rects = vec![Rect::default(); ws.tabs.len()];
     if area.width == 0 || area.height == 0 {
         return rects;
@@ -29,24 +50,25 @@ fn layout_tab_hit_areas(ws: &crate::workspace::Workspace, area: Rect, scroll: us
 
     let mut x = area.x;
     let right = area.x + area.width;
-    for rect in rects.iter_mut().skip(scroll) {
+    for (idx, rect) in rects.iter_mut().enumerate().skip(scroll) {
         if x >= right {
             break;
         }
-        let width = TAB_MARKER_WIDTH.min(right.saturating_sub(x)).max(1);
+        let desired = slot_width(ws, idx, show_title);
+        let width = desired.min(right.saturating_sub(x)).max(1);
         *rect = Rect::new(x, area.y, width, 1);
-        x = x.saturating_add(TAB_MARKER_WIDTH);
+        x = x.saturating_add(desired);
     }
     rects
 }
 
-fn centered_tab_scroll(ws: &crate::workspace::Workspace, area: Rect) -> usize {
+fn centered_tab_scroll(ws: &crate::workspace::Workspace, area: Rect, show_title: bool) -> usize {
     let mut best_scroll = ws.active_tab;
     let mut best_distance = u16::MAX;
     let viewport_center = area.x.saturating_mul(2).saturating_add(area.width);
 
     for scroll in 0..=ws.active_tab {
-        let rects = layout_tab_hit_areas(ws, area, scroll);
+        let rects = layout_tab_hit_areas(ws, area, scroll, show_title);
         let Some(active_rect) = rects.get(ws.active_tab).copied() else {
             continue;
         };
@@ -68,39 +90,39 @@ fn centered_tab_scroll(ws: &crate::workspace::Workspace, area: Rect) -> usize {
     best_scroll
 }
 
-fn max_tab_scroll(ws: &crate::workspace::Workspace, area: Rect) -> usize {
+fn max_tab_scroll(ws: &crate::workspace::Workspace, area: Rect, show_title: bool) -> usize {
     (0..ws.tabs.len())
         .find(|&scroll| {
-            layout_tab_hit_areas(ws, area, scroll)
+            layout_tab_hit_areas(ws, area, scroll, show_title)
                 .last()
                 .is_some_and(|rect| rect.width > 0)
         })
         .unwrap_or(0)
 }
 
-pub(crate) fn compute_tab_bar_view(
+pub(super) fn compute(
     ws: &crate::workspace::Workspace,
     area: Rect,
     current_scroll: usize,
     follow_active: bool,
-    _mouse_chrome: bool,
+    align: TabBarAlign,
+    show_title: bool,
 ) -> TabBarView {
-    if area.width == 0 || area.height == 0 {
-        return TabBarView::default();
-    }
-
-    let total_w = (ws.tabs.len() as u16).saturating_mul(TAB_MARKER_WIDTH);
+    let total_w = total_width(ws, show_title);
     let (markers_area, scroll) = if total_w <= area.width {
-        // Right-align the whole strip; the last slot's trailing space leaves a
-        // one-cell gap before the right edge.
-        let x = area.x + area.width.saturating_sub(total_w);
+        // The strip fits: anchor it left or right. When right-aligned, the last
+        // slot's trailing space leaves a one-cell gap before the right edge.
+        let x = match align {
+            TabBarAlign::Left => area.x,
+            TabBarAlign::Right => area.x + area.width.saturating_sub(total_w),
+        };
         (Rect::new(x, area.y, total_w, area.height), 0)
     } else {
-        // Overflow: fill the bar and keep the active marker visible.
+        // Overflow: fill the bar from the left and keep the active marker visible.
         let markers_area = Rect::new(area.x, area.y, area.width, area.height);
-        let max_scroll = max_tab_scroll(ws, markers_area);
+        let max_scroll = max_tab_scroll(ws, markers_area, show_title);
         let scroll = if follow_active {
-            centered_tab_scroll(ws, markers_area).min(max_scroll)
+            centered_tab_scroll(ws, markers_area, show_title).min(max_scroll)
         } else {
             current_scroll.min(max_scroll)
         };
@@ -109,9 +131,9 @@ pub(crate) fn compute_tab_bar_view(
 
     TabBarView {
         scroll,
-        tab_hit_areas: layout_tab_hit_areas(ws, markers_area, scroll),
-        // The "+" button is hidden in this variation.
-        new_tab_hit_area: Rect::default(),
+        tab_hit_areas: layout_tab_hit_areas(ws, markers_area, scroll, show_title),
+        // The scroll buttons and "+" button are not shown in this style.
+        ..Default::default()
     }
 }
 
@@ -138,7 +160,7 @@ fn tab_drop_indicator_x(app: &AppState, insert_idx: usize) -> Option<u16> {
     Some(last_rect.x + last_rect.width)
 }
 
-pub(super) fn render_tab_bar(app: &AppState, frame: &mut Frame, area: Rect) {
+pub(super) fn render(app: &AppState, frame: &mut Frame, area: Rect) {
     if area.width == 0 || area.height == 0 {
         return;
     }
@@ -156,9 +178,10 @@ pub(super) fn render_tab_bar(app: &AppState, frame: &mut Frame, area: Rect) {
         area,
     );
 
-    // Right-aligned tab markers: one glyph per tab, distinguished by colour
-    // (active accent, inactive grey). The active marker turns yellow in
-    // prefix-highlight mode. The tab title and "+" button are not shown.
+    // Tab markers: one glyph per tab, distinguished by colour (active accent,
+    // inactive grey). The active marker turns yellow in prefix-highlight mode.
+    // When `tab_bar_title` is set, the tab name is rendered after the glyph.
+    let show_title = app.tab_bar_title;
     for (idx, rect) in app.view.tab_hit_areas.iter().enumerate() {
         if rect.width == 0 {
             continue;
@@ -173,10 +196,18 @@ pub(super) fn render_tab_bar(app: &AppState, frame: &mut Frame, area: Rect) {
         } else {
             (TAB_MARKER_INACTIVE, p.overlay1)
         };
-        let mut buf = [0u8; 4];
-        frame.buffer_mut()[(rect.x, rect.y)]
-            .set_symbol(glyph.encode_utf8(&mut buf))
-            .set_style(Style::default().fg(fg));
+        if show_title {
+            let name = tab_chrome_label(ws, idx);
+            frame.render_widget(
+                Paragraph::new(format!("{glyph} {name}")).style(Style::default().fg(fg)),
+                *rect,
+            );
+        } else {
+            let mut buf = [0u8; 4];
+            frame.buffer_mut()[(rect.x, rect.y)]
+                .set_symbol(glyph.encode_utf8(&mut buf))
+                .set_style(Style::default().fg(fg));
+        }
     }
 
     // Drag-to-reorder drop indicator.
@@ -225,13 +256,20 @@ mod tests {
         app.workspaces = vec![ws];
         app.active = Some(0);
         app.view.tab_bar_rect = Rect::new(0, 0, 30, 1);
-        let view = compute_tab_bar_view(&app.workspaces[0], app.view.tab_bar_rect, 0, true, false);
+        let view = compute(
+            &app.workspaces[0],
+            app.view.tab_bar_rect,
+            0,
+            true,
+            TabBarAlign::Right,
+            false,
+        );
         app.view.tab_hit_areas = view.tab_hit_areas;
 
         let backend = TestBackend::new(30, 1);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
-            .draw(|frame| render_tab_bar(&app, frame, app.view.tab_bar_rect))
+            .draw(|frame| render(&app, frame, app.view.tab_bar_rect))
             .unwrap();
 
         let row = buffer_row_text(terminal.backend().buffer(), app.view.tab_bar_rect, 0);
@@ -253,13 +291,20 @@ mod tests {
         app.workspaces = vec![ws];
         app.active = Some(0);
         app.view.tab_bar_rect = Rect::new(0, 0, 30, 1);
-        let view = compute_tab_bar_view(&app.workspaces[0], app.view.tab_bar_rect, 0, true, false);
+        let view = compute(
+            &app.workspaces[0],
+            app.view.tab_bar_rect,
+            0,
+            true,
+            TabBarAlign::Right,
+            false,
+        );
         app.view.tab_hit_areas = view.tab_hit_areas;
 
         let backend = TestBackend::new(30, 1);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
-            .draw(|frame| render_tab_bar(&app, frame, app.view.tab_bar_rect))
+            .draw(|frame| render(&app, frame, app.view.tab_bar_rect))
             .unwrap();
         let buffer = terminal.backend().buffer();
 
@@ -288,15 +333,33 @@ mod tests {
         app.active = Some(0);
         let bar = Rect::new(0, 0, 30, 1);
         app.view.tab_bar_rect = bar;
-        let view = compute_tab_bar_view(&app.workspaces[0], bar, 0, true, true);
+        let view = compute(&app.workspaces[0], bar, 0, true, TabBarAlign::Right, false);
         app.view.tab_hit_areas = view.tab_hit_areas;
 
         // Last marker slot ends flush with the bar's right edge, so its trailing
         // space is the one-cell gap; the rightmost glyph sits at width - 2.
         let last = *app.view.tab_hit_areas.last().unwrap();
         assert_eq!(last.x + last.width, bar.x + bar.width);
-        // No "+" button in this variation.
+        // No "+" button in this style.
         assert_eq!(view.new_tab_hit_area, Rect::default());
+    }
+
+    #[test]
+    fn tab_markers_left_align_from_the_bar_start() {
+        let mut app = AppState::test_new();
+        let mut ws = Workspace::test_new("test");
+        ws.test_add_tab(Some("logs")); // 2 tabs
+        ws.switch_tab(0);
+
+        app.workspaces = vec![ws];
+        app.active = Some(0);
+        let bar = Rect::new(0, 0, 30, 1);
+        app.view.tab_bar_rect = bar;
+        let view = compute(&app.workspaces[0], bar, 0, true, TabBarAlign::Left, false);
+
+        // Left alignment anchors the first marker at the bar's left edge.
+        let first = *view.tab_hit_areas.first().unwrap();
+        assert_eq!(first.x, bar.x);
     }
 
     #[test]
@@ -309,19 +372,54 @@ mod tests {
         app.workspaces = vec![ws];
         app.active = Some(0);
         app.view.tab_bar_rect = Rect::new(0, 0, 30, 1);
-        let view = compute_tab_bar_view(&app.workspaces[0], app.view.tab_bar_rect, 0, true, false);
+        let view = compute(
+            &app.workspaces[0],
+            app.view.tab_bar_rect,
+            0,
+            true,
+            TabBarAlign::Right,
+            false,
+        );
         app.view.tab_hit_areas = view.tab_hit_areas;
 
         let backend = TestBackend::new(30, 1);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
-            .draw(|frame| render_tab_bar(&app, frame, app.view.tab_bar_rect))
+            .draw(|frame| render(&app, frame, app.view.tab_bar_rect))
             .unwrap();
 
         let row = buffer_row_text(terminal.backend().buffer(), app.view.tab_bar_rect, 0);
         assert!(
             !row.contains('1'),
-            "tab title is hidden in this variation: {row:?}"
+            "tab title is hidden when tab_bar_title is off: {row:?}"
+        );
+    }
+
+    #[test]
+    fn tab_titles_render_names_when_enabled() {
+        let mut app = AppState::test_new();
+        let mut ws = Workspace::test_new("test");
+        ws.tabs[0].set_custom_name("logs".into());
+        ws.switch_tab(0);
+
+        app.workspaces = vec![ws];
+        app.active = Some(0);
+        app.tab_bar_title = true;
+        let bar = Rect::new(0, 0, 30, 1);
+        app.view.tab_bar_rect = bar;
+        let view = compute(&app.workspaces[0], bar, 0, true, TabBarAlign::Right, true);
+        app.view.tab_hit_areas = view.tab_hit_areas;
+
+        let backend = TestBackend::new(30, 1);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| render(&app, frame, app.view.tab_bar_rect))
+            .unwrap();
+
+        let row = buffer_row_text(terminal.backend().buffer(), bar, 0);
+        assert!(
+            row.contains("logs"),
+            "tab name should render alongside the glyph: {row:?}"
         );
     }
 }
