@@ -8,13 +8,15 @@ use ratatui::{
 use super::super::widgets::panel_contrast_fg;
 use super::TabBarView;
 use crate::app::AppState;
+use unicode_width::UnicodeWidthStr;
 
 const MIN_TAB_WIDTH: u16 = 8;
 const NEW_TAB_WIDTH: u16 = 3;
 const TAB_SCROLL_BUTTON_WIDTH: u16 = 3;
 
 fn tab_width(ws: &crate::workspace::Workspace, tab_idx: usize, zoom_marker: Option<&str>) -> u16 {
-    (tab_chrome_label(ws, tab_idx, zoom_marker).chars().count() as u16 + 4).max(MIN_TAB_WIDTH)
+    let label = tab_chrome_label(ws, tab_idx, zoom_marker);
+    (UnicodeWidthStr::width(label.as_str()) as u16 + 4).max(MIN_TAB_WIDTH)
 }
 
 /// Tab label as drawn, including the zoom marker (`… Z`) when this tab is zoomed

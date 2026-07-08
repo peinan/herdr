@@ -44,12 +44,12 @@ fn truncate_label(text: &str, max_width: usize) -> String {
     format!("{prefix}…")
 }
 
-fn pane_border_title(label: &str, pane_width: u16, show_marker: bool) -> Option<String> {
+fn pane_border_title(label: &str, pane_width: u16, show_focus_marker: bool) -> Option<String> {
     let label = label.trim();
     if label.is_empty() || pane_width <= 4 {
         return None;
     }
-    if show_marker {
+    if show_focus_marker {
         let max_label_width = pane_width.saturating_sub(5) as usize;
         Some(format!("▌ {} ", truncate_label(label, max_label_width)))
     } else {

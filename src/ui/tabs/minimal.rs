@@ -3,6 +3,7 @@ use ratatui::{layout::Rect, style::Style, widgets::Paragraph, Frame};
 use super::TabBarView;
 use crate::app::AppState;
 use crate::config::TabBarAlign;
+use unicode_width::UnicodeWidthStr;
 
 /// Width (in cells) of a single glyph-only marker slot: the glyph plus one
 /// trailing space. Also the click target width for switching to that tab. When
@@ -43,7 +44,8 @@ fn slot_width(
     zoom_marker: Option<&str>,
 ) -> u16 {
     if show_title {
-        (tab_chrome_label(ws, tab_idx, zoom_marker).chars().count() as u16).saturating_add(3)
+        (UnicodeWidthStr::width(tab_chrome_label(ws, tab_idx, zoom_marker).as_str()) as u16)
+            .saturating_add(3)
     } else {
         TAB_MARKER_WIDTH
     }
