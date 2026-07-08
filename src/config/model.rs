@@ -819,6 +819,20 @@ pub struct UiConfig {
     /// (default); "highlight" hides it and recolors the focused pane border and
     /// active tab instead.
     pub prefix_indicator: PrefixIndicatorConfig,
+    /// Tab bar visual style. "classic" is the top-anchored text-label bar with
+    /// horizontal scrolling (default, upstream look); "minimal" is the compact
+    /// Nerd-Font glyph marker strip.
+    pub tab_bar_style: TabBarStyle,
+    /// Anchor edge for the minimal tab bar strip ("top" or "bottom"). Ignored
+    /// by the classic style, which is always top-anchored. Default: "bottom".
+    pub tab_bar_position: TabBarPosition,
+    /// Horizontal alignment for the minimal tab bar strip ("left" or "right").
+    /// Ignored by the classic style, which is always left-aligned. Default:
+    /// "right".
+    pub tab_bar_align: TabBarAlign,
+    /// Render each tab's name alongside its glyph in the minimal style. Ignored
+    /// by the classic style, which always shows names. Default: false.
+    pub tab_bar_title: bool,
     /// Agent sidebar ordering. Saved values are "spaces" or "priority". Default: "spaces".
     pub agent_panel_sort: AgentPanelSortConfig,
     /// Accent color for highlights, borders, and navigation UI.
@@ -855,6 +869,36 @@ pub enum PrefixIndicatorConfig {
     StatusBar,
     /// Hide the bar; recolor the focused pane border and active tab instead.
     Highlight,
+}
+
+/// Tab bar visual style.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TabBarStyle {
+    /// Top-anchored text-label tabs with horizontal scrolling (upstream look).
+    #[default]
+    Classic,
+    /// Compact Nerd-Font glyph marker strip.
+    Minimal,
+}
+
+/// Anchor edge for the minimal tab bar strip. Ignored by the classic style.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TabBarPosition {
+    Top,
+    #[default]
+    Bottom,
+}
+
+/// Horizontal alignment for the minimal tab bar strip. Ignored by the classic
+/// style.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TabBarAlign {
+    Left,
+    #[default]
+    Right,
 }
 
 /// Cursor shape (DECSCUSR) used for the forced IME anchor.
@@ -1045,6 +1089,10 @@ impl Default for UiConfig {
             sidebar_divider: true,
             zoom_indicator: "Z".into(),
             prefix_indicator: PrefixIndicatorConfig::StatusBar,
+            tab_bar_style: TabBarStyle::Classic,
+            tab_bar_position: TabBarPosition::Bottom,
+            tab_bar_align: TabBarAlign::Right,
+            tab_bar_title: false,
             agent_panel_sort: AgentPanelSortConfig::Spaces,
             accent: "cyan".into(),
             toast: ToastConfig::default(),
@@ -1266,6 +1314,10 @@ agent_panel_scope = "current"
             default_config.ui.prefix_indicator,
             PrefixIndicatorConfig::StatusBar
         );
+        assert_eq!(default_config.ui.tab_bar_style, TabBarStyle::Classic);
+        assert_eq!(default_config.ui.tab_bar_position, TabBarPosition::Bottom);
+        assert_eq!(default_config.ui.tab_bar_align, TabBarAlign::Right);
+        assert!(!default_config.ui.tab_bar_title);
 
         let toml = r#"
 [ui]
@@ -1279,6 +1331,10 @@ show_pane_focus_marker = false
 sidebar_divider = false
 zoom_indicator = "ZOOM*"
 prefix_indicator = "highlight"
+tab_bar_style = "minimal"
+tab_bar_position = "top"
+tab_bar_align = "left"
+tab_bar_title = true
 "#;
         let config: Config = toml::from_str(toml).unwrap();
         assert!(!config.ui.pane_borders);
@@ -1291,6 +1347,10 @@ prefix_indicator = "highlight"
         assert!(!config.ui.sidebar_divider);
         assert_eq!(config.ui.zoom_indicator, "ZOOM*");
         assert_eq!(config.ui.prefix_indicator, PrefixIndicatorConfig::Highlight);
+        assert_eq!(config.ui.tab_bar_style, TabBarStyle::Minimal);
+        assert_eq!(config.ui.tab_bar_position, TabBarPosition::Top);
+        assert_eq!(config.ui.tab_bar_align, TabBarAlign::Left);
+        assert!(config.ui.tab_bar_title);
     }
 
     #[test]

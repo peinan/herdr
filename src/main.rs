@@ -325,6 +325,20 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # hides it and recolors the focused pane border and active tab instead.
 # prefix_indicator = "status_bar"
 
+# Tab bar style: "classic" (top-anchored text labels with horizontal scrolling)
+# or "minimal" (compact Nerd-Font glyph marker strip).
+# tab_bar_style = "classic"
+
+# Minimal tab bar anchor edge: "top" or "bottom". Ignored by the classic style.
+# tab_bar_position = "bottom"
+
+# Minimal tab bar alignment: "left" or "right". Ignored by the classic style.
+# tab_bar_align = "right"
+
+# Show each tab's name alongside its glyph in the minimal style. Ignored by the
+# classic style, which always shows names.
+# tab_bar_title = false
+
 # Agent panel ordering: "spaces" (grouped by space) or "priority" (attention queue).
 # "workspaces" is accepted as an alias for "spaces".
 # agent_panel_sort = "spaces"

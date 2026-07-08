@@ -1,6 +1,6 @@
 use crate::config::{
-    Keybinds, NewTerminalCwdConfig, PanePadding, PrefixIndicatorConfig, SoundConfig, ToastConfig,
-    ToastDelivery,
+    Keybinds, NewTerminalCwdConfig, PanePadding, PrefixIndicatorConfig, SoundConfig, TabBarAlign,
+    TabBarPosition, TabBarStyle, ToastConfig, ToastDelivery,
 };
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::layout::{Direction, Rect};
@@ -736,6 +736,10 @@ pub struct ViewState {
     pub workspace_card_areas: Vec<WorkspaceCardArea>,
     pub tab_bar_rect: Rect,
     pub tab_hit_areas: Vec<Rect>,
+    /// Classic tab bar scroll-left/right button hit areas. Zero-width (unset)
+    /// for the minimal style, which has no scroll buttons.
+    pub tab_scroll_left_hit_area: Rect,
+    pub tab_scroll_right_hit_area: Rect,
     pub new_tab_hit_area: Rect,
     pub terminal_area: Rect,
     pub mobile_header_rect: Rect,
@@ -1382,6 +1386,17 @@ pub struct AppState {
     /// How prefix mode is indicated on screen. Projected from
     /// `[ui] prefix_indicator`.
     pub prefix_indicator: PrefixIndicatorConfig,
+    /// Tab bar visual style. Projected from `[ui] tab_bar_style`.
+    pub tab_bar_style: TabBarStyle,
+    /// Minimal tab bar anchor edge. Projected from `[ui] tab_bar_position`.
+    /// Ignored by the classic style.
+    pub tab_bar_position: TabBarPosition,
+    /// Minimal tab bar alignment. Projected from `[ui] tab_bar_align`.
+    /// Ignored by the classic style.
+    pub tab_bar_align: TabBarAlign,
+    /// Show tab names alongside glyphs in the minimal style. Projected from
+    /// `[ui] tab_bar_title`. Ignored by the classic style.
+    pub tab_bar_title: bool,
     pub pane_history_persistence: bool,
     /// Expose the focused pane's cursor anchor to the outer terminal even when
     /// the pane requested `?25l`. See `[experimental] reveal_hidden_cursor_for_cjk_ime`.
@@ -1721,6 +1736,8 @@ impl AppState {
                 workspace_card_areas: Vec::new(),
                 tab_bar_rect: Rect::default(),
                 tab_hit_areas: Vec::new(),
+                tab_scroll_left_hit_area: Rect::default(),
+                tab_scroll_right_hit_area: Rect::default(),
                 new_tab_hit_area: Rect::default(),
                 terminal_area: Rect::default(),
                 mobile_header_rect: Rect::default(),
@@ -1775,6 +1792,10 @@ impl AppState {
             sidebar_divider: true,
             zoom_indicator: "Z".into(),
             prefix_indicator: PrefixIndicatorConfig::StatusBar,
+            tab_bar_style: TabBarStyle::Classic,
+            tab_bar_position: TabBarPosition::Bottom,
+            tab_bar_align: TabBarAlign::Right,
+            tab_bar_title: false,
             pane_history_persistence: false,
             reveal_hidden_cursor_for_cjk_ime: false,
             cjk_ime_agent_filter_configured: false,

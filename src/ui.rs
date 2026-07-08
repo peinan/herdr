@@ -93,7 +93,7 @@ pub(crate) use self::{
 };
 use crate::app::state::ViewLayout;
 use crate::app::{AppState, Mode};
-use crate::config::PrefixIndicatorConfig;
+use crate::config::{PrefixIndicatorConfig, TabBarPosition, TabBarStyle};
 use crate::terminal::TerminalRuntimeRegistry;
 
 const COLLAPSED_WIDTH: u16 = 4; // num + space + dot + separator
@@ -197,10 +197,21 @@ fn compute_view_internal(
 
     let has_tabs = app.active.and_then(|i| app.workspaces.get(i)).is_some();
     let (tab_bar_rect, terminal_area) = if has_tabs && main_area.height > 1 {
-        // Tab bar (markers + transient mode hint bars) sits at the bottom; panes fill above.
-        let [terminal_area, tab_bar_rect] =
-            Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(main_area);
-        (tab_bar_rect, terminal_area)
+        // Classic tabs are always top-anchored (upstream look); the minimal
+        // strip anchors per `tab_bar_position`.
+        let tab_at_top = match app.tab_bar_style {
+            TabBarStyle::Classic => true,
+            TabBarStyle::Minimal => app.tab_bar_position == TabBarPosition::Top,
+        };
+        if tab_at_top {
+            let [tab_bar_rect, terminal_area] =
+                Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(main_area);
+            (tab_bar_rect, terminal_area)
+        } else {
+            let [terminal_area, tab_bar_rect] =
+                Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(main_area);
+            (tab_bar_rect, terminal_area)
+        }
     } else {
         (Rect::default(), main_area)
     };
@@ -233,6 +244,9 @@ fn compute_view_internal(
                 app.tab_scroll,
                 app.tab_scroll_follow_active,
                 app.mouse_capture,
+                app.tab_bar_style,
+                app.tab_bar_align,
+                app.tab_bar_title,
             )
         })
         .unwrap_or_default();
@@ -285,6 +299,8 @@ fn compute_view_internal(
         workspace_card_areas,
         tab_bar_rect,
         tab_hit_areas: tab_bar_view.tab_hit_areas,
+        tab_scroll_left_hit_area: tab_bar_view.scroll_left_hit_area,
+        tab_scroll_right_hit_area: tab_bar_view.scroll_right_hit_area,
         new_tab_hit_area: tab_bar_view.new_tab_hit_area,
         terminal_area,
         mobile_header_rect: Rect::default(),
@@ -358,6 +374,8 @@ fn compute_mobile_view(
         workspace_card_areas: Vec::new(),
         tab_bar_rect: Rect::default(),
         tab_hit_areas: Vec::new(),
+        tab_scroll_left_hit_area: Rect::default(),
+        tab_scroll_right_hit_area: Rect::default(),
         new_tab_hit_area: Rect::default(),
         terminal_area,
         mobile_header_rect: header_rect,
@@ -399,13 +417,15 @@ pub fn render_with_runtime_registry(
     // Ambient notifications sit above panes, but below interactive overlays.
     render_notifications(app, frame, terminal_area);
 
-    // Transient mode hint bars (navigate/prefix/copy/resize) render on the tab
-    // bar row at the top; fall back to the terminal's bottom row when there is
-    // no tab bar (e.g. a very short window).
-    let mode_bar_area = if tab_bar_area.width > 0 {
-        tab_bar_area
-    } else {
-        terminal_area
+    // Transient mode hint bars (navigate/prefix/copy/resize). Classic tabs sit
+    // at the top, so the hints keep the upstream bottom-row placement (the
+    // bottom of the terminal area). The minimal strip owns its own row, so the
+    // hints render on the tab bar row wherever it is anchored; fall back to the
+    // terminal's bottom row when there is no tab bar (e.g. a very short window).
+    let mode_bar_area = match app.tab_bar_style {
+        TabBarStyle::Classic => terminal_area,
+        TabBarStyle::Minimal if tab_bar_area.width > 0 => tab_bar_area,
+        TabBarStyle::Minimal => terminal_area,
     };
 
     match app.mode {
@@ -866,6 +886,7 @@ mod tests {
     #[test]
     fn tab_bar_marks_active_with_accent_and_inactive_with_overlay() {
         let mut app = crate::app::state::AppState::test_new();
+        app.tab_bar_style = TabBarStyle::Minimal;
         let mut ws = Workspace::test_new("test");
         let custom_tab = ws.test_add_tab(Some("logs"));
         ws.switch_tab(custom_tab);
@@ -895,6 +916,7 @@ mod tests {
     #[test]
     fn tab_bar_active_marker_uses_accent_when_panel_background_resets() {
         let mut app = crate::app::state::AppState::test_new();
+        app.tab_bar_style = TabBarStyle::Minimal;
         let mut ws = Workspace::test_new("test");
         let custom_tab = ws.test_add_tab(Some("logs"));
         ws.switch_tab(custom_tab);
@@ -918,6 +940,106 @@ mod tests {
         // The active marker stays visible via the accent foreground (no fill),
         // even when the panel background resets to the terminal default.
         assert_eq!(active_style.fg, Some(app.palette.accent));
+    }
+
+    #[test]
+    fn new_tab_button_tracks_rightmost_tab_when_tabs_fit() {
+        let mut app = crate::app::state::AppState::test_new();
+        let mut ws = Workspace::test_new("test");
+        ws.test_add_tab(Some("logs"));
+
+        app.workspaces = vec![ws];
+        app.active = Some(0);
+        app.selected = 0;
+        app.mode = Mode::Terminal;
+
+        compute_view(&mut app, Rect::new(0, 0, 80, 20));
+
+        let last_visible = app
+            .view
+            .tab_hit_areas
+            .iter()
+            .rev()
+            .find(|rect| rect.width > 0)
+            .copied()
+            .expect("last visible tab");
+
+        assert_eq!(
+            app.view.new_tab_hit_area.x,
+            last_visible.x + last_visible.width
+        );
+    }
+
+    #[test]
+    fn tab_bar_shows_scroll_controls_when_tabs_overflow() {
+        let mut app = crate::app::state::AppState::test_new();
+        let mut ws = Workspace::test_new("test");
+        for name in ["alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta"] {
+            ws.test_add_tab(Some(name));
+        }
+
+        app.workspaces = vec![ws];
+        app.active = Some(0);
+        app.selected = 0;
+        app.mode = Mode::Terminal;
+        app.tab_scroll_follow_active = false;
+        app.tab_scroll = 2;
+
+        compute_view(&mut app, Rect::new(0, 0, 65, 20));
+
+        assert!(app.view.tab_scroll_left_hit_area.width > 0);
+        assert!(app.view.tab_scroll_right_hit_area.width > 0);
+        assert_eq!(app.view.tab_hit_areas[0].width, 0);
+        assert_eq!(app.view.tab_hit_areas[1].width, 0);
+        assert!(app.view.tab_hit_areas[2].width > 0);
+        assert!(app.view.new_tab_hit_area.width > 0);
+
+        let last_visible = app
+            .view
+            .tab_hit_areas
+            .iter()
+            .rev()
+            .find(|rect| rect.width > 0)
+            .copied()
+            .expect("last visible tab");
+
+        assert_eq!(
+            app.view.tab_scroll_right_hit_area.x,
+            last_visible.x + last_visible.width
+        );
+        assert_eq!(
+            app.view.new_tab_hit_area.x,
+            app.view.tab_scroll_right_hit_area.x + app.view.tab_scroll_right_hit_area.width
+        );
+    }
+
+    #[test]
+    fn tab_bar_clamps_manual_scroll_at_last_visible_tab() {
+        let mut app = crate::app::state::AppState::test_new();
+        let mut ws = Workspace::test_new("test");
+        for name in [
+            "one", "two", "three", "four", "five", "six", "seven", "eight",
+        ] {
+            ws.test_add_tab(Some(name));
+        }
+
+        app.workspaces = vec![ws];
+        app.active = Some(0);
+        app.selected = 0;
+        app.mode = Mode::Terminal;
+        app.tab_scroll_follow_active = false;
+        app.tab_scroll = usize::MAX;
+
+        compute_view(&mut app, Rect::new(0, 0, 65, 20));
+
+        let last_idx = app.workspaces[0].tabs.len() - 1;
+        assert!(app.view.tab_hit_areas[last_idx].width > 0);
+        let clamped_scroll = app.tab_scroll;
+
+        app.scroll_tabs_right();
+
+        assert_eq!(app.tab_scroll, clamped_scroll);
+        assert!(app.view.tab_hit_areas[last_idx].width > 0);
     }
 
     #[test]
@@ -1101,6 +1223,9 @@ mod tests {
     #[test]
     fn mode_hint_bar_renders_on_the_tab_bar_row() {
         let mut app = crate::app::state::AppState::test_new();
+        // Minimal style with the default bottom position: the strip owns its row
+        // and the transient hint renders there.
+        app.tab_bar_style = TabBarStyle::Minimal;
         app.workspaces = vec![Workspace::test_new("test")];
         app.active = Some(0);
         app.selected = 0;
@@ -1129,6 +1254,65 @@ mod tests {
             !row_text(bottom_row).contains("RESIZE"),
             "resize hint bar should not be at the bottom: {:?}",
             row_text(bottom_row)
+        );
+    }
+
+    #[test]
+    fn classic_mode_hint_bar_renders_at_the_bottom_row() {
+        let mut app = crate::app::state::AppState::test_new();
+        // Classic tabs sit at the top, so the transient hint keeps the upstream
+        // bottom-of-screen placement.
+        app.tab_bar_style = TabBarStyle::Classic;
+        app.workspaces = vec![Workspace::test_new("test")];
+        app.active = Some(0);
+        app.selected = 0;
+        app.mode = Mode::Resize;
+
+        compute_view(&mut app, Rect::new(0, 0, 80, 20));
+        let tab_row = app.view.tab_bar_rect.y;
+        let bottom_row = app.view.terminal_area.y + app.view.terminal_area.height - 1;
+        assert!(app.view.tab_bar_rect.width > 0, "expected a tab bar row");
+        assert_eq!(tab_row, 0, "classic tab bar is top-anchored");
+
+        let backend = TestBackend::new(80, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| render(&app, frame)).unwrap();
+        let buffer = terminal.backend().buffer();
+
+        let row_text =
+            |row: u16| -> String { (0..80).map(|x| buffer[(x, row)].symbol()).collect() };
+
+        assert!(
+            row_text(bottom_row).contains("RESIZE"),
+            "resize hint bar should be at the bottom: {:?}",
+            row_text(bottom_row)
+        );
+        assert!(
+            !row_text(tab_row).contains("RESIZE"),
+            "resize hint bar should not be on the top tab bar row: {:?}",
+            row_text(tab_row)
+        );
+    }
+
+    #[test]
+    fn minimal_tab_bar_anchors_top_when_positioned_top() {
+        let mut app = crate::app::state::AppState::test_new();
+        app.tab_bar_style = TabBarStyle::Minimal;
+        app.tab_bar_position = TabBarPosition::Top;
+        app.workspaces = vec![Workspace::test_new("test")];
+        app.active = Some(0);
+        app.selected = 0;
+        app.mode = Mode::Terminal;
+
+        compute_view(&mut app, Rect::new(0, 0, 80, 20));
+
+        assert_eq!(
+            app.view.tab_bar_rect.y, 0,
+            "minimal top anchors the strip at the top row"
+        );
+        assert!(
+            app.view.terminal_area.y > app.view.tab_bar_rect.y,
+            "panes fill below the top-anchored strip"
         );
     }
 
