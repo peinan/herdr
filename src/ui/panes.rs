@@ -44,13 +44,18 @@ fn truncate_label(text: &str, max_width: usize) -> String {
     format!("{prefix}…")
 }
 
-fn pane_border_title(label: &str, pane_width: u16) -> Option<String> {
+fn pane_border_title(label: &str, pane_width: u16, show_focus_marker: bool) -> Option<String> {
     let label = label.trim();
     if label.is_empty() || pane_width <= 4 {
         return None;
     }
-    let max_label_width = pane_width.saturating_sub(4) as usize;
-    Some(format!(" {} ", truncate_label(label, max_label_width)))
+    if show_focus_marker {
+        let max_label_width = pane_width.saturating_sub(5) as usize;
+        Some(format!("▌ {} ", truncate_label(label, max_label_width)))
+    } else {
+        let max_label_width = pane_width.saturating_sub(4) as usize;
+        Some(format!(" {} ", truncate_label(label, max_label_width)))
+    }
 }
 
 fn stable_terminal_inner_rect(pane_inner: Rect) -> Rect {
@@ -642,7 +647,10 @@ fn build_title_facts(
         .or_else(|| terminal.effective_agent_label().map(str::to_string))
         .unwrap_or_default();
     let zoomed_here = ws.zoomed && info.is_focused;
-    let zoom = if zoomed_here && !app.zoom_indicator.is_empty() {
+    let zoom = if zoomed_here
+        && app.zoom_indicator_position.shows_on_pane()
+        && !app.zoom_indicator.is_empty()
+    {
         app.zoom_indicator.clone()
     } else {
         String::new()
@@ -763,16 +771,20 @@ fn render_pane_border_titles(app: &AppState, ws: &crate::workspace::Workspace, f
         let zoomed_here = ws.zoomed && info.is_focused;
         // A custom format owns the title, including the zoom marker via `$zoom`;
         // only the legacy (no-format) path auto-appends the indicator so the two
-        // never double up.
-        let show_marker =
-            zoomed_here && !app.zoom_indicator.is_empty() && app.pane_title_format.is_empty();
+        // never double up. `zoom_indicator_position` decides whether the pane
+        // shows the marker at all.
+        let show_marker = zoomed_here
+            && app.zoom_indicator_position.shows_on_pane()
+            && !app.zoom_indicator.is_empty()
+            && app.pane_title_format.is_empty();
         let label = match (base, show_marker) {
             (Some(base), true) => format!("{base} {}", app.zoom_indicator),
             (Some(base), false) => base,
             (None, true) => app.zoom_indicator.clone(),
             (None, false) => continue,
         };
-        let Some(title) = pane_border_title(&label, info.rect.width) else {
+        let focus_marker = info.is_focused && app.show_pane_focus_marker;
+        let Some(title) = pane_border_title(&label, info.rect.width, focus_marker) else {
             continue;
         };
         let y = info.rect.y;
@@ -1022,6 +1034,7 @@ fn render_empty(app: &AppState, frame: &mut Frame, area: Rect) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::ZoomIndicatorPosition;
     use crate::layout::PaneId;
     use crate::selection::Selection;
     use crate::terminal::TerminalRuntime;
@@ -1031,17 +1044,28 @@ mod tests {
     #[test]
     fn pane_border_title_trims_and_truncates() {
         assert_eq!(
-            pane_border_title(" claude ", 20).as_deref(),
+            pane_border_title(" claude ", 20, false).as_deref(),
             Some(" claude ")
         );
-        assert_eq!(pane_border_title("", 20), None);
-        assert_eq!(pane_border_title("abcdef", 8).as_deref(), Some(" abc… "));
-        assert_eq!(pane_border_title("abcdef", 4), None);
+        assert_eq!(
+            pane_border_title(" claude ", 20, true).as_deref(),
+            Some("▌ claude ")
+        );
+        assert_eq!(pane_border_title("", 20, false), None);
+        assert_eq!(
+            pane_border_title("abcdef", 8, false).as_deref(),
+            Some(" abc… ")
+        );
+        assert_eq!(
+            pane_border_title("abcdef", 8, true).as_deref(),
+            Some("▌ ab… ")
+        );
+        assert_eq!(pane_border_title("abcdef", 4, false), None);
     }
 
     #[test]
     fn pane_border_title_truncates_cjk_by_display_width() {
-        let title = pane_border_title("1 模块组织（已定）", 12).unwrap();
+        let title = pane_border_title("1 模块组织（已定）", 12, false).unwrap();
 
         assert_eq!(title, " 1 模块… ");
         assert!(UnicodeWidthStr::width(title.as_str()) <= 10);
@@ -1091,6 +1115,9 @@ mod tests {
         let mut app = AppState::test_new();
         app.mode = Mode::Terminal;
         app.zoom_indicator = zoom_indicator.to_string();
+        // These helpers exercise the pane-side marker; the tab is the default
+        // position, so opt the pane back in explicitly.
+        app.zoom_indicator_position = ZoomIndicatorPosition::Pane;
         app.view.terminal_area = Rect::new(0, 0, width, 3);
         app.view.pane_infos = vec![PaneInfo {
             id: PaneId::from_raw(1),
@@ -1160,6 +1187,50 @@ mod tests {
         );
     }
 
+    #[test]
+    fn default_tab_position_hides_pane_marker() {
+        // The default position is `tab`, so a zoomed pane shows no marker on
+        // its border; the marker belongs to the tab bar instead.
+        let width: u16 = 20;
+        let mut app = AppState::test_new();
+        app.mode = Mode::Terminal;
+        app.zoom_indicator = "Z".to_string();
+        // Leave `zoom_indicator_position` at the `test_new` default (`Tab`).
+        app.view.terminal_area = Rect::new(0, 0, width, 3);
+        app.view.pane_infos = vec![PaneInfo {
+            id: PaneId::from_raw(1),
+            rect: Rect::new(0, 0, width, 3),
+            inner_rect: Rect::default(),
+            scrollbar_rect: None,
+            borders: Borders::ALL,
+            is_focused: true,
+        }];
+
+        let mut ws = Workspace::test_new("test");
+        ws.tabs[0].zoomed = true;
+        let terminal_id = ws.tabs[0].panes[&PaneId::from_raw(1)]
+            .attached_terminal_id
+            .clone();
+        let mut terminal_state = TerminalState::new(terminal_id.clone(), "/tmp".into());
+        terminal_state.set_manual_label("claude".into());
+        app.terminals.insert(terminal_id, terminal_state);
+
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, 3)).unwrap();
+        terminal
+            .draw(|frame| render_pane_borders(&app, &ws, frame))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let row = (0..width)
+            .map(|x| buffer[(x, 0)].symbol())
+            .collect::<String>();
+        assert!(row.contains("claude"), "border row: {row:?}");
+        assert!(
+            !row.contains('Z'),
+            "pane must not show the marker under the tab position: {row:?}"
+        );
+    }
+
     fn render_title_row_with_format(
         format: &str,
         cwd: &str,
@@ -1170,6 +1241,7 @@ mod tests {
         let mut app = AppState::test_new();
         app.mode = Mode::Terminal;
         app.zoom_indicator = "Z".to_string();
+        app.zoom_indicator_position = ZoomIndicatorPosition::Pane;
         app.pane_title_format = crate::ui::pane_title::parse(format).expect("parse format");
         app.view.terminal_area = Rect::new(0, 0, width, 3);
         app.view.pane_infos = vec![PaneInfo {

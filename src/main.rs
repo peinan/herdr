@@ -307,8 +307,13 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # the auto-append is suppressed. Example:
 # pane_title_format = "$dir $process( ⋅ $branch$ahead_behind$git_status)( $zoom)"
 
-# Dim panes that are not focused, providing an active-pane highlight even outside prefix mode.
-# dim_inactive_panes = true
+# Dim inactive panes at all times for an active-pane highlight. When false
+# (default), inactive panes dim only in prefix/command mode.
+# dim_inactive_panes = false
+
+# Show the ▌ marker at the start of the focused pane's border title. Set to
+# false to indicate focus with accent color and bold only.
+# show_pane_focus_marker = true
 
 # Draw the vertical divider between the sidebar and the main pane area.
 # sidebar_divider = true
@@ -316,9 +321,27 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # Marker appended to the zoomed pane's border title (prefix+z). Empty string hides it.
 # zoom_indicator = "Z"
 
+# Where the zoom marker (zoom_indicator) appears when a pane/tab is zoomed:
+# "tab" (default), "pane", "both", or "none".
+# zoom_indicator_position = "tab"
+
 # How prefix mode is indicated: "status_bar" shows the bottom hint bar; "highlight"
 # hides it and recolors the focused pane border and active tab instead.
 # prefix_indicator = "status_bar"
+
+# Tab bar style: "classic" (top-anchored text labels with horizontal scrolling)
+# or "minimal" (compact Nerd-Font glyph marker strip).
+# tab_bar_style = "classic"
+
+# Minimal tab bar anchor edge: "top" or "bottom". Ignored by the classic style.
+# tab_bar_position = "bottom"
+
+# Minimal tab bar alignment: "left" or "right". Ignored by the classic style.
+# tab_bar_align = "right"
+
+# Show each tab's name alongside its glyph in the minimal style. Ignored by the
+# classic style, which always shows names.
+# tab_bar_title = false
 
 # Agent panel ordering: "spaces" (grouped by space) or "priority" (attention queue).
 # "workspaces" is accepted as an alias for "spaces".

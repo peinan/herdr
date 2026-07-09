@@ -801,19 +801,43 @@ pub struct UiConfig {
     /// when every variable inside resolves empty. Empty disables it and keeps
     /// the default label. Default: "".
     pub pane_title_format: String,
-    /// Dim panes that are not focused, providing an active-pane highlight even
-    /// outside prefix/command modes. Default: true.
+    /// Dim inactive panes at all times for an active-pane highlight. When
+    /// false, inactive panes dim only in prefix/command mode (upstream
+    /// behavior). Default: false.
     pub dim_inactive_panes: bool,
+    /// Show the `▌` marker at the start of the focused pane's border title.
+    /// Set to false to indicate focus with accent color and bold only.
+    /// Default: true.
+    pub show_pane_focus_marker: bool,
     /// Draw the vertical divider line between the sidebar and the main pane
     /// area. Set to false to hide it. Default: true.
     pub sidebar_divider: bool,
     /// Marker appended to the zoomed pane's border title (prefix+z). Set to an
     /// empty string to hide it. Default: "Z".
     pub zoom_indicator: String,
+    /// Where the zoom marker (`zoom_indicator`) is shown when a pane/tab is
+    /// zoomed (prefix+z): on the active tab's label ("tab", default), the
+    /// zoomed pane's border title ("pane"), "both", or "none". "none" hides the
+    /// marker regardless of `zoom_indicator`.
+    pub zoom_indicator_position: ZoomIndicatorPosition,
     /// How prefix mode is indicated. "status_bar" shows the bottom hint bar
     /// (default); "highlight" hides it and recolors the focused pane border and
     /// active tab instead.
     pub prefix_indicator: PrefixIndicatorConfig,
+    /// Tab bar visual style. "classic" is the top-anchored text-label bar with
+    /// horizontal scrolling (default, upstream look); "minimal" is the compact
+    /// Nerd-Font glyph marker strip.
+    pub tab_bar_style: TabBarStyle,
+    /// Anchor edge for the minimal tab bar strip ("top" or "bottom"). Ignored
+    /// by the classic style, which is always top-anchored. Default: "bottom".
+    pub tab_bar_position: TabBarPosition,
+    /// Horizontal alignment for the minimal tab bar strip ("left" or "right").
+    /// Ignored by the classic style, which is always left-aligned. Default:
+    /// "right".
+    pub tab_bar_align: TabBarAlign,
+    /// Render each tab's name alongside its glyph in the minimal style. Ignored
+    /// by the classic style, which always shows names. Default: false.
+    pub tab_bar_title: bool,
     /// Agent sidebar ordering. Saved values are "spaces" or "priority". Default: "spaces".
     pub agent_panel_sort: AgentPanelSortConfig,
     /// Accent color for highlights, borders, and navigation UI.
@@ -850,6 +874,64 @@ pub enum PrefixIndicatorConfig {
     StatusBar,
     /// Hide the bar; recolor the focused pane border and active tab instead.
     Highlight,
+}
+
+/// Where the zoom marker (`ui.zoom_indicator`) appears when a pane/tab is
+/// zoomed (prefix+z).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ZoomIndicatorPosition {
+    /// Append the marker to the zoomed tab's label (default, upstream-like).
+    #[default]
+    Tab,
+    /// Append the marker to the zoomed pane's border title.
+    Pane,
+    /// Show the marker on both the tab label and the pane border title.
+    Both,
+    /// Never show the marker.
+    None,
+}
+
+impl ZoomIndicatorPosition {
+    /// Whether the marker is shown on the zoomed pane's border title.
+    pub fn shows_on_pane(self) -> bool {
+        matches!(self, Self::Pane | Self::Both)
+    }
+
+    /// Whether the marker is shown on the zoomed tab's label.
+    pub fn shows_on_tab(self) -> bool {
+        matches!(self, Self::Tab | Self::Both)
+    }
+}
+
+/// Tab bar visual style.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TabBarStyle {
+    /// Top-anchored text-label tabs with horizontal scrolling (upstream look).
+    #[default]
+    Classic,
+    /// Compact Nerd-Font glyph marker strip.
+    Minimal,
+}
+
+/// Anchor edge for the minimal tab bar strip. Ignored by the classic style.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TabBarPosition {
+    Top,
+    #[default]
+    Bottom,
+}
+
+/// Horizontal alignment for the minimal tab bar strip. Ignored by the classic
+/// style.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TabBarAlign {
+    Left,
+    #[default]
+    Right,
 }
 
 /// Cursor shape (DECSCUSR) used for the forced IME anchor.
@@ -1035,10 +1117,16 @@ impl Default for UiConfig {
             pane_padding: PanePadding::default(),
             show_agent_labels_on_pane_borders: false,
             pane_title_format: String::new(),
-            dim_inactive_panes: true,
+            dim_inactive_panes: false,
+            show_pane_focus_marker: true,
             sidebar_divider: true,
             zoom_indicator: "Z".into(),
+            zoom_indicator_position: ZoomIndicatorPosition::Tab,
             prefix_indicator: PrefixIndicatorConfig::StatusBar,
+            tab_bar_style: TabBarStyle::Classic,
+            tab_bar_position: TabBarPosition::Bottom,
+            tab_bar_align: TabBarAlign::Right,
+            tab_bar_title: false,
             agent_panel_sort: AgentPanelSortConfig::Spaces,
             accent: "cyan".into(),
             toast: ToastConfig::default(),
@@ -1252,13 +1340,22 @@ agent_panel_scope = "current"
         assert!(default_config.ui.pane_gaps);
         assert!(!default_config.ui.show_agent_labels_on_pane_borders);
         assert!(default_config.ui.pane_title_format.is_empty());
-        assert!(default_config.ui.dim_inactive_panes);
+        assert!(!default_config.ui.dim_inactive_panes);
+        assert!(default_config.ui.show_pane_focus_marker);
         assert!(default_config.ui.sidebar_divider);
         assert_eq!(default_config.ui.zoom_indicator, "Z");
+        assert_eq!(
+            default_config.ui.zoom_indicator_position,
+            ZoomIndicatorPosition::Tab
+        );
         assert_eq!(
             default_config.ui.prefix_indicator,
             PrefixIndicatorConfig::StatusBar
         );
+        assert_eq!(default_config.ui.tab_bar_style, TabBarStyle::Classic);
+        assert_eq!(default_config.ui.tab_bar_position, TabBarPosition::Bottom);
+        assert_eq!(default_config.ui.tab_bar_align, TabBarAlign::Right);
+        assert!(!default_config.ui.tab_bar_title);
 
         let toml = r#"
 [ui]
@@ -1267,10 +1364,16 @@ single_pane_border = true
 pane_gaps = true
 show_agent_labels_on_pane_borders = true
 pane_title_format = "$dir $process"
-dim_inactive_panes = false
+dim_inactive_panes = true
+show_pane_focus_marker = false
 sidebar_divider = false
 zoom_indicator = "ZOOM*"
+zoom_indicator_position = "pane"
 prefix_indicator = "highlight"
+tab_bar_style = "minimal"
+tab_bar_position = "top"
+tab_bar_align = "left"
+tab_bar_title = true
 "#;
         let config: Config = toml::from_str(toml).unwrap();
         assert!(!config.ui.pane_borders);
@@ -1278,10 +1381,19 @@ prefix_indicator = "highlight"
         assert!(config.ui.pane_gaps);
         assert!(config.ui.show_agent_labels_on_pane_borders);
         assert_eq!(config.ui.pane_title_format, "$dir $process");
-        assert!(!config.ui.dim_inactive_panes);
+        assert!(config.ui.dim_inactive_panes);
+        assert!(!config.ui.show_pane_focus_marker);
         assert!(!config.ui.sidebar_divider);
         assert_eq!(config.ui.zoom_indicator, "ZOOM*");
+        assert_eq!(
+            config.ui.zoom_indicator_position,
+            ZoomIndicatorPosition::Pane
+        );
         assert_eq!(config.ui.prefix_indicator, PrefixIndicatorConfig::Highlight);
+        assert_eq!(config.ui.tab_bar_style, TabBarStyle::Minimal);
+        assert_eq!(config.ui.tab_bar_position, TabBarPosition::Top);
+        assert_eq!(config.ui.tab_bar_align, TabBarAlign::Left);
+        assert!(config.ui.tab_bar_title);
     }
 
     #[test]

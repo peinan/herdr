@@ -570,6 +570,8 @@ impl App {
                 workspace_card_areas: Vec::new(),
                 tab_bar_rect: Rect::default(),
                 tab_hit_areas: Vec::new(),
+                tab_scroll_left_hit_area: Rect::default(),
+                tab_scroll_right_hit_area: Rect::default(),
                 new_tab_hit_area: Rect::default(),
                 terminal_area: Rect::default(),
                 mobile_header_rect: Rect::default(),
@@ -620,9 +622,15 @@ impl App {
             show_agent_labels_on_pane_borders: config.ui.show_agent_labels_on_pane_borders,
             pane_title_format: parse_pane_title_format(&config.ui.pane_title_format),
             dim_inactive_panes: config.ui.dim_inactive_panes,
+            show_pane_focus_marker: config.ui.show_pane_focus_marker,
             sidebar_divider: config.ui.sidebar_divider,
             zoom_indicator: config.ui.zoom_indicator.clone(),
+            zoom_indicator_position: config.ui.zoom_indicator_position,
             prefix_indicator: config.ui.prefix_indicator,
+            tab_bar_style: config.ui.tab_bar_style,
+            tab_bar_position: config.ui.tab_bar_position,
+            tab_bar_align: config.ui.tab_bar_align,
+            tab_bar_title: config.ui.tab_bar_title,
             pane_history_persistence: config.experimental.pane_history,
             reveal_hidden_cursor_for_cjk_ime: config.experimental.reveal_hidden_cursor_for_cjk_ime,
             cjk_ime_agent_filter_configured: !config.experimental.cjk_ime_agents.is_empty(),
@@ -1372,9 +1380,15 @@ impl App {
                     }
                 }
                 self.state.dim_inactive_panes = config.ui.dim_inactive_panes;
+                self.state.show_pane_focus_marker = config.ui.show_pane_focus_marker;
                 self.state.sidebar_divider = config.ui.sidebar_divider;
                 self.state.zoom_indicator = config.ui.zoom_indicator.clone();
+                self.state.zoom_indicator_position = config.ui.zoom_indicator_position;
                 self.state.prefix_indicator = config.ui.prefix_indicator;
+                self.state.tab_bar_style = config.ui.tab_bar_style;
+                self.state.tab_bar_position = config.ui.tab_bar_position;
+                self.state.tab_bar_align = config.ui.tab_bar_align;
+                self.state.tab_bar_title = config.ui.tab_bar_title;
                 self.state.agent_panel_sort =
                     agent_panel_sort_from_config(config.ui.agent_panel_sort);
                 self.state.agent_panel_scroll = 0;
