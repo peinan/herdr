@@ -3,7 +3,7 @@
 このフォークが `develop` で `master`(アップストリームミラー)の上に積んでいる
 自分用のカスタマイズ一覧。`master...develop` の差分を機能単位で整理したもの。
 
-- ブランチ運用・同期手順は [`CLAUDE.local.md`](./CLAUDE.local.md) を参照。
+- ブランチ運用・同期・開発フローは [`FORK_WORKFLOW.md`](./FORK_WORKFLOW.md) と [`CLAUDE.local.md`](../../CLAUDE.local.md) を参照。
 - このファイルは `develop` 限定。`CLAUDE.local.md` と同様、`master` には入れない。
 
 ## 更新のしかた
