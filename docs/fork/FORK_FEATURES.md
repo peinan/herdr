@@ -1,19 +1,19 @@
 # フォーク独自機能まとめ (peinan/herdr)
 
-このフォークが `develop` で `master`(アップストリームミラー)の上に積んでいる
-自分用のカスタマイズ一覧。`master...develop` の差分を機能単位で整理したもの。
+このフォークが `main` で upstream の上に積んでいる自分用のカスタマイズ一覧。
+`upstream/master...main` の差分を機能単位で整理したもの。
 
 - ブランチ運用・同期・開発フローは [`FORK_WORKFLOW.md`](./FORK_WORKFLOW.md) と [`CLAUDE.local.md`](../../CLAUDE.local.md) を参照。
-- このファイルは `develop` 限定。`CLAUDE.local.md` と同様、`master` には入れない。
+- フォーク専用ドキュメント（`CLAUDE.local.md` と同様、アップストリームには出さない）。
 
 ## 更新のしかた
 
-新しい機能を `develop` に積んだら、以下で差分を確認して該当行を追記する。
+新しい機能を `main` に積んだら、以下で差分を確認して該当行を追記する。
 
 ```bash
-git log --oneline --no-merges master..develop   # 個人コミット一覧
-git diff --stat master...develop                 # 変更ファイル一覧
-git diff master...develop -- src/config/model.rs # 追加した設定フィールド
+git log --oneline --no-merges upstream/master..main   # 個人コミット一覧
+git diff --stat upstream/master...main                 # 変更ファイル一覧
+git diff upstream/master...main -- src/config/model.rs # 追加した設定フィールド
 ```
 
 最終更新: 2026-07-08

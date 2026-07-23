@@ -8,15 +8,13 @@
 - [`FORK_FEATURES.md`](./FORK_FEATURES.md) — フォーク独自機能のカタログ（**何を**変えたか）。本書は**どう作業するか**。
 - `AGENTS.md`（= `CLAUDE.md`）— アップストリーム管理の共通規約。コードスタイル・テスト・画面検出・プロトコル等のエンジニアリング実務はこちらが正。
 
-> このファイルはフォーク限定。個人ブランチ（`main`）にのみ置き、アップストリームには入れない。
-
-> **移行中の注意**: 現状のリポジトリはまだ `develop`(既定) + `master`(ミラー)。本書は**移行後の姿を正**として書いてある。`develop`+`master` から `main` 1本へ寄せる手順は末尾の[付録](#付録-現状-developmaster-から-main-1-本への移行一度だけ)にある。
+> このファイルはフォーク専用。アップストリームには出さない。
 
 ## 全体像
 
-- ブランチは **`main` 1 本**（個人の開発・統合ライン、既定ブランチ）。
-- upstream ミラー用のブランチは**持たない**。`upstream/master`（リモート追跡ref）がその役割を担う。
-- upstream の取り込みは **`upstream/master` を `main` に直接 merge**（完全にローカルで解決）。
+- 開発は **`main`**（個人の開発・統合ライン、既定ブランチ）。
+- **`master`** は**リリース源**として保持（継承 CI / `preview.yml` / `release.yml` が master 前提のため）。リリース時のみ `main` を `master` へ反映して使う（→ §6）。普段の開発では触らない。
+- upstream をミラーする専用ブランチは**持たない**。`upstream/master`（リモート追跡ref）がミラーの実体で、取り込みは **`upstream/master` を `main` に直接 merge**（完全にローカルで解決）。
 - fork 関係は**維持**（切り離さない）。cross-repo PR 能力とチープな compare を残す。
 
 ### ブランチ / リモート
@@ -24,11 +22,12 @@
 | 名前 | 役割 |
 |---|---|
 | `main` | 個人の開発・統合ライン。既定ブランチ。機能をここに積み、upstream もここに merge。|
+| `master` | **リリース源**。継承 CI / `preview.yml` / `release.yml` が参照。リリース時に `main` を反映（→ §6）。普段は触らない。|
 | `feat/<slug>` / `issue/<id>-<slug>` | 機能ごとの作業ブランチ（worktree）。`main` から切る。|
 | `origin` = `peinan/herdr` | 自分の push 先。|
 | `upstream` = `ogulcancelik/herdr` | 取り込み元（読み取り専用）。`upstream/master` が“ミラー”の実体。|
 
-`master` / `develop` ブランチは**廃止**。
+旧 `develop` は `main` へリネーム済み（→ 付録）。旧「`master`＝アップストリームミラー」運用は終了し、`master` はリリース源に転用。
 
 ## 0. 初回セットアップ（一度だけ）
 
@@ -137,7 +136,7 @@ just build          # → target/release/herdr
 
 | 方法 | 手順 | 備考 |
 |---|---|---|
-| **A. fork release** | 継承した Preview / release ワークフローを手動 dispatch → `main` からバイナリをビルドして `peinan/herdr` の Release に添付。相手は自分の OS/arch のバイナリを DL → `chmod +x` → PATH。| 非開発者向けに楽。過去に Preview ワークフローで全プラットフォームのバイナリを Release 添付した実績あり。⚠️ macOS 未署名 → Gatekeeper（`xattr -d com.apple.quarantine ./herdr`）。ワークフローの upstream 前提の副作用（`website/preview.json` 等）は手で触らない。|
+| **A. fork release** | ①`git push origin main:master` で `master` をリリース点へ進める → ②`preview.yml`（or `release.yml`）を手動 dispatch（**master 参照**でビルド）→ ③`peinan/herdr` の Release にバイナリが添付される。相手は自分の OS/arch を DL → `chmod +x` → PATH。| 非開発者向けに楽。全プラットフォーム添付の実績あり。⚠️ macOS 未署名 → Gatekeeper（`xattr -d com.apple.quarantine ./herdr`）。ワークフローの upstream 前提の副作用（`website/preview.json` 等）は手で触らない。|
 | **B. ソースビルド** | `cargo install --git https://github.com/peinan/herdr --branch main herdr`（Rust + Zig 必要。`zig` が PATH に無ければ `ZIG=<path>` 前置）| 開発者向け・こちら側のインフラ不要。|
 | **C. バイナリ直渡し** | `target/release/herdr` を渡す | 1 人・同一 OS/arch・即席。macOS は同様に Gatekeeper 対応。|
 
@@ -145,7 +144,7 @@ just build          # → target/release/herdr
 
 ## やってはいけないこと
 
-- `main` をアップストリームや誤って復活させた `master` にマージ／混同する（upstream 追従が壊れる）。
+- `master` にリリース反映（`main:master` push）以外の個人開発を直接積む／混同する（`master` はリリース源専用）。
 - `main` の rebase（公開済み・worktree が積まれている）。
 - `Cargo.toml` の `version` を手で書き換え。
 - "Sync fork" ボタン / `herdr update`。
@@ -158,35 +157,26 @@ just build          # → target/release/herdr
 
 ---
 
-## 付録: 現状 (`develop`+`master`) から `main` 1 本への移行（一度だけ）
+## 付録 A: `develop` → `main` 移行（2026-07-23 完了）
 
-現状は `develop`(既定・個人) + `master`(ミラー)。以下で `main` 1 本へ寄せる。
+`develop`（旧・既定/個人）を `main` にリネームし、既定ブランチを `main` に変更、旧 `develop` を削除した。
+**`master` は削除せずリリース源として保持**（当初案の「master 削除」は取りやめ — 継承ワークフローが master 前提のため）。実施内容:
 
 ```bash
-# 1. develop を main にリネームして push
-git checkout develop
 git branch -m develop main
 git push -u origin main
-
-# 2. GitHub の既定ブランチを main に変更（UI: Settings → Branches、または API）
-gh api -X PATCH repos/peinan/herdr -f default_branch=main
-
-# 3. 旧 develop を削除
-#    ※ 既定を main にした後で行う。develop を base にした未マージ PR があれば
-#      先に base を main へ付け替える（放置して削除すると PR が閉じられる）。
-git push origin --delete develop
-
-# 4. master（ミラー）を削除
-git branch -D master
-git push origin --delete master
-
-# 5. ローカルの origin/HEAD を main に更新
+gh api -X PATCH repos/peinan/herdr -f default_branch=main   # 既定を main に
+git push origin --delete develop                            # 旧既定を削除
 git remote set-head origin main
 ```
 
-移行後に追随させるもの:
+feat/issue 各ブランチは commit SHA 不変で無傷（以降の新規は `main` から切る）。
 
-- **feat / issue 各ブランチ**: commit SHA は不変なので中身は無事。以降の新規は `main` から切る。
-- **[`CLAUDE.local.md`](../../CLAUDE.local.md)**: 「develop」表記を「main」に、同期は upstream リモート経由（"Sync fork" ボタン不使用）に更新。
-- **[`FORK_FEATURES.md`](./FORK_FEATURES.md)**: 再生成の差分基準を `git diff master...develop` → `git diff upstream/master...main` に。
-- **エージェントのメモリ**（PR ワークフロー）: PR の base を `develop` → `main` に。
+## 付録 B: リリース手順（`main` → `master`）
+
+継承 CI / `preview.yml` / `release.yml` は `master` を参照する。フォークのバイナリを配るときだけ `main` を `master` へ反映してワークフローを回す（§6 A）:
+
+```bash
+git push origin main:master        # master をリリース点へ（diverge 時は --force-with-lease）
+# GitHub Actions で preview.yml（or release.yml）を dispatch → Release にバイナリ
+```
