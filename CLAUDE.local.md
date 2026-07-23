@@ -10,6 +10,11 @@
 このファイルは `develop` にのみコミットする。`master` には存在しないため、
 アップストリームと衝突しない。`.gitignore` には追加しないこと。
 
+> **詳細な開発フローは [`FORK_WORKFLOW.md`](docs/fork/FORK_WORKFLOW.md) が正。** 本ファイルは要点のみ。
+> 以下は本ファイル中の旧記述より FORK_WORKFLOW.md を優先すること:
+> - upstream の取り込みは**ローカルの `upstream` リモート**経由（`git fetch upstream` → `upstream/master` を直 merge）。GitHub の **"Sync fork" ボタンは使わない**（既定ブランチに紐づき、diverged した個人ブランチでは危険）。
+> - ブランチは **`main` 1 本**へ移行する（旧 `master` ミラー / `develop` は廃止。手順は FORK_WORKFLOW.md 付録）。
+
 ## フォークの構成
 
 アップストリーム `ogulcancelik/herdr` の個人フォーク。基本はアップストリームの
@@ -22,12 +27,13 @@
 - **`develop`** — 個人の統合ライン。カスタマイズと機能開発はすべて `master` の
   上に積む。これが既定の作業ブランチ。
 
-`origin` は `peinan/herdr`。`upstream` リモートは無く、必要も無い。
+`origin` は `peinan/herdr`。`upstream` は `ogulcancelik/herdr` を指すローカルの
+取り込み用リモート（→ [`FORK_WORKFLOW.md`](docs/fork/FORK_WORKFLOW.md) §0）。
 
 ## フォーク独自機能のカタログ
 
 `develop` に積んだ自分用のカスタマイズ（設定オプション・キーバインド・UI 改修）は
-[`FORK_FEATURES.md`](./FORK_FEATURES.md) に一覧化してある。`master...develop` の差分を
+[`FORK_FEATURES.md`](docs/fork/FORK_FEATURES.md) に一覧化してある。`master...develop` の差分を
 機能単位で整理したもので、機能一覧・追加した設定項目・変更履歴の表を持つ。
 `CLAUDE.local.md` と同じく `develop` 限定で、`master` には入れない。
 
@@ -36,6 +42,10 @@
 短縮 SHA を追記する。冒頭の再生成コマンド（`git diff master...develop`）で差分を拾える。
 
 ## アップストリームを `master`、そして `develop` へ同期する
+
+> **この節は [`FORK_WORKFLOW.md`](docs/fork/FORK_WORKFLOW.md) §2 に置き換わった。** "Sync fork"
+> ボタンは使わず、`git fetch upstream` → `git merge upstream/master` でローカル取り込みする。
+> 以下の「ボタン」手順は使わない（`main` 移行完了後に本節は整理予定）。
 
 `master` はアップストリームのミラーとしてのみ進み、`develop` はその変更を定期的に
 取り込む。これは `master → develop` の一方向の "merge up" であり、逆向きには
@@ -127,7 +137,7 @@ owner プレフィックスの無い `head` は `peinan/herdr` 内に留まる�
 場合の対話版: `gh pr create --repo peinan/herdr --base develop`。
 
 PR が `develop` にマージされたら、その機能を
-[`FORK_FEATURES.md`](./FORK_FEATURES.md) に追記する（上記「フォーク独自機能のカタログ」）。
+[`FORK_FEATURES.md`](docs/fork/FORK_FEATURES.md) に追記する（上記「フォーク独自機能のカタログ」）。
 
 ## `AGENTS.md` から引き継ぐ規約（1 点だけ上書き）
 
