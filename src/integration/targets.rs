@@ -7,15 +7,15 @@ use serde_json::{json, Value};
 use super::command::{hook_command, shell_single_quote};
 use super::config_edit::{
     build_codex_config_with_hooks, build_kimi_config_with_hooks, ensure_command_hook,
-    ensure_direct_command_hook, ensure_hermes_plugin_enabled, ensure_hooks_object,
-    ensure_simple_command_hook, hooks_object_if_present, remove_direct_hook_commands,
-    remove_hermes_plugin_enabled, remove_hook_commands, remove_kimi_config_block,
-    remove_simple_command_hook,
+    ensure_direct_command_hook, ensure_flat_command_hook, ensure_hermes_plugin_enabled,
+    ensure_hooks_object, ensure_simple_command_hook, hooks_object_if_present,
+    remove_direct_hook_commands, remove_flat_command_hook, remove_hermes_plugin_enabled,
+    remove_hook_commands, remove_kimi_config_block, remove_simple_command_hook,
 };
 use super::env::{
     claude_dir, codex_dir, copilot_dir, cursor_dir, devin_dir, droid_dir, hermes_dir,
-    hermes_plugin_dir, kilo_dir, kimi_dir, omp_extension_dir, opencode_dir, pi_extension_dir,
-    qodercli_dir,
+    hermes_plugin_dir, kilo_dir, kimi_dir, mastracode_dir, omp_extension_dir, opencode_dir,
+    pi_extension_dir, qodercli_dir,
 };
 use super::file_ops::{
     make_executable, remove_dir_all_if_exists, remove_file_if_exists, remove_legacy_bash_hook_file,
@@ -25,9 +25,9 @@ use super::types::{
     CopilotInstallPaths, CopilotUninstallResult, CursorInstallPaths, CursorUninstallResult,
     DevinInstallPaths, DevinUninstallResult, DroidInstallPaths, DroidUninstallResult,
     HermesInstallPaths, HermesUninstallResult, KiloInstallPaths, KiloUninstallResult,
-    KimiInstallPaths, KimiUninstallResult, OmpInstallPaths, OmpUninstallResult,
-    OpenCodeInstallPaths, OpenCodeUninstallResult, PiUninstallResult, QodercliInstallPaths,
-    QodercliUninstallResult,
+    KimiInstallPaths, KimiUninstallResult, MastracodeInstallPaths, MastracodeUninstallResult,
+    OmpInstallPaths, OmpUninstallResult, OpenCodeInstallPaths, OpenCodeUninstallResult,
+    PiUninstallResult, QodercliInstallPaths, QodercliUninstallResult,
 };
 use super::{
     CLAUDE_HOOK_ASSET, CLAUDE_HOOK_INSTALL_NAME, CODEX_HOOK_ASSET, CODEX_HOOK_INSTALL_NAME,
@@ -38,20 +38,29 @@ use super::{
     DROID_HOOK_INSTALL_NAME, DROID_REMOVED_LIFECYCLE_HOOK_EVENTS, HERMES_PLUGIN_INIT_ASSET,
     HERMES_PLUGIN_INIT_INSTALL_NAME, HERMES_PLUGIN_MANIFEST_ASSET,
     HERMES_PLUGIN_MANIFEST_INSTALL_NAME, KILO_PLUGIN_ASSET, KILO_PLUGIN_INSTALL_NAME,
-    KIMI_HOOK_ASSET, KIMI_HOOK_INSTALL_NAME, OMP_EXTENSION_ASSET, OMP_EXTENSION_INSTALL_NAME,
-    OPENCODE_PLUGIN_ASSET, OPENCODE_PLUGIN_INSTALL_NAME, PI_EXTENSION_ASSET,
-    PI_EXTENSION_INSTALL_NAME, QODERCLI_HOOK_ASSET, QODERCLI_HOOK_EVENTS,
+    KIMI_HOOK_ASSET, KIMI_HOOK_INSTALL_NAME, MASTRACODE_HOOK_ASSET, MASTRACODE_HOOK_EVENTS,
+    MASTRACODE_HOOK_INSTALL_NAME, MASTRACODE_HOOK_TIMEOUT_MS, OMP_EXTENSION_ASSET,
+    OMP_EXTENSION_INSTALL_NAME, OPENCODE_PLUGIN_ASSET, OPENCODE_PLUGIN_INSTALL_NAME,
+    PI_EXTENSION_ASSET, PI_EXTENSION_INSTALL_NAME, QODERCLI_HOOK_ASSET, QODERCLI_HOOK_EVENTS,
     QODERCLI_HOOK_INSTALL_NAME, QODERCLI_REMOVED_LIFECYCLE_HOOK_EVENTS,
 };
 
+fn ensure_extension_dir(dir: &Path, agent: &str) -> io::Result<()> {
+    if dir.is_dir() {
+        return Ok(());
+    }
+    if dir.parent().is_some_and(|parent| parent.is_dir()) {
+        return fs::create_dir_all(dir);
+    }
+    Err(io::Error::other(format!(
+        "{agent} extension directory not found at {}. install {agent} first",
+        dir.display()
+    )))
+}
+
 pub(crate) fn install_pi() -> io::Result<PathBuf> {
     let dir = pi_extension_dir()?;
-    if !dir.is_dir() {
-        return Err(io::Error::other(format!(
-            "pi extension directory not found at {}. install pi and create the extensions directory first",
-            dir.display()
-        )));
-    }
+    ensure_extension_dir(&dir, "pi")?;
 
     let path = dir.join(PI_EXTENSION_INSTALL_NAME);
     fs::write(&path, PI_EXTENSION_ASSET)?;
@@ -60,23 +69,14 @@ pub(crate) fn install_pi() -> io::Result<PathBuf> {
 
 pub(crate) fn install_omp() -> io::Result<OmpInstallPaths> {
     let dir = omp_extension_dir()?;
-    if !dir.is_dir() {
-        if dir.parent().is_some_and(|parent| parent.is_dir()) {
-            fs::create_dir_all(&dir)?;
-        } else {
-            return Err(io::Error::other(format!(
-                "omp extension directory not found at {}. install omp and create the extensions directory first",
-                dir.display()
-            )));
-        }
-    }
-
-    if !dir.is_dir() {
+    let pi_dir = pi_extension_dir()?;
+    if dir == pi_dir {
         return Err(io::Error::other(format!(
-            "omp extension directory not found at {}. install omp and create the extensions directory first",
+            "Pi and OMP resolve to the same extension directory at {}; configure separate agent directories before installing OMP",
             dir.display()
         )));
     }
+    ensure_extension_dir(&dir, "omp")?;
 
     let removed_legacy_pi_extension = remove_legacy_pi_extension_from_omp_dir(&dir)?;
     let extension_path = dir.join(OMP_EXTENSION_INSTALL_NAME);
@@ -1100,6 +1100,93 @@ pub(crate) fn uninstall_cursor() -> io::Result<CursorUninstallResult> {
     let removed_hook_file = remove_file_if_exists(&hook_path)?;
 
     Ok(CursorUninstallResult {
+        hook_path,
+        hooks_path,
+        removed_hook_file,
+        updated_hooks,
+    })
+}
+
+pub(crate) fn install_mastracode() -> io::Result<MastracodeInstallPaths> {
+    let mastracode_home = mastracode_dir()?;
+    let hook_dir = mastracode_home.join("hooks");
+    fs::create_dir_all(&hook_dir)?;
+
+    let hook_path = hook_dir.join(MASTRACODE_HOOK_INSTALL_NAME);
+    fs::write(&hook_path, MASTRACODE_HOOK_ASSET)?;
+    make_executable(&hook_path)?;
+
+    let hooks_path = mastracode_home.join("hooks.json");
+    let mut hooks_file = if hooks_path.is_file() {
+        serde_json::from_str::<Value>(&fs::read_to_string(&hooks_path)?).map_err(|err| {
+            io::Error::other(format!("failed to parse {}: {err}", hooks_path.display()))
+        })?
+    } else {
+        json!({})
+    };
+
+    let hooks = hooks_file.as_object_mut().ok_or_else(|| {
+        io::Error::other(format!(
+            "mastracode hooks file at {} must be a JSON object",
+            hooks_path.display()
+        ))
+    })?;
+
+    let quoted_hook_path = shell_single_quote(&hook_path.display().to_string());
+    for (event, action) in MASTRACODE_HOOK_EVENTS {
+        ensure_flat_command_hook(
+            hooks,
+            event,
+            format!("bash {quoted_hook_path} {action}"),
+            MASTRACODE_HOOK_TIMEOUT_MS,
+        )?;
+    }
+
+    fs::write(&hooks_path, serde_json::to_string_pretty(&hooks_file)?)?;
+
+    Ok(MastracodeInstallPaths {
+        hook_path,
+        hooks_path,
+    })
+}
+
+pub(crate) fn uninstall_mastracode() -> io::Result<MastracodeUninstallResult> {
+    let mastracode_home = mastracode_dir()?;
+    let hook_path = mastracode_home
+        .join("hooks")
+        .join(MASTRACODE_HOOK_INSTALL_NAME);
+    let hooks_path = mastracode_home.join("hooks.json");
+    let mut updated_hooks = false;
+
+    if hooks_path.is_file() {
+        let mut hooks_file = serde_json::from_str::<Value>(&fs::read_to_string(&hooks_path)?)
+            .map_err(|err| {
+                io::Error::other(format!("failed to parse {}: {err}", hooks_path.display()))
+            })?;
+        let hooks = hooks_file.as_object_mut().ok_or_else(|| {
+            io::Error::other(format!(
+                "mastracode hooks file at {} must be a JSON object",
+                hooks_path.display()
+            ))
+        })?;
+
+        let quoted_hook_path = shell_single_quote(&hook_path.display().to_string());
+        for (event, action) in MASTRACODE_HOOK_EVENTS {
+            updated_hooks |= remove_flat_command_hook(
+                hooks,
+                event,
+                &format!("bash {quoted_hook_path} {action}"),
+            )?;
+        }
+
+        if updated_hooks {
+            fs::write(&hooks_path, serde_json::to_string_pretty(&hooks_file)?)?;
+        }
+    }
+
+    let removed_hook_file = remove_file_if_exists(&hook_path)?;
+
+    Ok(MastracodeUninstallResult {
         hook_path,
         hooks_path,
         removed_hook_file,

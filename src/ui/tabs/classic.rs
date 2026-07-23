@@ -5,10 +5,10 @@ use ratatui::{
     Frame,
 };
 
+use super::super::text::display_width_u16;
 use super::super::widgets::panel_contrast_fg;
 use super::TabBarView;
 use crate::app::AppState;
-use unicode_width::UnicodeWidthStr;
 
 const MIN_TAB_WIDTH: u16 = 8;
 const NEW_TAB_WIDTH: u16 = 3;
@@ -16,7 +16,9 @@ const TAB_SCROLL_BUTTON_WIDTH: u16 = 3;
 
 fn tab_width(ws: &crate::workspace::Workspace, tab_idx: usize, zoom_marker: Option<&str>) -> u16 {
     let label = tab_chrome_label(ws, tab_idx, zoom_marker);
-    (UnicodeWidthStr::width(label.as_str()) as u16 + 4).max(MIN_TAB_WIDTH)
+    display_width_u16(&label)
+        .saturating_add(4)
+        .max(MIN_TAB_WIDTH)
 }
 
 /// Tab label as drawn, including the zoom marker (`… Z`) when this tab is zoomed
@@ -268,7 +270,6 @@ pub(super) fn render(app: &AppState, frame: &mut Frame, area: Rect) {
     let Some(ws) = app.workspaces.get(active_ws_idx) else {
         return;
     };
-
     let p = &app.palette;
     let zoom_marker = app.tab_zoom_marker();
 
@@ -342,7 +343,7 @@ pub(super) fn render(app: &AppState, frame: &mut Frame, area: Rect) {
             };
             let base = Style::default().fg(panel_contrast_fg(p)).bg(active_bg);
             if tab.is_auto_named() {
-                base.add_modifier(Modifier::DIM)
+                base
             } else {
                 base.add_modifier(Modifier::BOLD)
             }
@@ -467,6 +468,39 @@ mod tests {
     }
 
     #[test]
+    fn active_auto_named_tab_keeps_readable_weight() {
+        let mut app = AppState::test_new();
+        let ws = Workspace::test_new("test");
+
+        app.workspaces = vec![ws];
+        app.active = Some(0);
+        app.view.tab_bar_rect = Rect::new(0, 0, 30, 1);
+        let marker = app.tab_zoom_marker();
+        let view = compute(
+            &app.workspaces[0],
+            app.view.tab_bar_rect,
+            0,
+            true,
+            false,
+            marker,
+        );
+        app.view.tab_hit_areas = view.tab_hit_areas;
+
+        let backend = TestBackend::new(30, 1);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| render(&app, frame, app.view.tab_bar_rect))
+            .unwrap();
+
+        let tab_rect = app.view.tab_hit_areas[0];
+        let style = terminal.backend().buffer()[(tab_rect.x + 1, tab_rect.y)].style();
+
+        assert_eq!(style.bg, Some(app.palette.accent));
+        assert!(!style.add_modifier.contains(Modifier::DIM));
+        assert!(!style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
     fn tab_bar_omits_zoom_marker_when_position_excludes_tab() {
         let mut app = AppState::test_new();
         let mut ws = Workspace::test_new("test");
@@ -510,5 +544,45 @@ mod tests {
         assert_eq!(tab_width(&ws, 0, None), unzoomed_width);
         // With a marker, a zoomed tab reserves room for the appended " Z".
         assert_eq!(tab_width(&ws, 0, Some("Z")), unzoomed_width + 2);
+    }
+
+    #[test]
+    fn tab_width_uses_display_width_for_cjk_labels() {
+        let mut ws = Workspace::test_new("test");
+        ws.tabs[0].set_custom_name("提交 herdr 的反馈".into());
+
+        assert_eq!(
+            tab_width(&ws, 0, None),
+            display_width_u16("提交 herdr 的反馈") + 4
+        );
+    }
+
+    #[test]
+    fn tab_bar_renders_trailing_cjk_character() {
+        let mut app = AppState::test_new();
+        let mut ws = Workspace::test_new("test");
+        ws.tabs[0].set_custom_name("提交 herdr 的反馈".into());
+
+        app.active = Some(0);
+        app.workspaces = vec![ws];
+        app.view.tab_bar_rect = Rect::new(0, 0, 30, 1);
+        let view = compute(
+            &app.workspaces[0],
+            app.view.tab_bar_rect,
+            0,
+            true,
+            false,
+            None,
+        );
+        app.view.tab_hit_areas = view.tab_hit_areas;
+
+        let backend = TestBackend::new(30, 1);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| render(&app, frame, app.view.tab_bar_rect))
+            .unwrap();
+
+        let row = buffer_row_text(terminal.backend().buffer(), app.view.tab_bar_rect, 0);
+        assert!(row.contains('馈'), "tab row: {row:?}");
     }
 }

@@ -25,7 +25,15 @@ The skill is not a separate app or service. It is a markdown instruction file fo
 
 ## Install it
 
-Use the repository copy as the source of truth:
+Install the skill with `npx skills`:
+
+```bash
+npx skills add ogulcancelik/herdr --skill herdr -g
+```
+
+The `-g` flag installs it globally for supported agents. Omit `-g` to install it into the current project.
+
+Use the repository copy as the manual fallback and source of truth:
 
 ```text
 https://github.com/ogulcancelik/herdr/blob/master/SKILL.md
@@ -50,7 +58,7 @@ This prevents an agent outside Herdr from trying to control a session it does no
 
 ## Agent-facing reference
 
-The full command guide lives in the skill file itself. It covers pane IDs, `pane split`, `pane run`, `pane read`, `wait output`, `wait agent-status`, workspace and tab commands, and coordination recipes.
+The full command guide lives in the skill file itself. It covers pane IDs, `pane split`, `pane run`, `pane read`, `pane wait-output`, `agent wait`, workspace and tab commands, and coordination recipes.
 
 Read the source file here:
 
