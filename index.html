@@ -1,0 +1,909 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>herdr-fork — herdr を自分仕様にする opt-in UI 拡張</title>
+<meta name="description" content="ターミナル常駐のエージェントマルチプレクサ herdr の個人フォーク。ペイン枠・タイトル・タブバー・キー操作の細部を config.toml でオプトイン調整できる拡張を upstream の上に積んでいます。">
+<meta property="og:title" content="herdr-fork">
+<meta property="og:description" content="herdr の個人フォーク。見た目と手触りを config.toml でオプトイン調整できる 10 機能・15 設定キー。既定は upstream と同じ。">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://peinan.github.io/herdr/">
+<meta name="twitter:card" content="summary">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='2' y='4' width='28' height='24' rx='5' fill='%23141210' stroke='%23e0a458' stroke-width='2.5'/%3E%3Cline x1='17' y1='4' x2='17' y2='28' stroke='%23e0a458' stroke-width='2.5'/%3E%3Crect x='6' y='9' width='7' height='2.5' rx='1' fill='%23e0a458'/%3E%3C/svg%3E">
+<style>
+:root{
+  --bg:#141210;
+  --bg-raise:#1a1714;
+  --term:#0e0c0a;
+  --line:#2f2921;
+  --line-soft:#231f19;
+  --text:#e7dfcf;
+  --text-dim:#9a917d;
+  --text-faint:#6c6455;
+  --amber:#e0a458;
+  --amber-hi:#f2c383;
+  --green:#a6bf76;
+  --cyan:#84b8ac;
+  --coral:#d5786a;
+  --term-text:#cfc7b5;
+  --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+  --sans:system-ui,-apple-system,"Segoe UI","Hiragino Sans","Hiragino Kaku Gothic ProN","Noto Sans JP",sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{
+  background:var(--bg);
+  color:var(--text);
+  font-family:var(--sans);
+  font-size:15.5px;
+  line-height:1.9;
+  -webkit-font-smoothing:antialiased;
+}
+::selection{background:rgba(224,164,88,.28)}
+a{color:var(--amber);text-decoration:none}
+a:hover{color:var(--amber-hi);text-decoration:underline;text-underline-offset:3px}
+button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
+:focus-visible{outline:2px solid var(--amber);outline-offset:2px;border-radius:4px}
+.wrap{max-width:1080px;margin:0 auto;padding:0 24px}
+.mono{font-family:var(--mono)}
+
+/* ───── top bar ───── */
+.tophat{
+  position:sticky;top:0;z-index:50;
+  border-bottom:1px solid var(--line-soft);
+  background:color-mix(in srgb,var(--bg) 86%,transparent);
+  backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+}
+.tophat .wrap{display:flex;align-items:center;justify-content:space-between;height:52px}
+.brand{font-family:var(--mono);font-size:13.5px;color:var(--text);letter-spacing:.04em}
+.brand .ps{color:var(--amber);margin-right:8px}
+.brand:hover{text-decoration:none;color:var(--amber-hi)}
+.topnav{display:flex;gap:22px;font-family:var(--mono);font-size:12.5px}
+.topnav a{color:var(--text-dim)}
+.topnav a:hover{color:var(--amber-hi);text-decoration:none}
+@media(max-width:640px){.topnav a.opt{display:none}}
+
+/* ───── hero ───── */
+.hero{padding:88px 0 30px;position:relative}
+.hero::before{
+  content:"";position:absolute;inset:0;pointer-events:none;
+  background:radial-gradient(720px 340px at 62% 46%,rgba(224,164,88,.06),transparent 70%);
+}
+.eyebrow{font-family:var(--mono);font-size:12.5px;color:var(--text-faint);letter-spacing:.06em}
+.hero h1{
+  font-family:var(--mono);font-weight:600;
+  font-size:clamp(2.5rem,7vw,4.3rem);
+  letter-spacing:-.02em;line-height:1.12;
+  margin:14px 0 22px;
+}
+.hero h1 .fk{color:var(--amber)}
+.cur{display:inline-block;width:.52em;height:.92em;background:var(--amber);vertical-align:-.08em;margin-left:.12em;animation:blink 1.15s steps(1) infinite}
+@keyframes blink{50%{opacity:0}}
+.lede{font-size:clamp(1.05rem,2.4vw,1.3rem);font-weight:650;letter-spacing:.01em;margin-bottom:14px}
+.hero p.sub{max-width:680px;color:var(--text-dim)}
+.hero .cta{display:flex;gap:14px;margin:30px 0 8px;flex-wrap:wrap}
+.btn{
+  font-family:var(--mono);font-size:13px;letter-spacing:.03em;
+  padding:10px 18px;border-radius:8px;border:1px solid var(--line);
+  color:var(--text);transition:border-color .2s,background .2s;display:inline-block;
+}
+.btn:hover{border-color:var(--amber);text-decoration:none;color:var(--amber-hi)}
+.btn.primary{background:var(--amber);border-color:var(--amber);color:#191512;font-weight:600}
+.btn.primary:hover{background:var(--amber-hi);border-color:var(--amber-hi);color:#191512}
+
+/* ───── config snippet + interactive pills ───── */
+.cfg{
+  font-family:var(--mono);font-size:12.8px;line-height:2.05;
+  color:var(--term-text);white-space:pre;overflow-x:auto;
+  padding:14px 18px;min-width:0;
+}
+.cfg--wrap{white-space:pre-wrap;overflow-wrap:anywhere}
+.cfg .c{color:var(--text-faint)}
+.cfg .tbl{color:var(--cyan)}
+.cfg .k{color:var(--term-text)}
+.cfg .v{color:var(--green)}
+.pill,.radio button{
+  font-family:var(--mono);font-size:12.8px;
+  border:1px solid var(--line);border-radius:6px;
+  padding:1px 9px;color:var(--text-dim);
+  transition:color .15s,border-color .15s,background .15s;
+  cursor:pointer;
+}
+.pill:hover,.radio button:hover{border-color:var(--amber)}
+.pill.is-on{color:var(--amber);border-color:color-mix(in srgb,var(--amber) 55%,var(--line))}
+.radio{display:inline-flex;gap:6px;vertical-align:baseline}
+.radio button[aria-pressed="true"]{color:var(--amber);border-color:color-mix(in srgb,var(--amber) 55%,var(--line));background:rgba(224,164,88,.08)}
+.radio.is-disabled button{opacity:.32;cursor:not-allowed;border-color:var(--line-soft)}
+.pill.is-disabled{opacity:.32;cursor:not-allowed}
+.hint{font-family:var(--mono);font-size:12px;color:var(--text-faint);letter-spacing:.04em}
+.hint b{color:var(--amber);font-weight:500}
+
+/* ───── terminal mock ───── */
+.term{
+  background:var(--term);
+  border:1px solid var(--line);
+  border-radius:10px;
+  overflow:hidden;
+  font-family:var(--mono);
+  font-size:11.5px;line-height:1.75;
+  color:var(--term-text);
+}
+.t-classic{display:flex;gap:4px;padding:6px 10px;border-bottom:1px solid var(--line-soft);font-size:11px;color:var(--text-faint)}
+.t-classic .tab{padding:1px 10px;border-radius:5px}
+.t-classic .tab.on{background:#272119;color:var(--amber-hi)}
+.t-body{display:flex;position:relative}
+.t-side{
+  width:132px;flex:none;padding:10px 12px;
+  border-right:1px solid var(--line);
+  font-size:10.8px;color:var(--text-dim);
+  transition:border-color .25s;
+}
+.t-side .sb-h{color:var(--text-faint);margin-bottom:6px}
+.t-side .row{display:flex;gap:7px;align-items:baseline;white-space:nowrap}
+.t-side .st{margin-left:auto;color:var(--text-faint);font-size:9.5px}
+.dot{display:inline-block;width:7px;height:7px;border-radius:50%;flex:none;align-self:center}
+.dot.w{background:var(--amber);animation:pulse 1.6s ease-in-out infinite}
+.dot.i{background:var(--text-faint)}
+.dot.d{background:var(--green)}
+@keyframes pulse{50%{opacity:.35}}
+.t-main{flex:1;display:flex;gap:12px;padding:16px 14px 14px;min-width:0}
+.pane{
+  position:relative;flex:1;min-width:0;
+  border:1px solid var(--line);border-radius:7px;
+  padding:12px 12px 10px;
+  transition:border-color .25s;
+}
+.pane.is-focus{border-color:var(--amber)}
+.pane-title{
+  position:absolute;top:-9px;left:10px;
+  background:var(--term);padding:0 7px;
+  font-size:10.5px;color:var(--text-dim);
+  white-space:nowrap;max-width:calc(100% - 20px);overflow:hidden;text-overflow:ellipsis;
+  transition:opacity .25s;
+}
+.pane.is-focus>.pane-title{color:var(--amber);font-weight:600}
+.pane-body{white-space:pre;overflow:hidden;transition:opacity .25s,padding .3s;font-size:11px}
+.pane-body .ln{color:var(--text-faint)}
+.pane-body .kw{color:var(--coral)}
+.pane-body .fn{color:var(--cyan)}
+.pane-body .tool{color:var(--cyan)}
+.pane-body .ok{color:var(--green)}
+.pane-body .think{color:var(--text-dim)}
+.t-status{
+  display:flex;gap:16px;padding:5px 12px;
+  border-top:1px solid var(--line-soft);
+  font-size:10.5px;color:var(--text-faint);white-space:nowrap;overflow:hidden;
+}
+.t-status .key-h{color:var(--text-dim)}
+.t-strip{position:absolute;right:14px;bottom:8px;font-size:10.5px;color:var(--text-faint);letter-spacing:.14em;background:color-mix(in srgb,var(--term) 72%,transparent);padding:0 4px;border-radius:4px}
+.t-strip .g.on{color:var(--amber)}
+.t-strip .tname{letter-spacing:0}
+
+/* pane title segments */
+.s-dir{color:var(--cyan)}
+.s-proc{color:var(--term-text)}
+.s-sep{color:var(--text-faint)}
+.s-br{color:var(--green)}
+.s-ab{color:var(--amber)}
+.s-gs{color:var(--coral)}
+.s-zoom{color:var(--amber);font-weight:700}
+.pane.is-focus>.pane-title .s-proc{color:var(--amber-hi)}
+
+/* ───── hero demo: config pane | preview pane ───── */
+.heroDemo{
+  margin-top:40px;position:relative;
+  display:grid;grid-template-columns:minmax(300px,375px) 1fr;
+  border:1px solid var(--line);border-radius:12px;
+  background:var(--bg-raise);overflow:hidden;
+}
+.heroDemo>*{min-width:0}
+.hd-cfg{border-right:1px solid var(--line);display:flex;flex-direction:column}
+.hd-label{
+  font-family:var(--mono);font-size:11px;letter-spacing:.08em;
+  color:var(--text-faint);padding:9px 18px 8px;
+  border-bottom:1px solid var(--line-soft);
+  display:flex;justify-content:space-between;gap:10px;
+}
+.hd-label .lamp{color:var(--amber)}
+.hd-cfg .cfg{flex:1}
+.hd-cfg .hint{padding:0 18px 14px}
+.hd-view{padding:0;display:flex;flex-direction:column;min-width:0}
+.hd-view .term{border:none;border-radius:0;flex:1;display:flex;flex-direction:column}
+.hd-view .t-body{flex:1}
+@media(max-width:880px){
+  .heroDemo{grid-template-columns:1fr}
+  .hd-cfg{border-right:none;border-bottom:1px solid var(--line)}
+}
+@media(max-width:560px){
+  .t-side{display:none}
+  .t-main{gap:10px;padding:14px 10px 12px}
+}
+
+/* hero demo states */
+#d-hero[data-tabs="minimal"] .t-classic{display:none}
+#d-hero[data-tabs="classic"] .t-strip{display:none}
+#d-hero[data-dim="true"] .pane:not(.is-focus){border-color:var(--line-soft)}
+#d-hero[data-dim="true"] .pane:not(.is-focus)>.pane-body,
+#d-hero[data-dim="true"] .pane:not(.is-focus)>.pane-title{opacity:.34}
+#d-hero[data-fmt="off"] .tt-rich{display:none}
+#d-hero[data-fmt="on"] .tt-plain{display:none}
+
+/* ───── sections ───── */
+.sec{padding:104px 0 0}
+.sec-head{margin-bottom:36px}
+.sec-eyebrow{font-family:var(--mono);font-size:12.5px;color:var(--amber);letter-spacing:.05em;display:flex;align-items:center;gap:14px}
+.sec-eyebrow::after{content:"";flex:1;height:1px;background:var(--line-soft)}
+.sec h2{font-size:clamp(1.45rem,3.4vw,1.9rem);font-weight:700;letter-spacing:.01em;margin-top:10px}
+.sec-head p{color:var(--text-dim);max-width:660px;margin-top:10px}
+
+/* policy */
+.pol{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}
+.pol article{border:1px solid var(--line-soft);border-radius:10px;padding:22px 22px 20px;background:var(--bg-raise)}
+.pol .pk{font-family:var(--mono);font-size:12px;color:var(--text-faint);letter-spacing:.05em}
+.pol h3{font-size:1.02rem;margin:8px 0 8px}
+.pol p{font-size:.9rem;color:var(--text-dim);line-height:1.95}
+@media(max-width:820px){.pol{grid-template-columns:1fr}}
+
+/* flagship blocks */
+.flag{display:grid;grid-template-columns:minmax(280px,420px) 1fr;gap:40px;align-items:start;margin-bottom:88px}
+.flag>*{min-width:0}
+.flag.rev{grid-template-columns:1fr minmax(280px,420px)}
+.flag.rev .flag-copy{order:2}
+.flag-copy h3{font-size:1.28rem;font-weight:700;margin:6px 0 12px}
+.flag-copy .fkey{font-family:var(--mono);font-size:12px;color:var(--amber)}
+.flag-copy p{color:var(--text-dim);font-size:.93rem}
+.flag-copy ul{list-style:none;margin-top:14px;font-size:.88rem;color:var(--text-dim)}
+.flag-copy li{padding-left:1.2em;text-indent:-1.2em;margin:4px 0}
+.flag-copy li::before{content:"– ";color:var(--text-faint)}
+.flag-demo{min-width:0}
+.panel{border:1px solid var(--line);border-radius:12px;background:var(--bg-raise);overflow:hidden}
+.panel .cfg{border-bottom:1px solid var(--line-soft)}
+.panel .stage{padding:20px 18px}
+.prlink{font-family:var(--mono);font-size:11.5px;color:var(--text-faint);margin-top:10px;display:block}
+.prlink a{color:var(--text-faint)}
+.prlink a:hover{color:var(--amber)}
+@media(max-width:900px){
+  .flag,.flag.rev{grid-template-columns:1fr;gap:22px}
+  .flag.rev .flag-copy{order:0}
+}
+
+/* format demo */
+.fmt-stage .pane{margin-top:9px}
+#d-fmt .fl{display:none}
+#d-fmt[data-scene="repo"] .fl-repo{display:inline}
+#d-fmt[data-scene="out"] .fl-out{display:inline}
+#d-fmt[data-scene="zoom"] .fl-zoom{display:inline}
+#d-fmt .fb{display:none}
+#d-fmt[data-scene="repo"] .fb-code,#d-fmt[data-scene="zoom"] .fb-code{display:block}
+#d-fmt[data-scene="out"] .fb-sh{display:block}
+#d-fmt .fnote{display:none;font-family:var(--mono);font-size:11px;color:var(--text-faint);margin-top:10px}
+#d-fmt[data-scene="out"] .fn-out{display:block}
+#d-fmt[data-scene="zoom"] .fn-zoom{display:block}
+#d-fmt[data-scene="repo"] .fn-repo{display:block}
+.legend{margin-top:26px;display:grid;grid-template-columns:auto 1fr;gap:4px 18px;font-size:.85rem}
+.legend dt{font-family:var(--mono);font-size:12px;white-space:nowrap}
+.legend dd{color:var(--text-dim)}
+.fmtstr{font-family:var(--mono);font-size:12px;white-space:pre;overflow-x:auto;color:var(--text-faint);padding-bottom:4px}
+
+/* tab demo */
+#d-tab .t-body{min-height:118px}
+#d-tab[data-style="classic"] .t-strip{display:none}
+#d-tab[data-style="minimal"] .t-classic{display:none}
+#d-tab .t-strip{transition:all .2s}
+#d-tab[data-pos="top"] .t-strip{top:8px;bottom:auto}
+#d-tab[data-pos="bottom"] .t-strip{bottom:8px;top:auto}
+#d-tab[data-align="left"] .t-strip{left:14px;right:auto}
+#d-tab[data-align="right"] .t-strip{right:14px;left:auto}
+#d-tab[data-title="false"] .tname{display:none}
+
+/* feature cards */
+.grid-cards{display:grid;grid-template-columns:repeat(2,1fr);gap:24px}
+.card{border:1px solid var(--line-soft);border-radius:12px;background:var(--bg-raise);display:flex;flex-direction:column;overflow:hidden;min-width:0}
+.card.wide{grid-column:1/-1}
+@media(min-width:781px){
+  .card.wide{
+    display:grid;align-items:start;column-gap:8px;
+    grid-template-columns:minmax(300px,1fr) minmax(320px,1.1fr);
+    grid-template-areas:"head demo" "desc demo" "cfg demo";
+  }
+  .card.wide .card-head{grid-area:head}
+  .card.wide>p{grid-area:desc}
+  .card.wide .cfg{grid-area:cfg;align-self:end}
+  .card.wide .demo{grid-area:demo;padding-top:22px}
+}
+.card-head{padding:20px 22px 0;display:flex;align-items:baseline;justify-content:space-between;gap:12px}
+.card h3{font-size:1.02rem;font-weight:700}
+.card .pr{font-family:var(--mono);font-size:11px;color:var(--text-faint);white-space:nowrap}
+.card .pr:hover{color:var(--amber)}
+.card>p{padding:6px 22px 0;font-size:.87rem;color:var(--text-dim)}
+.card .cfg{padding:12px 22px 8px;font-size:12.3px}
+.card .demo{padding:4px 22px 22px;margin-top:auto}
+.term.mini .t-main{padding:14px 12px 12px;gap:10px}
+.term.mini .pane-body{font-size:10.5px;line-height:1.7}
+@media(max-width:780px){.grid-cards{grid-template-columns:1fr}}
+
+/* card demo states */
+#d-pad .pane-body{padding:0 2px}
+#d-pad[data-pad="on"] .pane-body{padding:8px 16px}
+#d-single .pane{transition:border-color .25s}
+#d-single[data-sb="false"] .pane{border-color:transparent}
+#d-single[data-sb="false"] .pane-title{opacity:0}
+#d-dim[data-dim="true"] .pane:not(.is-focus){border-color:var(--line-soft)}
+#d-dim[data-dim="true"] .pane:not(.is-focus)>.pane-body,
+#d-dim[data-dim="true"] .pane:not(.is-focus)>.pane-title{opacity:.34}
+#d-marker[data-fm="false"] .fmark{display:none}
+#d-div[data-sd="false"] .t-side{border-right-color:transparent}
+#d-zoom .zt,#d-zoom .zp{display:none;color:var(--amber);font-weight:700}
+#d-zoom[data-zpos="tab"] .zt,#d-zoom[data-zpos="both"] .zt{display:inline}
+#d-zoom[data-zpos="pane"] .zp,#d-zoom[data-zpos="both"] .zp{display:inline}
+#d-prefix .t-status .pfx{color:var(--amber)}
+#d-prefix[data-pi="highlight"] .t-status{visibility:hidden}
+#d-prefix[data-pi="highlight"] .pane.is-focus{border-color:var(--coral)}
+#d-prefix[data-pi="highlight"] .pane.is-focus>.pane-title{color:var(--coral)}
+#d-prefix[data-pi="highlight"] .t-classic .tab.on{background:color-mix(in srgb,var(--coral) 22%,var(--term));color:var(--coral)}
+
+/* keys band */
+.keysband{border:1px solid var(--line);border-radius:12px;background:var(--bg-raise);overflow:hidden;display:grid;grid-template-columns:minmax(320px,470px) 1fr}
+.keysband>*{min-width:0}
+.keysband .cfg{border-right:1px solid var(--line-soft)}
+.seqs{padding:26px 26px;display:flex;flex-direction:column;gap:20px;justify-content:center}
+.seq{transition:opacity .25s}
+.seq .sq-h{font-family:var(--mono);font-size:11px;color:var(--text-faint);margin-bottom:8px;letter-spacing:.05em}
+.seqrow{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.key{
+  font-family:var(--mono);font-size:12px;
+  border:1px solid var(--line);border-bottom-width:3px;border-radius:6px;
+  padding:2px 9px;color:var(--term-text);background:var(--term);
+  white-space:nowrap;
+}
+.seq .arr{color:var(--text-faint);font-size:11px}
+.seq .res{font-family:var(--mono);font-size:11px;color:var(--green);margin-left:4px;white-space:nowrap}
+#d-rep .seq-r,#d-rep .seq-n{opacity:.3}
+#d-rep[data-repeat="true"] .seq-r{opacity:1}
+#d-rep[data-repeat="false"] .seq-n{opacity:1}
+#d-rep[data-repeat="true"] .seq-r .key.pulse{animation:kp 3.2s infinite}
+@keyframes kp{
+  0%,100%{background:var(--term);color:var(--term-text);border-color:var(--line)}
+  6%,14%{background:var(--amber);color:#191512;border-color:var(--amber)}
+}
+.keynotes{padding:0 26px 24px;font-size:.85rem;color:var(--text-dim)}
+@media(max-width:900px){
+  .keysband{grid-template-columns:1fr}
+  .keysband .cfg{border-right:none;border-bottom:1px solid var(--line-soft)}
+}
+
+/* reference table */
+.tblwrap{overflow-x:auto;border:1px solid var(--line-soft);border-radius:12px;background:var(--bg-raise)}
+table{border-collapse:collapse;width:100%;min-width:700px;font-size:.86rem}
+th{font-family:var(--mono);font-size:11.5px;font-weight:500;letter-spacing:.06em;color:var(--text-faint);text-align:left;padding:13px 18px;border-bottom:1px solid var(--line)}
+td{padding:10px 18px;border-bottom:1px solid var(--line-soft);vertical-align:top;color:var(--text-dim)}
+tr:last-child td{border-bottom:none}
+td.key{font-family:var(--mono);font-size:12.3px;color:var(--amber);white-space:nowrap}
+td.typ,td.def{font-family:var(--mono);font-size:12px;white-space:nowrap;color:var(--term-text)}
+.refnote{font-size:.84rem;color:var(--text-faint);margin-top:14px}
+
+/* install */
+.install{display:grid;grid-template-columns:1fr 1fr;gap:24px;align-items:stretch}
+.install>*{min-width:0}
+.install .panel{display:flex;flex-direction:column}
+.install .panel .cfg{border-bottom:none;flex:1}
+.ins-note{padding:0 18px 16px;font-size:.84rem;color:var(--text-faint)}
+.cfg .sh{color:var(--term-text)}
+.cfg .sh::before{content:"$ ";color:var(--text-faint)}
+@media(max-width:820px){.install{grid-template-columns:1fr}}
+
+/* footer */
+footer{margin-top:110px;border-top:1px solid var(--line-soft)}
+.foot-status{
+  font-family:var(--mono);font-size:12px;color:var(--text-faint);
+  display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap;
+  padding:14px 0;
+}
+.foot-status .fs-l{color:var(--text-dim)}
+.foot-main{padding:8px 0 46px;font-size:.85rem;color:var(--text-faint);display:flex;justify-content:space-between;gap:24px;flex-wrap:wrap}
+.foot-main a{color:var(--text-dim)}
+.foot-main a:hover{color:var(--amber)}
+.foot-links{display:flex;gap:18px;flex-wrap:wrap;font-family:var(--mono);font-size:12px}
+
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation:none!important;transition:none!important}
+  html{scroll-behavior:auto}
+}
+</style>
+</head>
+<body>
+
+<header class="tophat">
+  <div class="wrap">
+    <a class="brand" href="#"><span class="ps">❯</span>peinan/herdr</a>
+    <nav class="topnav">
+      <a href="#features" class="opt">features</a>
+      <a href="#keys" class="opt">keys</a>
+      <a href="#reference" class="opt">reference</a>
+      <a href="#install" class="opt">install</a>
+      <a href="https://github.com/peinan/herdr">GitHub ↗</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+
+<!-- ═════════ hero ═════════ -->
+<section class="hero">
+  <div class="wrap">
+    <p class="eyebrow"># personal fork of <a href="https://github.com/ogulcancelik/herdr">ogulcancelik/herdr</a></p>
+    <h1>herdr<span class="fk">-fork</span><span class="cur" aria-hidden="true"></span></h1>
+    <p class="lede">エージェントの多重化は upstream のまま。<br>見た目と手触りだけ、config.toml で自分仕様に。</p>
+    <p class="sub">herdr はターミナル常駐のエージェントマルチプレクサ。このフォークはその上に、ペイン枠・タイトル・タブバー・キー操作の細部を調整できる <strong>10 機能・15 設定キー</strong>を積んでいます。既定値はすべて upstream 相当 — 何も書かなければ、本家と同じ見た目・挙動で動きます。</p>
+    <div class="cta">
+      <a class="btn primary" href="https://github.com/peinan/herdr">GitHub で見る</a>
+      <a class="btn" href="#features">機能を見る ↓</a>
+    </div>
+
+    <div class="heroDemo demo" id="d-hero" data-tabs="minimal" data-dim="true" data-fmt="on">
+      <div class="hd-cfg">
+        <div class="hd-label"><span>~/.config/herdr/config.toml</span><span class="lamp">●</span></div>
+        <pre class="cfg"><span class="tbl">[ui]</span>
+<span class="k">tab_bar_style</span>      = <button class="pill" data-demo="d-hero" data-key="tabs" data-vals="classic|minimal" data-disp="&quot;classic&quot;|&quot;minimal&quot;" data-i="1" aria-label="tab_bar_style の値を切り替え">"minimal"</button>
+<span class="k">dim_inactive_panes</span> = <button class="pill" data-demo="d-hero" data-key="dim" data-vals="false|true" data-disp="false|true" data-i="1" aria-label="dim_inactive_panes の値を切り替え">true</button>
+<span class="k">pane_title_format</span>  = <button class="pill" data-demo="d-hero" data-key="fmt" data-vals="off|on" data-disp="&quot;&quot;|&quot;$dir $process(…)&quot;" data-i="1" aria-label="pane_title_format の値を切り替え">"$dir $process(…)"</button></pre>
+        <p class="hint"><b>#</b> 値をクリック → 右のプレビューに反映<noscript>(JS 無効時は初期状態で固定)</noscript></p>
+      </div>
+      <div class="hd-view">
+        <div class="term" aria-label="herdr の画面プレビュー">
+          <div class="t-classic"><span class="tab on">1 main</span><span class="tab">2 agents</span><span class="tab">3 logs</span></div>
+          <div class="t-body">
+            <div class="t-side">
+              <div class="sb-h">❯ herdr</div>
+              <div class="row"><span class="dot w"></span>claude<span class="st">working</span></div>
+              <div class="row"><span class="dot i"></span>codex<span class="st">idle</span></div>
+              <div class="row"><span class="dot d"></span>tests<span class="st">done</span></div>
+            </div>
+            <div class="t-main">
+              <div class="pane is-focus">
+                <span class="pane-title"><span class="fmark">▌ </span><span class="tt-plain">nvim</span><span class="tt-rich"><span class="s-dir">herdr</span> <span class="s-proc">nvim</span><span class="s-sep"> ⋅ </span><span class="s-br">main</span><span class="s-ab">⇡2</span><span class="s-gs">!</span></span></span>
+                <div class="pane-body"><span class="ln">12</span> <span class="kw">fn</span> <span class="fn">render</span>(state: &amp;AppState) {
+<span class="ln">13</span>     <span class="kw">let</span> view = compute_view(state);
+<span class="ln">14</span>     draw_panes(&amp;view);
+<span class="ln">15</span> }</div>
+              </div>
+              <div class="pane">
+                <span class="pane-title"><span class="tt-plain">claude</span><span class="tt-rich"><span class="s-dir">herdr</span> <span class="s-proc">claude</span><span class="s-sep"> ⋅ </span><span class="s-br">feat/lp</span><span class="s-gs">?</span></span></span>
+                <div class="pane-body"><span class="think">✻ 差分を確認しています…</span>
+<span class="tool">⏺ Read</span>(src/render/mod.rs)
+<span class="tool">⏺ Edit</span>(src/config/model.rs)
+  <span class="ok">└ ui.pane_padding を追加</span></div>
+              </div>
+            </div>
+            <div class="t-strip"><span class="g on">●</span> <span class="g">○</span> <span class="g">○</span></div>
+          </div>
+          <div class="t-status"><span><span class="key-h">⌃b</span> prefix</span><span><span class="key-h">⌘d</span> split</span><span><span class="key-h">⌘t</span> tab</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═════════ policy ═════════ -->
+<section class="sec" id="policy">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="sec-eyebrow"># philosophy</p>
+      <h2>既定は、本家のまま。</h2>
+    </div>
+    <div class="pol">
+      <article>
+        <p class="pk"># opt-in by default</p>
+        <h3>素の起動は upstream と同一</h3>
+        <p>フォーク独自の UI はすべてスイッチ式。設定を書かない限り本家相当の見た目・挙動で、欲しい変化だけを config.toml で有効化する方針です。</p>
+      </article>
+      <article>
+        <p class="pk"># native detection</p>
+        <h3>シェルフックなしで動く</h3>
+        <p>ペインタイトルのプロセス名・cwd・git 情報は herdr 本体の syscall ベース検出から描画。.zshrc のフックや OSC 7 の設定は不要です。</p>
+      </article>
+      <article>
+        <p class="pk"># upstream-tracking</p>
+        <h3>本家に追従し続ける</h3>
+        <p>upstream/master を merge ベースで継続的に取り込み。差分は <a href="https://github.com/peinan/herdr/blob/main/docs/fork/FORK_FEATURES.md">FORK_FEATURES.md</a> に機能単位で記録しています。</p>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- ═════════ [ui] features ═════════ -->
+<section class="sec" id="features">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="sec-eyebrow">[ui]</p>
+      <h2>見た目を、細部まで。</h2>
+      <p>各デモの設定値はクリックで切り替えられます。PR 番号はフォークリポジトリの Pull Request へのリンクです。</p>
+    </div>
+
+    <!-- flagship: pane_title_format -->
+    <div class="flag">
+      <div class="flag-copy">
+        <p class="fkey">ui.pane_title_format</p>
+        <h3>starship 風のペインタイトル書式</h3>
+        <p>ペイン枠のタイトルを <code class="mono">$変数</code> と条件付きグループで自由に記述。ディレクトリ・真のフォアグラウンドプロセス名・ペイン単位の git 状態(ブランチ / ahead-behind / dirty)を herdr がネイティブに検出して描画します。</p>
+        <ul>
+          <li>条件付きグループ <code class="mono">( … )</code> — 中の変数がすべて空なら、区切り文字ごと丸ごと消える</li>
+          <li>cwd・git は約 1.5 秒間隔で追従。<code class="mono">cd</code> や <code class="mono">git checkout</code> にフックなしで付いてくる</li>
+          <li>同一リポジトリの別 worktree のペインも、それぞれ自分のブランチを表示</li>
+          <li>優先順位: OSC タイトル &gt; 手動ラベル &gt; この書式。空文字なら従来挙動のまま</li>
+        </ul>
+        <span class="prlink">refs: <a href="https://github.com/peinan/herdr/commit/cccf16b">cccf16b</a> · <a href="https://github.com/peinan/herdr/pull/13">#13</a></span>
+      </div>
+      <div class="flag-demo">
+        <div class="panel demo" id="d-fmt" data-scene="repo">
+          <pre class="cfg cfg--wrap"><span class="tbl">[ui]</span>
+<span class="k">pane_title_format</span> = <span class="v">"<span class="s-dir">$dir</span> <span class="s-proc">$process</span><span class="s-sep">( ⋅ </span><span class="s-br">$branch</span><span class="s-ab">$ahead_behind</span><span class="s-gs">$git_status</span><span class="s-sep">)</span><span class="s-zoom">( $zoom)</span>"</span>
+<span class="c"># シチュエーション →</span> <span class="radio" data-demo="d-fmt" data-key="scene"><button data-value="repo" aria-pressed="true">リポジトリ内</button><button data-value="out" aria-pressed="false">リポジトリ外</button><button data-value="zoom" aria-pressed="false">zoom 中</button></span></pre>
+          <div class="stage fmt-stage">
+            <div class="term mini">
+              <div class="t-main" style="padding:18px 14px 16px">
+                <div class="pane is-focus">
+                  <span class="pane-title"><span class="fmark">▌ </span><span class="fl fl-repo"><span class="s-dir">herdr</span> <span class="s-proc">nvim</span><span class="s-sep"> ⋅ </span><span class="s-br">main</span><span class="s-ab">⇡2⇣1</span><span class="s-gs">!?</span></span><span class="fl fl-out"><span class="s-dir">~</span> <span class="s-proc">zsh</span></span><span class="fl fl-zoom"><span class="s-dir">herdr</span> <span class="s-proc">nvim</span><span class="s-sep"> ⋅ </span><span class="s-br">main</span><span class="s-ab">⇡2⇣1</span><span class="s-gs">!?</span> <span class="s-zoom">Z</span></span></span>
+                  <div class="pane-body fb fb-code"><span class="ln">42</span> <span class="kw">impl</span> <span class="fn">PaneTitle</span> {
+<span class="ln">43</span>     <span class="c">// …</span>
+<span class="ln">44</span> }</div>
+                  <div class="pane-body fb fb-sh"><span class="think">❯</span> cd ~
+<span class="think">❯</span> git status
+<span class="kw">fatal:</span> not a git repository</div>
+                </div>
+              </div>
+            </div>
+            <p class="fnote fn-repo"># <span class="s-br">$branch</span><span class="s-ab">$ahead_behind</span><span class="s-gs">$git_status</span> — ブランチ / 上流との差 / 作業ツリー状態(!変更 ?未追跡 +ステージ =衝突)</p>
+            <p class="fnote fn-out"># git 情報が空 → <span class="s-sep">( ⋅ … )</span> グループが区切り文字ごと消える</p>
+            <p class="fnote fn-zoom"># $zoom は zoom_indicator_position が pane / both のときだけ非空</p>
+          </div>
+        </div>
+        <dl class="legend">
+          <dt class="s-dir">$dir / $cwd</dt><dd>cwd の basename / フルパス(~ 短縮)</dd>
+          <dt class="s-proc">$process</dt><dd>真のフォアグラウンドプロセス名(alias・ラッパ解決済み)</dd>
+          <dt style="color:var(--text-dim)">$agent</dt><dd>検出されたエージェントのラベル</dd>
+          <dt class="s-br">$branch</dt><dd>git ブランチ(detached HEAD は短縮 SHA)</dd>
+          <dt class="s-ab">$ahead_behind</dt><dd>上流との差 ⇡2⇣1(0 は省略)</dd>
+          <dt class="s-gs">$git_status</dt><dd>作業ツリー状態 =衝突 !変更 +ステージ ?未追跡</dd>
+          <dt class="s-zoom">$zoom / $label</dt><dd>ズームマーカー / 手動ラベル(pane rename)</dd>
+        </dl>
+      </div>
+    </div>
+
+    <!-- flagship: tab_bar_style -->
+    <div class="flag rev">
+      <div class="flag-copy">
+        <p class="fkey">ui.tab_bar_{style,position,align,title}</p>
+        <h3>タブバーを 2 系統から選ぶ</h3>
+        <p>upstream の上部テキストタブ(<code class="mono">classic</code>)と、このフォークが導入したグリフ帯(<code class="mono">minimal</code>)を切り替え。minimal は位置・寄せ・タブ名併記をパラメータで調整できます。</p>
+        <ul>
+          <li>classic: 自動採番・カスタム名・タブ多数時の横スクロールを持つ本家の見た目</li>
+          <li>minimal: タブバーの占有を 1 行のグリフ帯まで縮小。position / align / title で調整</li>
+          <li>position・align・title は minimal のときだけ有効(classic では常に上・テキスト)</li>
+        </ul>
+        <span class="prlink">refs: <a href="https://github.com/peinan/herdr/pull/10">#10</a> · <a href="https://github.com/peinan/herdr/pull/24">#24</a></span>
+      </div>
+      <div class="flag-demo">
+        <div class="panel demo" id="d-tab" data-style="minimal" data-pos="bottom" data-align="right" data-title="false">
+          <pre class="cfg"><span class="tbl">[ui]</span>
+<span class="k">tab_bar_style</span>    = <span class="radio" data-demo="d-tab" data-key="style"><button data-value="classic" aria-pressed="false">"classic"</button><button data-value="minimal" aria-pressed="true">"minimal"</button></span>
+<span class="k">tab_bar_position</span> = <span class="radio" data-demo="d-tab" data-key="pos" data-needs="style:minimal"><button data-value="top" aria-pressed="false">"top"</button><button data-value="bottom" aria-pressed="true">"bottom"</button></span>
+<span class="k">tab_bar_align</span>    = <span class="radio" data-demo="d-tab" data-key="align" data-needs="style:minimal"><button data-value="left" aria-pressed="false">"left"</button><button data-value="right" aria-pressed="true">"right"</button></span>
+<span class="k">tab_bar_title</span>    = <span class="radio" data-demo="d-tab" data-key="title" data-needs="style:minimal"><button data-value="false" aria-pressed="true">false</button><button data-value="true" aria-pressed="false">true</button></span></pre>
+          <div class="stage">
+            <div class="term mini">
+              <div class="t-classic"><span class="tab on">1 main</span><span class="tab">2 agents</span><span class="tab">3 logs</span></div>
+              <div class="t-body">
+                <div class="t-main">
+                  <div class="pane is-focus">
+                    <span class="pane-title"><span class="fmark">▌ </span>nvim</span>
+                    <div class="pane-body"><span class="think">-- INSERT --</span></div>
+                  </div>
+                </div>
+                <div class="t-strip"><span class="g on">●<span class="tname"> main</span></span> <span class="g">○<span class="tname"> agents</span></span> <span class="g">○<span class="tname"> logs</span></span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- cards -->
+    <div class="grid-cards">
+
+      <article class="card">
+        <div class="card-head"><h3>ペイン内余白</h3><a class="pr" href="https://github.com/peinan/herdr/pull/15">#15</a></div>
+        <p>ペイン枠(または画面端)と端末内容の間に、セル単位の余白を上下左右で指定。PTY サイズと描画が一致し、スクロールバーは余白の内側に寄ります。</p>
+        <pre class="cfg"><span class="k">ui.pane_padding</span> = <button class="pill" data-demo="d-pad" data-key="pad" data-vals="off|on" data-disp="{}|{ top = 1, left = 2 }" data-i="1" aria-label="ui.pane_padding の値を切り替え">{ top = 1, left = 2 }</button></pre>
+        <div class="demo" id="d-pad" data-pad="on">
+          <div class="term mini"><div class="t-main">
+            <div class="pane is-focus">
+              <span class="pane-title"><span class="fmark">▌ </span>zsh</span>
+              <div class="pane-body"><span class="sh">just check</span>
+<span class="ok">✓ fmt · clippy · nextest</span></div>
+            </div>
+          </div></div>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-head"><h3>単独ペインの枠</h3><a class="pr" href="https://github.com/peinan/herdr/pull/11">#11</a></div>
+        <p>ペインが 1 つだけのタブでも枠とタイトルを描画。タイトル書式と組み合わせると、全画面で作業しつつ git 状態を常時視界に置けます。</p>
+        <pre class="cfg"><span class="k">ui.single_pane_border</span> = <button class="pill" data-demo="d-single" data-key="sb" data-vals="false|true" data-disp="false|true" data-i="1" aria-label="ui.single_pane_border の値を切り替え">true</button></pre>
+        <div class="demo" id="d-single" data-sb="true">
+          <div class="term mini"><div class="t-main">
+            <div class="pane is-focus">
+              <span class="pane-title"><span class="fmark">▌ </span><span class="s-dir">herdr</span> <span class="s-proc">nvim</span><span class="s-sep"> ⋅ </span><span class="s-br">main</span></span>
+              <div class="pane-body"><span class="ln">7</span> <span class="kw">pub struct</span> <span class="fn">Workspace</span> {
+<span class="ln">8</span>     tabs: Vec&lt;Tab&gt;,</div>
+            </div>
+          </div></div>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-head"><h3>非アクティブペイン減光</h3><a class="pr" href="https://github.com/peinan/herdr/pull/22">#2 · #22</a></div>
+        <p>フォーカス外のペインを常時薄くして、いま見ている場所を強調。既定 false は upstream 挙動(prefix / コマンドモード時のみ減光)です。</p>
+        <pre class="cfg"><span class="k">ui.dim_inactive_panes</span> = <button class="pill" data-demo="d-dim" data-key="dim" data-vals="false|true" data-disp="false|true" data-i="1" aria-label="ui.dim_inactive_panes の値を切り替え">true</button></pre>
+        <div class="demo" id="d-dim" data-dim="true">
+          <div class="term mini"><div class="t-main">
+            <div class="pane is-focus">
+              <span class="pane-title"><span class="fmark">▌ </span>nvim</span>
+              <div class="pane-body"><span class="kw">fn</span> <span class="fn">focused</span>() {}</div>
+            </div>
+            <div class="pane">
+              <span class="pane-title">claude</span>
+              <div class="pane-body"><span class="think">✻ 考え中…</span></div>
+            </div>
+          </div></div>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-head"><h3>フォーカスマーカー</h3><a class="pr" href="https://github.com/peinan/herdr/pull/23">#23</a></div>
+        <p>フォーカスペインのタイトル先頭に付く <code class="mono">▌</code> マーカーの表示切替。false にすると色と太字だけでフォーカスを示します。</p>
+        <pre class="cfg"><span class="k">ui.show_pane_focus_marker</span> = <button class="pill" data-demo="d-marker" data-key="fm" data-vals="true|false" data-disp="true|false" data-i="0" aria-label="ui.show_pane_focus_marker の値を切り替え">true</button></pre>
+        <div class="demo" id="d-marker" data-fm="true">
+          <div class="term mini"><div class="t-main">
+            <div class="pane is-focus">
+              <span class="pane-title"><span class="fmark">▌ </span>nvim</span>
+              <div class="pane-body"><span class="think">-- NORMAL --</span></div>
+            </div>
+            <div class="pane">
+              <span class="pane-title">zsh</span>
+              <div class="pane-body"><span class="sh">git status</span></div>
+            </div>
+          </div></div>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-head"><h3>サイドバー区切り線</h3><a class="pr" href="https://github.com/peinan/herdr/pull/3">#3</a></div>
+        <p>サイドバーとペイン領域の間の縦区切り線を消して、地続きの 1 画面として見せられます。</p>
+        <pre class="cfg"><span class="k">ui.sidebar_divider</span> = <button class="pill" data-demo="d-div" data-key="sd" data-vals="true|false" data-disp="true|false" data-i="0" aria-label="ui.sidebar_divider の値を切り替え">true</button></pre>
+        <div class="demo" id="d-div" data-sd="true">
+          <div class="term mini"><div class="t-body">
+            <div class="t-side">
+              <div class="sb-h">❯ herdr</div>
+              <div class="row"><span class="dot w"></span>claude</div>
+              <div class="row"><span class="dot d"></span>tests</div>
+            </div>
+            <div class="t-main">
+              <div class="pane is-focus">
+                <span class="pane-title"><span class="fmark">▌ </span>nvim</span>
+                <div class="pane-body"><span class="ln">1</span> # herdr</div>
+              </div>
+            </div>
+          </div></div>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-head"><h3>ズームマーカー</h3><a class="pr" href="https://github.com/peinan/herdr/pull/25">#4 · #25</a></div>
+        <p><code class="mono">prefix+z</code> ズーム中を示すマーカーの文字と表示位置。タブ・ペイン枠・両方・非表示から選べます(文字は <code class="mono">ui.zoom_indicator</code>、既定 "Z")。</p>
+        <pre class="cfg"><span class="k">ui.zoom_indicator_position</span> =
+  <span class="radio" data-demo="d-zoom" data-key="zpos"><button data-value="tab" aria-pressed="true">"tab"</button><button data-value="pane" aria-pressed="false">"pane"</button><button data-value="both" aria-pressed="false">"both"</button><button data-value="none" aria-pressed="false">"none"</button></span></pre>
+        <div class="demo" id="d-zoom" data-zpos="tab">
+          <div class="term mini">
+            <div class="t-classic"><span class="tab on">1 main <span class="zt">Z</span></span><span class="tab">2 agents</span></div>
+            <div class="t-main">
+              <div class="pane is-focus">
+                <span class="pane-title"><span class="fmark">▌ </span>nvim <span class="zp">Z</span></span>
+                <div class="pane-body"><span class="think">(zoomed)</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <article class="card wide">
+        <div class="card-head"><h3>prefix 待機表示</h3><a class="pr" href="https://github.com/peinan/herdr/pull/5">#5</a></div>
+        <p>prefix キー待機中の示し方。既定は下部ヒントバー、<code class="mono">highlight</code> はバーを隠してフォーカス枠とアクティブタブを再着色します。</p>
+        <pre class="cfg"><span class="k">ui.prefix_indicator</span> =
+  <span class="radio" data-demo="d-prefix" data-key="pi"><button data-value="status_bar" aria-pressed="true">"status_bar"</button><button data-value="highlight" aria-pressed="false">"highlight"</button></span></pre>
+        <div class="demo" id="d-prefix" data-pi="status_bar">
+          <div class="term mini">
+            <div class="t-classic"><span class="tab on">1 main</span><span class="tab">2 agents</span></div>
+            <div class="t-main">
+              <div class="pane is-focus">
+                <span class="pane-title"><span class="fmark">▌ </span>nvim</span>
+                <div class="pane-body"><span class="think">prefix 待機中…</span></div>
+              </div>
+            </div>
+            <div class="t-status"><span class="pfx">prefix</span><span><span class="key-h">z</span> zoom</span><span><span class="key-h">d</span> split</span><span><span class="key-h">n</span> next tab</span></div>
+          </div>
+        </div>
+      </article>
+
+    </div>
+  </div>
+</section>
+
+<!-- ═════════ [keys] ═════════ -->
+<section class="sec" id="keys">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="sec-eyebrow">[keys]</p>
+      <h2>繰り返しは、prefix 一回で。</h2>
+      <p>tmux の <code class="mono">bind -r</code> 風。prefix を押した後の一定時間は「アーム状態」になり、素のキーだけで同じ操作を連打できます。</p>
+    </div>
+    <div class="keysband demo" id="d-rep" data-repeat="true">
+      <pre class="cfg"><span class="tbl">[keys]</span>
+<span class="k">next_tab</span> = { key = <span class="v">"prefix+n"</span>, repeat = <button class="pill" data-demo="d-rep" data-key="repeat" data-vals="false|true" data-disp="false|true" data-i="1" aria-label="repeat の値を切り替え">true</button> }
+<span class="k">prev_tab</span> = { key = <span class="v">"prefix+p"</span>, repeat = <span class="v">true</span> }
+<span class="k">repeat_timeout</span> = <span class="v">500</span>  <span class="c"># ms — アーム状態を保つ時間</span></pre>
+      <div>
+        <div class="seqs">
+          <div class="seq seq-r">
+            <p class="sq-h"># repeat = true — タブ 3 つ先へ</p>
+            <div class="seqrow"><span class="key pulse" style="animation-delay:0s">⌃b</span><span class="key pulse" style="animation-delay:.45s">n</span><span class="key pulse" style="animation-delay:.9s">n</span><span class="key pulse" style="animation-delay:1.35s">n</span><span class="res">main → agents → logs → build</span></div>
+          </div>
+          <div class="seq seq-n">
+            <p class="sq-h"># repeat = false — 毎回 prefix から</p>
+            <div class="seqrow"><span class="key">⌃b</span><span class="key">n</span><span class="arr">→</span><span class="key">⌃b</span><span class="key">n</span><span class="arr">→</span><span class="key">⌃b</span><span class="key">n</span></div>
+          </div>
+        </div>
+        <p class="keynotes">アーム解除は prefix / Esc / 未バインドキー / timeout 経過。対象はタブ・ペイン・ワークスペースのナビゲーションやサイクル系で、rename・help などダイアログに入る操作は repeat を付けても通常どおり一回で抜けます。<a class="mono" style="font-size:12px" href="https://github.com/peinan/herdr/pull/1">#1</a></p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═════════ reference ═════════ -->
+<section class="sec" id="reference">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="sec-eyebrow"># reference</p>
+      <h2>追加した設定キー一覧</h2>
+    </div>
+    <div class="tblwrap">
+      <table>
+        <thead><tr><th>key</th><th>type</th><th>default</th><th>説明</th></tr></thead>
+        <tbody>
+          <tr><td class="key">ui.pane_padding</td><td class="typ">table</td><td class="def">{}</td><td>枠(端)と端末内容の間の余白(セル単位、省略辺は 0)</td></tr>
+          <tr><td class="key">ui.pane_title_format</td><td class="typ">string</td><td class="def">""</td><td>starship 風のペイン枠タイトル書式。空なら従来挙動</td></tr>
+          <tr><td class="key">ui.single_pane_border</td><td class="typ">bool</td><td class="def">false</td><td>ペインが 1 つだけでも枠を描く</td></tr>
+          <tr><td class="key">ui.dim_inactive_panes</td><td class="typ">bool</td><td class="def">false</td><td>非フォーカスペインを常時減光(false は upstream 挙動)</td></tr>
+          <tr><td class="key">ui.show_pane_focus_marker</td><td class="typ">bool</td><td class="def">true</td><td>フォーカスペインの ▌ マーカー表示</td></tr>
+          <tr><td class="key">ui.sidebar_divider</td><td class="typ">bool</td><td class="def">true</td><td>サイドバーとペイン領域の縦区切り線</td></tr>
+          <tr><td class="key">ui.zoom_indicator</td><td class="typ">string</td><td class="def">"Z"</td><td>ズーム時のマーカー文字("" で非表示)</td></tr>
+          <tr><td class="key">ui.zoom_indicator_position</td><td class="typ">enum</td><td class="def">"tab"</td><td>マーカー位置: tab / pane / both / none</td></tr>
+          <tr><td class="key">ui.tab_bar_style</td><td class="typ">enum</td><td class="def">"classic"</td><td>classic=上部テキストタブ / minimal=グリフ帯</td></tr>
+          <tr><td class="key">ui.tab_bar_position</td><td class="typ">enum</td><td class="def">"bottom"</td><td>minimal の位置: top / bottom</td></tr>
+          <tr><td class="key">ui.tab_bar_align</td><td class="typ">enum</td><td class="def">"right"</td><td>minimal の寄せ: left / right</td></tr>
+          <tr><td class="key">ui.tab_bar_title</td><td class="typ">bool</td><td class="def">false</td><td>minimal でタブ名も併記する</td></tr>
+          <tr><td class="key">ui.prefix_indicator</td><td class="typ">enum</td><td class="def">"status_bar"</td><td>prefix 待機の表示: status_bar / highlight</td></tr>
+          <tr><td class="key">keys.repeat_timeout</td><td class="typ">u64 (ms)</td><td class="def">500</td><td>repeatable バインドがアーム状態を保つ時間</td></tr>
+          <tr><td class="key">keys.&lt;action&gt;</td><td class="typ">table</td><td class="def">repeat = false</td><td><span class="mono" style="font-size:12px">{ key, repeat }</span> 形式で bind -r 風の繰り返しを有効化</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="refnote"># 全キー省略可。詳細な仕様は <a href="https://github.com/peinan/herdr/blob/main/docs/fork/FORK_FEATURES.md">FORK_FEATURES.md</a>(2026-07-08 更新)を参照。</p>
+  </div>
+</section>
+
+<!-- ═════════ install ═════════ -->
+<section class="sec" id="install">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="sec-eyebrow"># install</p>
+      <h2>手元で動かす</h2>
+    </div>
+    <div class="install">
+      <div class="panel">
+        <div class="hd-label"><span>build &amp; install</span></div>
+        <pre class="cfg"><span class="sh">git clone https://github.com/peinan/herdr.git</span>
+<span class="sh">cd herdr</span>
+<span class="sh">make install</span>  <span class="c"># → ~/.local/bin/herdr</span></pre>
+        <p class="ins-note">ビルドには Rust toolchain と Zig 0.15.2(vendored libghostty-vt 用)が必要。<code class="mono">make</code> は mise で zig を用意します。mise を使わない場合は <code class="mono">ZIG=/path/to/zig just build</code>。</p>
+      </div>
+      <div class="panel">
+        <div class="hd-label"><span>~/.config/herdr/config.toml</span></div>
+        <pre class="cfg"><span class="c"># 好きな行だけ書く — 書かなければ upstream と同じ</span>
+<span class="tbl">[ui]</span>
+<span class="k">tab_bar_style</span>      = <span class="v">"minimal"</span>
+<span class="k">dim_inactive_panes</span> = <span class="v">true</span>
+<span class="k">pane_title_format</span>  = <span class="v">"$dir $process( ⋅ $branch$git_status)"</span>
+
+<span class="tbl">[keys]</span>
+<span class="k">next_tab</span> = { key = <span class="v">"prefix+n"</span>, repeat = <span class="v">true</span> }</pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="foot-status">
+      <span class="fs-l">❯ peinan/herdr</span>
+      <span># vim: set ft=toml :</span>
+    </div>
+    <div class="foot-main">
+      <p style="max-width:560px">herdr は <a href="https://github.com/ogulcancelik">Ogulcan Celik</a> 氏による Apache-2.0 のプロジェクト(<a href="https://herdr.dev">herdr.dev</a>)。このページは個人フォーク <a href="https://github.com/peinan/herdr">peinan/herdr</a> の非公式な紹介で、upstream とは無関係です。</p>
+      <div class="foot-links">
+        <a href="https://github.com/peinan/herdr">fork repo</a>
+        <a href="https://github.com/peinan/herdr/blob/main/docs/fork/FORK_FEATURES.md">FORK_FEATURES.md</a>
+        <a href="https://github.com/ogulcancelik/herdr">upstream</a>
+        <a href="https://herdr.dev">herdr.dev</a>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<script>
+(function(){
+  "use strict";
+
+  function syncNeeds(){
+    document.querySelectorAll("[data-needs]").forEach(function(g){
+      var demo=document.getElementById(g.dataset.demo);
+      if(!demo) return;
+      var kv=g.dataset.needs.split(":");
+      var ok=demo.dataset[kv[0]]===kv[1];
+      g.classList.toggle("is-disabled",!ok);
+      g.querySelectorAll("button").forEach(function(b){b.disabled=!ok;});
+    });
+  }
+
+  // cycle pills: data-vals = logical values, data-disp = display strings, data-i = current index
+  document.querySelectorAll(".pill[data-key]").forEach(function(btn){
+    var vals=btn.dataset.vals.split("|");
+    var disp=btn.dataset.disp.split("|");
+    btn.addEventListener("click",function(){
+      var demo=document.getElementById(btn.dataset.demo);
+      if(!demo) return;
+      var i=(parseInt(btn.dataset.i||"0",10)+1)%vals.length;
+      btn.dataset.i=String(i);
+      demo.dataset[btn.dataset.key]=vals[i];
+      btn.textContent=disp[i];
+      btn.classList.toggle("is-on",i!==0);
+      syncNeeds();
+    });
+    btn.classList.toggle("is-on",parseInt(btn.dataset.i||"0",10)!==0);
+  });
+
+  // radio groups
+  document.querySelectorAll(".radio[data-key]").forEach(function(g){
+    g.querySelectorAll("button").forEach(function(b){
+      b.addEventListener("click",function(){
+        var demo=document.getElementById(g.dataset.demo);
+        if(!demo||b.disabled) return;
+        demo.dataset[g.dataset.key]=b.dataset.value;
+        g.querySelectorAll("button").forEach(function(x){
+          x.setAttribute("aria-pressed",x===b?"true":"false");
+        });
+        syncNeeds();
+      });
+    });
+  });
+
+  syncNeeds();
+})();
+</script>
+
+</body>
+</html>
