@@ -2,6 +2,7 @@
 use crossterm::event::KeyEvent;
 use crossterm::event::{KeyCode, KeyModifiers};
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 use tracing::warn;
 
 use super::Config;
@@ -12,6 +13,17 @@ pub type KeyCombo = (KeyCode, KeyModifiers);
 
 /// Default `keys.repeat_timeout` (milliseconds) for repeatable prefix bindings.
 pub(crate) const DEFAULT_REPEAT_TIMEOUT_MS: u64 = 500;
+
+/// Resolve a configured `keys.repeat_timeout` (milliseconds) to a `Duration`,
+/// clamping `0` to the default so an "armed" prefix state can always expire.
+pub(crate) fn resolve_repeat_timeout(millis: u64) -> Duration {
+    let millis = if millis == 0 {
+        DEFAULT_REPEAT_TIMEOUT_MS
+    } else {
+        millis
+    };
+    Duration::from_millis(millis)
+}
 
 #[derive(Debug, Clone)]
 pub struct LiveKeybindConfig {
@@ -182,9 +194,6 @@ pub struct ResolvedBinding {
     pub label: String,
     /// tmux `bind -r` style repeat opt-in. Only action bindings parsed from a
     /// table config can be `true`; navigate/indexed bindings are always `false`.
-    // Parsed but inert: key routing moved to the client shell in upstream #3487
-    // and repeatable prefix bindings have not been re-implemented there yet.
-    #[allow(dead_code)]
     pub repeatable: bool,
 }
 
@@ -259,6 +268,13 @@ impl ActionKeybinds {
         self.bindings
             .iter()
             .any(|binding| binding.trigger.is_prefix() && binding.matches_terminal_key(key))
+    }
+
+    /// Whether a prefix binding matching `key` opted in to repeat.
+    pub fn repeatable_for_key(&self, key: &TerminalKey) -> bool {
+        self.bindings.iter().any(|binding| {
+            binding.repeatable && binding.trigger.is_prefix() && binding.matches_terminal_key(key)
+        })
     }
 
     pub fn matches_direct_key(&self, key: &TerminalKey) -> bool {
@@ -2313,6 +2329,9 @@ swap_pane_down = { key = "prefix+shift+j", repeat = true }
         let keybinds = config.keybinds();
         assert_eq!(keybinds.swap_pane_down.bindings.len(), 1);
         assert!(keybinds.swap_pane_down.bindings[0].repeatable);
+        assert!(keybinds
+            .swap_pane_down
+            .repeatable_for_key(&TerminalKey::new(KeyCode::Char('j'), KeyModifiers::SHIFT)));
     }
 
     #[test]
@@ -2413,6 +2432,15 @@ swap_pane_down = { key = "prefix+nonsense", repeat = true }
     fn repeat_timeout_defaults_to_500ms() {
         let config = Config::default();
         assert_eq!(config.keys.repeat_timeout, DEFAULT_REPEAT_TIMEOUT_MS);
+    }
+
+    #[test]
+    fn resolve_repeat_timeout_clamps_zero_to_default() {
+        assert_eq!(
+            resolve_repeat_timeout(0),
+            Duration::from_millis(DEFAULT_REPEAT_TIMEOUT_MS)
+        );
+        assert_eq!(resolve_repeat_timeout(750), Duration::from_millis(750));
     }
 
     #[test]

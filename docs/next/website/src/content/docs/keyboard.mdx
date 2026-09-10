@@ -77,8 +77,6 @@ prefix = "ctrl+a"
 
 ## Repeat a binding without re-pressing the prefix
 
-**Not available in this build:** repeatable prefix bindings are pending re-implementation on the client shell after the upstream 0.9.0 sync. The table form and `repeat_timeout` are still accepted so existing configs keep loading, but bindings behave as if `repeat = false`.
-
 Some prefix actions are natural to fire several times in a row — stepping through tabs, cycling panes, or moving a pane across the layout. Instead of pressing the prefix before every keypress, you can mark a binding as repeatable. After `prefix` + the key, Herdr stays "armed" and you can press the bare key again to repeat it, until you press anything else or a short timeout elapses. This mirrors tmux's `bind -r`.
 
 Use the table form with `repeat = true`:

@@ -219,5 +219,6 @@ mod keybindings_settings;
 mod mobile;
 mod mouse_selection;
 mod popup_focus_projection;
+mod prefix_repeat;
 mod startup_overlays;
 mod tab_bar_style;

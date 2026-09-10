@@ -556,12 +556,14 @@ impl ClientShellState {
                 }
                 if crate::config::terminal_key_matches_combo(key, self.config.keybinds.prefix) {
                     self.mode = ClientShellMode::Prefix;
+                    self.prefix_repeat_deadline = None;
                     outcome.repaint = true;
                     return None;
                 }
                 self.focused_pane_id().map(ClientInputTarget::Pane)
             }
             ClientShellMode::Prefix => {
+                self.prefix_repeat_deadline = None;
                 let return_mode = if self.copy_mode.as_ref().is_some_and(|copy_mode| {
                     self.focused_pane_id().as_deref() == Some(copy_mode.pane_id.as_str())
                 }) {
@@ -579,12 +581,27 @@ impl ClientShellState {
                     outcome.repaint = true;
                     return None;
                 }
-                if let Some(binding) =
-                    crate::input::resolve_prefix_binding(&self.config.keybinds.keybinds, key)
-                {
+                if let Some(resolved) = crate::input::resolve_prefix_binding_with_repeat(
+                    &self.config.keybinds.keybinds,
+                    key,
+                ) {
                     self.mode = return_mode;
                     outcome.repaint = true;
-                    self.record_binding(binding, outcome);
+                    self.record_binding(resolved.binding, outcome);
+                    // tmux `bind -r`: stay armed only when the action left the
+                    // shell in the terminal base context. Every sub-mode and
+                    // overlay is its own state, so the post-dispatch state alone
+                    // tells us whether the action opened an interactive surface.
+                    if resolved.repeatable
+                        && return_mode == ClientShellMode::Terminal
+                        && self.mode == ClientShellMode::Terminal
+                        && self.overlay.is_none()
+                        && !outcome.detach
+                    {
+                        self.mode = ClientShellMode::Prefix;
+                        self.prefix_repeat_deadline =
+                            Some(std::time::Instant::now() + self.config.prefix_repeat_timeout);
+                    }
                     return None;
                 }
                 self.mode = return_mode;
@@ -602,6 +619,7 @@ impl ClientShellState {
             ClientShellMode::Copy => {
                 if crate::config::terminal_key_matches_combo(key, self.config.keybinds.prefix) {
                     self.mode = ClientShellMode::Prefix;
+                    self.prefix_repeat_deadline = None;
                     outcome.repaint = true;
                 } else {
                     self.route_copy_mode_key(key, outcome);
