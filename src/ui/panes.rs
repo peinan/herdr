@@ -767,6 +767,18 @@ pub(crate) fn popup_border_label(
     (!expanded.is_empty()).then_some(expanded)
 }
 
+/// Pad the popup's border label the way a pane border pads its own.
+///
+/// A popup border is drawn by ratatui's [`Block`], which starts the title in
+/// the cell right after the corner glyph, so an unpadded label sits flush
+/// against the frame. Reuse the pane helper: it trims the label, wraps it in
+/// single spaces and truncates it to the width the border can spare, keeping
+/// the trailing space when the label is too long. `None` means the popup is
+/// too narrow for any title.
+pub(crate) fn popup_border_title(label: &str, popup_width: u16) -> Option<String> {
+    pane_border_title(label, popup_width, false)
+}
+
 /// Resolve the [`TitleField`]s a popup terminal can supply.
 ///
 /// A popup is not part of any workspace layout, so it has no foreground

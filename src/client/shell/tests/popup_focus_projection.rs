@@ -199,7 +199,7 @@ fn client_composes_popup_terminal_content_inside_client_owned_chrome() {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(text.contains("popup tit"));
+    assert!(text.contains("popup t…"));
     assert!(text.contains("popup-liv"));
     assert_eq!(
         frame.cursor.as_ref().map(|cursor| (cursor.x, cursor.y)),
