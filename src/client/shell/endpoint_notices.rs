@@ -50,6 +50,7 @@ pub(super) fn render_lifecycle_banner(
         &text,
         Style::default().fg(color).bg(palette.surface0),
     );
+    crate::ui::repair_wide_grapheme_edges(buffer, rect);
     rect
 }
 

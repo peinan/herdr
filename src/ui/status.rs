@@ -68,6 +68,8 @@ pub(crate) fn render_copy_feedback_buffer(
     let inner = block.inner(feedback_area);
     block.render(feedback_area, buffer);
 
+    super::widgets::repair_wide_grapheme_edges(buffer, feedback_area);
+
     if inner.height == 0 {
         return;
     }
@@ -115,6 +117,7 @@ pub(crate) fn render_config_diagnostic_buffer(
 
         Clear.render(diagnostic_area, buffer);
         Paragraph::new(Span::styled(text, style)).render(diagnostic_area, buffer);
+        super::widgets::repair_wide_grapheme_edges(buffer, diagnostic_area);
         rendered_rows = rendered_rows.saturating_add(1);
     }
 

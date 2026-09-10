@@ -726,10 +726,29 @@ fn repeat_ime_anchor_after_sync() -> bool {
 
 /// Writes all cells in the frame (full redraw).
 fn cell_width(cell: &CellData) -> usize {
-    if is_halfwidth_katakana_voiced_grapheme(&cell.symbol) {
+    symbol_cell_width(&cell.symbol)
+}
+
+/// Terminal columns a single grapheme occupies, matching the width the encoder
+/// assumes when it advances the cursor past a cell.
+pub(crate) fn symbol_cell_width(symbol: &str) -> usize {
+    if is_halfwidth_katakana_voiced_grapheme(symbol) {
         return 2;
     }
-    cell.symbol.width()
+    symbol.width()
+}
+
+/// Whether this cell holds the glyph of a grapheme that spans two columns, so
+/// the encoder paints over the following cell and emits nothing for it.
+pub(crate) fn is_wide_head(symbol: &str) -> bool {
+    symbol_cell_width(symbol) > 1
+}
+
+/// Whether this cell is the second half of a wide grapheme. The renderer
+/// stores it as an empty symbol, and the encoder writes no bytes for it, so it
+/// only ever displays whatever its head painted across it.
+pub(crate) fn is_wide_continuation(symbol: &str) -> bool {
+    symbol.is_empty()
 }
 
 fn is_halfwidth_katakana_voiced_grapheme(symbol: &str) -> bool {

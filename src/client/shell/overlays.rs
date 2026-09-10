@@ -251,6 +251,11 @@ fn panel(
         b[(a.x, y)].set_symbol("│").set_style(border);
         b[(a.right() - 1, y)].set_symbol("│").set_style(border);
     }
+    // Every modal overlay is framed here, so this is the one place that has to
+    // repair the wide graphemes the frame cut in half. Overlay bodies draw
+    // inside the returned rect and clip their own text, so they cannot reach
+    // this boundary.
+    crate::ui::repair_wide_grapheme_edges(b, a);
     Some(Rect::new(a.x + 1, a.y + 1, a.width - 2, a.height - 2))
 }
 fn popup(a: Rect, w: u16, h: u16) -> Option<Rect> {

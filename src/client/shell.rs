@@ -286,6 +286,11 @@ fn blit_pane_surface(target: &mut FrameData, source: &FrameData, area: Rect) {
         }
     }
 
+    // A clipped copy can end on the head of a wide grapheme whose second
+    // column was never copied, which would then paint over — and make the
+    // encoder skip — the first column of whatever sits beside the surface.
+    repair_frame_wide_grapheme_edges(target, Rect::new(area.x, area.y, copy_width, copy_height));
+
     target.cursor = source.cursor.as_ref().and_then(|cursor| {
         (cursor.x < copy_width && cursor.y < copy_height).then(|| crate::protocol::CursorState {
             x: area.x + cursor.x,
@@ -295,6 +300,44 @@ fn blit_pane_surface(target: &mut FrameData, source: &FrameData, area: Rect) {
         })
     });
     target.graphics.clear();
+}
+
+/// [`crate::ui::repair_wide_grapheme_edges`] for a [`FrameData`], for the
+/// writers that compose cells directly instead of through a ratatui buffer.
+fn repair_frame_wide_grapheme_edges(frame: &mut FrameData, area: Rect) {
+    if area.is_empty() || frame.width == 0 {
+        return;
+    }
+    let has_right_neighbour = area.right() < frame.width;
+    let mut blank = |x: u16, y: u16, broken: fn(&str) -> bool| {
+        let index = usize::from(y) * usize::from(frame.width) + usize::from(x);
+        if let Some(cell) = frame.cells.get_mut(index) {
+            if broken(&cell.symbol) {
+                cell.symbol = " ".to_owned();
+            }
+        }
+    };
+    for y in area.top()..area.bottom() {
+        if area.left() > 0 {
+            blank(
+                area.left() - 1,
+                y,
+                crate::protocol::render_ansi::is_wide_head,
+            );
+        }
+        if has_right_neighbour {
+            blank(
+                area.right() - 1,
+                y,
+                crate::protocol::render_ansi::is_wide_head,
+            );
+            blank(
+                area.right(),
+                y,
+                crate::protocol::render_ansi::is_wide_continuation,
+            );
+        }
+    }
 }
 
 #[cfg(test)]
