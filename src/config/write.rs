@@ -73,3 +73,47 @@ pub(crate) fn write_edit(edit: ConfigEdit<'_>) -> Result<(), String> {
         edit.apply(content)
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Settings edits rewrite config.toml textually. A `[keys]` section that uses
+    /// the fork's table-form bindings (`{ key, repeat }`) and `repeat_timeout`
+    /// must survive every edit untouched and still parse afterwards.
+    #[test]
+    fn config_edits_preserve_table_form_keybindings() {
+        let original = concat!(
+            "[keys]\n",
+            "repeat_timeout = 750\n",
+            "swap_pane_down = { key = \"prefix+shift+j\", repeat = true }\n",
+            "next_tab = [\"prefix+n\", \"prefix+l\"]\n",
+            "\n",
+            "[ui]\n",
+            "pane_borders = \"always\"\n",
+        );
+        let edits = [
+            ConfigEdit::Theme("mocha"),
+            ConfigEdit::StatusIndicators(super::super::StatusIndicatorStyle::Symbols),
+            ConfigEdit::Sound(false),
+            ConfigEdit::ToastDelivery(super::super::ToastDelivery::Off),
+        ];
+
+        for edit in edits {
+            let edited = edit.apply(original);
+            assert!(
+                edited.contains("swap_pane_down = { key = \"prefix+shift+j\", repeat = true }"),
+                "{} edit rewrote the table binding:\n{edited}",
+                edit.description()
+            );
+            let config: super::super::Config = toml::from_str(&edited).unwrap_or_else(|err| {
+                panic!("{} edit broke the config: {err}", edit.description())
+            });
+            assert_eq!(config.keys.repeat_timeout, 750);
+            let keybinds = config.keybinds();
+            assert_eq!(keybinds.swap_pane_down.bindings.len(), 1);
+            assert!(keybinds.swap_pane_down.bindings[0].repeatable);
+            assert_eq!(keybinds.next_tab.bindings.len(), 2);
+        }
+    }
+}
