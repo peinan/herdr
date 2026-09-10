@@ -15,7 +15,7 @@ pub(crate) use keybind_help::{
 };
 pub(crate) use keybindings::{
     resolve_custom_command, resolve_direct_binding, resolve_indexed_action,
-    resolve_non_indexed_action, resolve_prefix_binding, KeybindAction, KeybindDispatch,
+    resolve_non_indexed_action, resolve_prefix_binding_with_repeat, KeybindAction, KeybindDispatch,
     KeybindMatch,
 };
 pub(crate) use lease::{InputLeaseKey, InputLeaseTable, RepeatPlan};

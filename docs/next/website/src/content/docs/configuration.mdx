@@ -165,8 +165,6 @@ Key strings accept plain keys, modifier combinations such as `ctrl+a`, `shift+n`
 
 If you have old custom keybindings and want the new defaults, run `herdr config reset-keys`. Herdr backs up `config.toml`, removes `[keys]` and `[[keys.command]]`, and uses built-in v2 defaults after restart or `herdr server reload-config`.
 
-**Not available in this build:** repeatable prefix bindings are pending re-implementation on the client shell after the upstream 0.9.0 sync. The table form and `repeat_timeout` are still accepted so existing configs keep loading, but bindings behave as if `repeat = false`.
-
 A prefix binding can use a table form to opt in to tmux `bind -r` style repeat, so the bare key repeats the action while you stay armed in prefix mode:
 
 ```toml
