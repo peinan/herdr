@@ -27,10 +27,10 @@ git diff upstream/master...main -- src/config/model.rs # 追加した設定フ�
 | 非アクティブペイン減光 | `ui.dim_inactive_panes` | 非フォーカスのペインを薄くしてアクティブを強調。**既定 off**(減光なし、アップストリーム一致)、`true` で常時減光。0.9.0 sync でサーバ側ペイン面描画＋retained patch へ再実装 | 2026-06-26 | [#2](https://github.com/peinan/herdr/pull/2) / [`321db15`](https://github.com/peinan/herdr/commit/321db15), [#22](https://github.com/peinan/herdr/pull/22) / [`84a52ef`](https://github.com/peinan/herdr/commit/84a52ef) |
 | フォーカスマーカー | `ui.show_pane_focus_marker` | focused ペイン枠タイトル頭の `▌` マーカー。**既定 on**(アップストリーム)、`false` で色/太字のみ | 2026-06-26 | [`3eb5ef4`](https://github.com/peinan/herdr/commit/3eb5ef4), [#23](https://github.com/peinan/herdr/pull/23) / [`fbcc969`](https://github.com/peinan/herdr/commit/fbcc969) |
 | サイドバー区切り線 | `ui.sidebar_divider` | サイドバー/ペイン領域の縦区切り線の表示切替(0.9.0 sync でクライアントシェル `ClientShellConfig` へ移植) | 2026-06-26 | [#3](https://github.com/peinan/herdr/pull/3) / [`46a8de6`](https://github.com/peinan/herdr/commit/46a8de6) |
-| ズームマーカー | `ui.zoom_indicator` / `ui.zoom_indicator_position` | `prefix+z` ズーム時のマーカー文字と表示位置(`tab`/`pane`/`both`/`none`、**既定 `tab`**)。**タブ側は 0.9.0 sync 以降 未実装**(`tab` は何も表示せず、`both` はペインのみ) | 2026-06-26 | [#4](https://github.com/peinan/herdr/pull/4) / [`ffcdab9`](https://github.com/peinan/herdr/commit/ffcdab9), [#25](https://github.com/peinan/herdr/pull/25) / [`da3dbd8`](https://github.com/peinan/herdr/commit/da3dbd8) |
-| タブバースタイル | `ui.tab_bar_{style,align,title}` | `classic`/`minimal`(グリフ帯)を選択、**既定 `classic`**。**`minimal` は 0.9.0 sync 以降 未実装**(設定は受理・inert、[#34](https://github.com/peinan/herdr/issues/34))。`tab_bar_position` は upstream 同名キーに統一(既定 `top`) | 2026-06-27 | [#10](https://github.com/peinan/herdr/pull/10) / [`c19f18b`](https://github.com/peinan/herdr/commit/c19f18b), [#24](https://github.com/peinan/herdr/pull/24) / [`68fe136`](https://github.com/peinan/herdr/commit/68fe136) |
-| prefix 待機表示 | `ui.prefix_indicator` | prefix 待機の示し方(バー or 枠+タブ強調)。**`highlight` は 0.9.0 sync 以降 未実装**(inert、[#35](https://github.com/peinan/herdr/issues/35)) | 2026-06-27 | [#5](https://github.com/peinan/herdr/pull/5) / [`aa108e7`](https://github.com/peinan/herdr/commit/aa108e7) |
-| repeatable prefix バインド | `keys.*` / `keys.repeat_timeout` | tmux `bind -r` 風に素キーで繰り返し。**0.9.0 sync 以降 未実装**(設定は受理・inert、[#36](https://github.com/peinan/herdr/issues/36)) | 2026-06-26 | [#1](https://github.com/peinan/herdr/pull/1) / [`4874e19`](https://github.com/peinan/herdr/commit/4874e19) |
+| ズームマーカー | `ui.zoom_indicator` / `ui.zoom_indicator_position` | `prefix+z` ズーム時のマーカー文字と表示位置(`tab`/`pane`/`both`/`none`、**既定 `tab`**)。**タブ側は 0.9.0 sync 以降 upstream 固定のラベル末尾 ` Z`**(`zoom_indicator` / `zoom_indicator_position` はペイン側にのみ効く) | 2026-06-26 | [#4](https://github.com/peinan/herdr/pull/4) / [`ffcdab9`](https://github.com/peinan/herdr/commit/ffcdab9), [#25](https://github.com/peinan/herdr/pull/25) / [`da3dbd8`](https://github.com/peinan/herdr/commit/da3dbd8) |
+| タブバースタイル | `ui.tab_bar_{style,align,title}` | `classic`/`minimal`(グリフ帯)を選択、**既定 `classic`**。0.9.0 sync 後にクライアントシェル(`src/client/shell/tabs.rs`)へ再実装([#34](https://github.com/peinan/herdr/issues/34))。`tab_bar_position` は upstream 同名キーに統一(既定 `top`) | 2026-06-27 | [#10](https://github.com/peinan/herdr/pull/10) / [`c19f18b`](https://github.com/peinan/herdr/commit/c19f18b), [#24](https://github.com/peinan/herdr/pull/24) / [`68fe136`](https://github.com/peinan/herdr/commit/68fe136), [#39](https://github.com/peinan/herdr/pull/39) / [`53b2d25`](https://github.com/peinan/herdr/commit/53b2d25) |
+| prefix 待機表示 | `ui.prefix_indicator` | prefix 待機の示し方(バー or 枠+タブ強調)。0.9.0 sync 後にクライアント合成(`src/client/shell/composition.rs`)へ再実装([#35](https://github.com/peinan/herdr/issues/35)) | 2026-06-27 | [#5](https://github.com/peinan/herdr/pull/5) / [`aa108e7`](https://github.com/peinan/herdr/commit/aa108e7), [#38](https://github.com/peinan/herdr/pull/38) / [`0d24729`](https://github.com/peinan/herdr/commit/0d24729) |
+| repeatable prefix バインド | `keys.*` / `keys.repeat_timeout` | tmux `bind -r` 風に素キーで繰り返し。0.9.0 sync 後にクライアントシェル(`src/client/shell/input.rs`)へ再実装([#36](https://github.com/peinan/herdr/issues/36)) | 2026-06-26 | [#1](https://github.com/peinan/herdr/pull/1) / [`4874e19`](https://github.com/peinan/herdr/commit/4874e19), [#37](https://github.com/peinan/herdr/pull/37) / [`b9e047d`](https://github.com/peinan/herdr/commit/b9e047d) |
 | 個人用 Makefile | 新規ファイル | build / install ターゲット | 2026-06-26 | [`38f7787`](https://github.com/peinan/herdr/commit/38f7787) |
 | `CLAUDE.local.md` | 新規ファイル | フォークのブランチ運用・同期・PR 手順 | 2026-06-28 | [`541eb1c`](https://github.com/peinan/herdr/commit/541eb1c), [`926ccc1`](https://github.com/peinan/herdr/commit/926ccc1) |
 
@@ -41,7 +41,7 @@ git diff upstream/master...main -- src/config/model.rs # 追加した設定フ�
 **0.9.0 sync(2026-09-10)での整理**: upstream [#3487](https://github.com/ogulcancelik/herdr/pull/3487) で shell 描画(タブバー・サイドバー・モードバー・prefix・キー配送)が
 クライアントへ移ったため、`ui.single_pane_border` は廃止(upstream の `pane_borders = "always"`＋`pane_outer_borders = true` が同等)、
 フォーク独自の `tab_bar_position` は upstream 同名キーに統一(既定 `top`、classic にも適用)、minimal タブバー /
-`prefix_indicator = "highlight"` / repeatable prefix は再実装待ち([#34](https://github.com/peinan/herdr/issues/34) / [#35](https://github.com/peinan/herdr/issues/35) / [#36](https://github.com/peinan/herdr/issues/36)。設定キーは parse のみで inert)。
+`prefix_indicator = "highlight"` / repeatable prefix は同日中にクライアントシェル上で再実装した([#39](https://github.com/peinan/herdr/pull/39) / [#38](https://github.com/peinan/herdr/pull/38) / [#37](https://github.com/peinan/herdr/pull/37))。
 
 ## 追加した設定項目
 
@@ -53,13 +53,13 @@ git diff upstream/master...main -- src/config/model.rs # 追加した設定フ�
 | `ui.show_pane_focus_marker` | bool | `true` | focused ペイン枠タイトル頭の `▌` マーカー。既定 `true`=アップストリーム、`false` で非表示(フォーカスは色/太字のみ) |
 | `ui.sidebar_divider` | bool | `true` | サイドバーとメインのペイン領域のあいだの縦区切り線。`false` で非表示 |
 | `ui.zoom_indicator` | string | `"Z"` | `prefix+z` ズーム時のマーカー文字。表示位置は `zoom_indicator_position`。`""` で非表示 |
-| `ui.zoom_indicator_position` | enum | `"tab"` | ズームマーカーの表示位置。`tab`(既定)/`pane`/`both`/`none`。`pane_title_format` の `$zoom` もこれに従う。文字が空 or `none` で非表示。タブ側は再実装待ち(`tab` は非表示、`both` はペインのみ) |
-| `ui.tab_bar_style` | enum | `"classic"` | タブバーのスタイル。`classic`=テキストタブ(スクロール可、アップストリーム)/`minimal`=グリフ帯。**`minimal` は未実装(inert、[#34](https://github.com/peinan/herdr/issues/34))** |
-| `ui.tab_bar_align` | enum | `"right"` | `minimal` のときの寄せ。`left`/`right`。`classic` では無効。inert([#34](https://github.com/peinan/herdr/issues/34)) |
-| `ui.tab_bar_title` | bool | `false` | `minimal` でタブ名も併記するか。`classic` では常にテキスト。inert([#34](https://github.com/peinan/herdr/issues/34)) |
-| `ui.prefix_indicator` | enum | `"status_bar"` | prefix 待機の表示。`status_bar`=下部ヒントバー / `highlight`=バーを隠しフォーカス枠+アクティブタブを再着色。**`highlight` は未実装(inert、[#35](https://github.com/peinan/herdr/issues/35))** |
-| `keys.repeat_timeout` | u64 (ms) | `500` | repeatable バインドがアーム状態を保つ時間。**未実装(inert、[#36](https://github.com/peinan/herdr/issues/36))** |
-| `keys.<action>`(テーブル形式) | `{ key, repeat }` | `repeat = false` | `{ key = "prefix+n", repeat = true }` で tmux `bind -r` 風の繰り返しを有効化。文字列/配列形式は repeat しない。**未実装(inert、[#36](https://github.com/peinan/herdr/issues/36))** |
+| `ui.zoom_indicator_position` | enum | `"tab"` | ズームマーカーの表示位置。`tab`(既定)/`pane`/`both`/`none`。`pane_title_format` の `$zoom` もこれに従う。文字が空 or `none` で非表示。タブ側は upstream 固定の ` Z`(この設定はペイン側にのみ効く) |
+| `ui.tab_bar_style` | enum | `"classic"` | タブバーのスタイル。`classic`=テキストタブ(スクロール可、アップストリーム)/`minimal`=グリフ帯 |
+| `ui.tab_bar_align` | enum | `"right"` | `minimal` のときの寄せ。`left`/`right`。`classic` では無効 |
+| `ui.tab_bar_title` | bool | `false` | `minimal` でタブ名も併記するか。`classic` では常にテキスト |
+| `ui.prefix_indicator` | enum | `"status_bar"` | prefix 待機の表示。`status_bar`=下部ヒントバー / `highlight`=バーを隠しフォーカス枠+アクティブタブを再着色 |
+| `keys.repeat_timeout` | u64 (ms) | `500` | repeatable バインドがアーム状態を保つ時間。`0` は既定値に丸める |
+| `keys.<action>`(テーブル形式) | `{ key, repeat }` | `repeat = false` | `{ key = "prefix+n", repeat = true }` で tmux `bind -r` 風の繰り返しを有効化。文字列/配列形式は repeat しない |
 
 ## 補足: ペインタイトル書式 (`pane_title_format`)
 
@@ -95,9 +95,9 @@ pane_title_format = "$dir $process( ⋅ $branch$ahead_behind$git_status)( $zoom)
 
 ## 補足: タブバースタイル (`tab_bar_style`)
 
-タブバーは 2 系統から選べる。既定は `classic`(アップストリーム相当)。**0.9.0 sync 以降、`minimal` は未実装**
-(upstream [#3487](https://github.com/ogulcancelik/herdr/pull/3487) でタブバーがクライアントシェルへ移ったため描画コードを削除。設定は受理されるが `classic` で描かれる。
-再実装は [#34](https://github.com/peinan/herdr/issues/34))。以下は旧実装の仕様。
+タブバーは 2 系統から選べる。既定は `classic`(アップストリーム相当)。upstream [#3487](https://github.com/ogulcancelik/herdr/pull/3487)
+でタブバーがクライアントシェルへ移ったため、`minimal` は 0.9.0 sync でいったん描画コードを失い、同日中に
+`src/client/shell/tabs.rs` のスタイル分岐として再実装した([#34](https://github.com/peinan/herdr/issues/34) → [#39](https://github.com/peinan/herdr/pull/39))。
 
 ```toml
 [ui]
@@ -113,14 +113,15 @@ tab_bar_title    = false       # minimal のみ: グリフの横にタブ名を�
 - **`minimal`**: このフォークが導入したグリフ帯。`position`(上/下)・`align`(左/右)・
   `title`(タブ名併記の有無)で調整する。
 - **旧フォークの見た目(下端・右寄せ・グリフ帯)に戻すには** `tab_bar_style = "minimal"` と `tab_bar_position = "bottom"` を書く
-  (`align=right` / `title=false` が既定)。**現在は未実装のため反映されない**([#34](https://github.com/peinan/herdr/issues/34))。
-- ズームマーカーのタブ側表示(`zoom_indicator_position` が `tab`/`both`)は 0.9.0 sync 以降 未実装。upstream の
+  (`align=right` / `title=false` が既定)。
+- ズームマーカーのタブ側表示は 0.9.0 sync 以降 upstream 固定(ズーム中のタブラベル末尾に ` Z`。`zoom_indicator` /
+  `zoom_indicator_position` はペイン側にのみ効く)。minimal の glyph-only ではラベル自体を描かないので出ない。upstream の
   `tab_bar_right = [{ type = "zoom" }]` で右端に `ZOOM` を出せる。
 
 ## 補足: repeatable prefix バインド
 
-**0.9.0 sync 以降 未実装**(upstream [#3487](https://github.com/ogulcancelik/herdr/pull/3487) でキー配送がクライアントシェルへ移ったため動作コードを削除。
-`repeat = true` / `repeat_timeout` は受理されるが無効。再実装は [#36](https://github.com/peinan/herdr/issues/36))。以下は旧実装の仕様。
+upstream [#3487](https://github.com/ogulcancelik/herdr/pull/3487) でキー配送がクライアントシェルへ移ったため 0.9.0 sync でいったん動作コードを失い、
+同日中に `src/client/shell/input.rs::route_key_press` のアーム状態(`prefix_repeat_deadline`)として再実装した([#36](https://github.com/peinan/herdr/issues/36) → [#37](https://github.com/peinan/herdr/pull/37))。
 
 ```toml
 [keys]
@@ -147,7 +148,12 @@ repeat_timeout = 500
   - upstream [#3487](https://github.com/ogulcancelik/herdr/pull/3487) で shell(タブバー・サイドバー・モードバー・prefix・キー配送)がクライアント側描画へ移行。
   - **廃止**: `single_pane_border`(upstream `pane_borders = "always"` で代替)、フォーク独自 `tab_bar_position`(upstream 同名キーに統一、既定 `top`)、タブバー上下配置・モードバー相乗りの独自実装。
   - **維持**: `pane_title_format`(git 情報は upstream の demand 駆動 `git_refresh.rs` に `working_tree` demand を足して供給)、`pane_padding`、`show_pane_focus_marker`、ペイン側ズームマーカー、`dim_inactive_panes`(サーバ側ペイン面描画＋retained patch で再実装)、`sidebar_divider`(クライアントシェルへ移植)。
-  - **再実装待ち(設定は parse のみ)**: minimal タブバー [#34](https://github.com/peinan/herdr/issues/34)、`prefix_indicator = "highlight"` [#35](https://github.com/peinan/herdr/issues/35)、repeatable prefix [#36](https://github.com/peinan/herdr/issues/36)。タブ側ズームマーカーも当面非表示。
+  - **再実装待ち(設定は parse のみ)**: minimal タブバー [#34](https://github.com/peinan/herdr/issues/34)、`prefix_indicator = "highlight"` [#35](https://github.com/peinan/herdr/issues/35)、repeatable prefix [#36](https://github.com/peinan/herdr/issues/36)(いずれも同日中に下記で再実装)。タブ側ズームマーカーは upstream 固定の ` Z` 表示。
+- 上記 3 機能をクライアントシェル上で再実装(wire / server 変更なし):
+  - minimal タブバー(`tab_bar_style` / `tab_bar_align` / `tab_bar_title`)を `src/client/shell/tabs.rs` のスタイル分岐として移植。ヒット領域・ドロップ指標も同じレイアウトから導出 — [#39](https://github.com/peinan/herdr/pull/39) ([`53b2d25`](https://github.com/peinan/herdr/commit/53b2d25))
+  - `prefix_indicator = "highlight"` をクライアント合成で再実装(フォーカス枠リングの accent セルを yellow に置換、モードバー抑止(エラー表示は温存)、active タブ再着色)— [#38](https://github.com/peinan/herdr/pull/38) ([`0d24729`](https://github.com/peinan/herdr/commit/0d24729))
+  - repeatable prefix(`repeat = true` / `repeat_timeout`)を `route_key_press` のアーム状態と `prefix_repeat_deadline` タイマーで再実装。判定は実行後の状態(mode / overlay)由来 — [#37](https://github.com/peinan/herdr/pull/37) ([`b9e047d`](https://github.com/peinan/herdr/commit/b9e047d))
+  - `keyboard.mdx` の fork 独自セクション(repeatable prefix)を ja / zh-cn に翻訳し、docs 翻訳パリティ検査を通した。
 
 ### 2026-07-08
 - フォーク独自 UI を「既定 off/opt-in・素の起動時はアップストリーム相当の見た目」に整理(統合 [#16](https://github.com/peinan/herdr/issues/16))。

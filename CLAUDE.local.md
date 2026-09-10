@@ -36,7 +36,7 @@ git push origin main
 - `rerere` + `merge.conflictStyle=zdiff3` は有効化済み（→ FORK_WORKFLOW §0）。
 - `just check` は UI 機能の欠落を検出できない。マージ後に自分のカスタマイズの描画も目視する。
 - 進行中の `feat/*` worktree が少ないときに取り込む。
-- 複数リリース分遅れたらリリースタグ単位で段階マージ（`v0.8.0` → `v0.8.2` → `upstream/master`）。直近: 2026-09-10 に v0.9.0 まで同期（詳細は `docs/fork/FORK_FEATURES.md` 変更履歴、再実装待ちは issue #34/#35/#36）。
+- 複数リリース分遅れたらリリースタグ単位で段階マージ（`v0.8.0` → `v0.8.2` → `upstream/master`）。直近: 2026-09-10 に v0.9.0 まで同期（詳細は `docs/fork/FORK_FEATURES.md` 変更履歴。sync で落とした 3 機能は同日中に #34/#35/#36 で再実装済み）。
 
 ## 機能開発 / PR
 
