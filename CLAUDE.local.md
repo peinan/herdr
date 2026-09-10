@@ -64,6 +64,9 @@ gh api repos/peinan/herdr/pulls \
 ZIG=~/.local/share/herdr-fork/zig mise exec -- just check
 ```
 
-- herdr セッション内でテストするときは `HERDR_*` 環境変数を全部外す（`env -u HERDR_ENV -u HERDR_PANE_ID -u HERDR_SOCKET_PATH -u HERDR_TAB_ID -u HERDR_WORKSPACE_ID ...`）。
-- `tests/live_handoff.rs` の 2 件（`..._keeps_unmanaged_agent_name_bound_to_saved_session`, `..._preserves_pane_process_io`）は
-  この Mac（macOS 26.6）では素の upstream でも落ちる環境依存。`cargo nextest run --no-fail-fast` でこの 2 件だけなら合格扱い。
+- herdr セッション内でテストするときは `HERDR_*` 環境変数を全部外す（`env -u HERDR_ENV -u HERDR_PANE_ID -u HERDR_SOCKET_PATH -u HERDR_CLIENT_SOCKET_PATH -u HERDR_TAB_ID -u HERDR_WORKSPACE_ID ...`）。
+  この `env -u ...` を前置するときは **`ZIG` を `$HOME` で書く**（`ZIG=~/...` は `env` の引数になりチルダが展開されない）:
+  `env -u HERDR_ENV ... ZIG="$HOME/.local/share/herdr-fork/zig" mise exec -- just check`
+- **この Mac（macOS 26.6）では `just check` は素の `main` でも緑にならない。** 環境依存の統合テストが 7 件落ちる
+  （PTY / SSH / マルチクライアント系。詳細と一覧は FORK_WORKFLOW §0）。`just check` は fail-fast なので
+  `cargo nextest run --no-fail-fast` で全体を取り、その一覧と照合して判断する。**失敗数だけを見て自分の変更のせいだと判断しない。**

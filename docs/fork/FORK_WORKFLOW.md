@@ -74,11 +74,28 @@ git config merge.conflictStyle zdiff3   # 共通ベースを表示（古い git 
   ```
   15.4 SDK が CLT から消えたら、`arm64-macos` を含む別 SDK を指す。
 - herdr セッションの中でテストを走らせるときは `HERDR_*` 環境変数を全部外す（PTY 系テストが誤動作する）:
-  `env -u HERDR_ENV -u HERDR_PANE_ID -u HERDR_SOCKET_PATH -u HERDR_TAB_ID -u HERDR_WORKSPACE_ID mise exec -- just check`
-- 既知の環境依存テスト（macOS 26.6、素の upstream でも同一に失敗する）: `tests/live_handoff.rs` の
-  `live_handoff_keeps_unmanaged_agent_name_bound_to_saved_session`（`/bin/sleep` の環境変数が他プロセスから見えず
-  `HERDR_AGENT` ヒントを検出できない）と `live_handoff_preserves_pane_process_io`（`os error 22`）。`just check` は
-  fail-fast なので、`cargo nextest run --no-fail-fast` で全体を見てこの 2 件だけなら合格扱いにする。
+  `env -u HERDR_ENV -u HERDR_PANE_ID -u HERDR_SOCKET_PATH -u HERDR_CLIENT_SOCKET_PATH -u HERDR_TAB_ID -u HERDR_WORKSPACE_ID ZIG="$HOME/.local/share/herdr-fork/zig" mise exec -- just check`
+  `env` を前置する形では `ZIG=~/...` のチルダが展開されない（`env` の引数になるため）ので `$HOME` で書く。
+
+### 既知の環境依存テスト失敗（macOS 26.6）
+
+**この Mac では `just check` は素の `main` でも緑にならない。** 以下 7 件は PTY / SSH / マルチクライアントの
+統合テストで、フォークの変更とは無関係に失敗する（pristine な `main` で同一に再現することを 2026-09-11 に確認）。
+
+| バイナリ | テスト |
+|---|---|
+| `live_handoff` | `live_handoff_preserves_pane_process_io`（`os error 22`） |
+| `live_handoff` | `live_handoff_keeps_unmanaged_agent_name_bound_to_saved_session`（`/bin/sleep` の環境変数が他プロセスから見えず `HERDR_AGENT` ヒントを検出できない） |
+| `live_handoff` | `live_server_holds_one_pty_master_fd_per_pane` |
+| `api_ping` | `events_subscribe_streams_output_and_agent_status_events` |
+| `multi_client` | `same_tab_geometry_follows_meaningful_client_activity` |
+| `multi_client` | `api_pane_output_is_fanned_out_as_pane_surface_updates` |
+| `client_mode` | `federated_*`（実行ごとに `federated_client_starts_without_local_and_survives_its_restart` / `federated_launch_opens_local_directly_while_saved_ssh_is_unavailable` のどちらかが落ちる） |
+
+`just check` は fail-fast で最初の数件で止まるため、判定には必ず `cargo nextest run --no-fail-fast` を使い、
+上の一覧と照合する。**失敗件数だけを見て自分の変更のせいだと判断しない。**
+同じ系統は CI の macOS ジョブでもたまに落ちる（実例: [#46](https://github.com/peinan/herdr/pull/46) の
+`federated_launch_opens_local_directly_while_saved_ssh_is_unavailable`）。その場合は失敗ジョブを再実行して切り分ける。
 
 ## 1. 機能開発（日常の主作業）
 
