@@ -120,6 +120,7 @@ impl ClientShellConfig {
             sidebar_collapsed_mode: config.ui.sidebar_collapsed_mode,
             sidebar_divider: config.ui.sidebar_divider,
             mobile_width_threshold: config.ui.mobile_width_threshold,
+            prefix_indicator: config.ui.prefix_indicator,
             tab_bar_position: config.ui.tab_bar_position,
             tab_bar_style: config.ui.tab_bar_style,
             tab_bar_align: config.ui.tab_bar_align,
@@ -331,6 +332,7 @@ impl ClientShellConfig {
                 self.sidebar_collapsed_mode = ui.sidebar_collapsed_mode;
                 self.sidebar_divider = ui.sidebar_divider;
                 self.mobile_width_threshold = ui.mobile_width_threshold;
+                self.prefix_indicator = ui.prefix_indicator;
                 self.tab_bar_position = ui.tab_bar_position;
                 self.tab_bar_style = ui.tab_bar_style;
                 self.tab_bar_align = ui.tab_bar_align;
@@ -469,6 +471,7 @@ mod tests {
         let mut next = Config::default();
         next.ui.sidebar_width = 31;
         next.ui.tab_bar_position = TabBarPositionConfig::Bottom;
+        next.ui.prefix_indicator = PrefixIndicatorConfig::Highlight;
         next.ui.tab_bar_style = TabBarStyle::Minimal;
         next.ui.tab_bar_align = TabBarAlign::Left;
         next.ui.tab_bar_title = true;
@@ -483,6 +486,7 @@ mod tests {
         assert!(diagnostics.is_empty());
         assert_eq!(shell.sidebar_width, 31);
         assert_eq!(shell.tab_bar_position, TabBarPositionConfig::Bottom);
+        assert_eq!(shell.prefix_indicator, PrefixIndicatorConfig::Highlight);
         assert_eq!(shell.tab_bar_style, TabBarStyle::Minimal);
         assert_eq!(shell.tab_bar_align, TabBarAlign::Left);
         assert!(shell.tab_bar_title);
@@ -513,6 +517,11 @@ mod tests {
         assert_eq!(shell.tab_bar_style, TabBarStyle::Minimal);
         assert_eq!(shell.tab_bar_align, TabBarAlign::Left);
         assert!(shell.tab_bar_title);
+        assert_eq!(
+            shell.prefix_indicator,
+            PrefixIndicatorConfig::Highlight,
+            "an invalid [ui] section keeps the previous prefix indicator"
+        );
         assert_eq!(
             shell.keybinds.prefix,
             (KeyCode::Char('a'), KeyModifiers::CONTROL)

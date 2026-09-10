@@ -77,6 +77,9 @@ pub(crate) struct ClientShellConfig {
     /// Draw the vertical divider between the sidebar and the pane area.
     pub(super) sidebar_divider: bool,
     pub(super) mobile_width_threshold: u16,
+    /// How prefix mode is signalled: the bottom hint bar, or recoloring the
+    /// focused pane border and the active tab.
+    pub(super) prefix_indicator: PrefixIndicatorConfig,
     pub(super) tab_bar_position: TabBarPositionConfig,
     pub(super) tab_bar_style: TabBarStyle,
     pub(super) tab_bar_align: TabBarAlign,

@@ -228,6 +228,8 @@ pub(super) struct ShellRenderState<'a> {
     pub(super) sidebar_collapsed: bool,
     pub(super) sidebar_section_split: f32,
     pub(super) tab_drag_insert_index: Option<usize>,
+    /// Prefix mode is signalled by recoloring instead of the bottom hint bar.
+    pub(super) prefix_highlight: bool,
     pub(super) selected_workspace_id: Option<&'a WorkspaceNavigationTarget>,
     pub(super) reveal_navigation_workspace: &'a mut bool,
     pub(super) dragged_workspace_id: Option<&'a str>,
@@ -302,6 +304,7 @@ pub(super) fn render_shell(
             state.tab_scroll,
             state.reveal_focused_tab,
             state.tab_drag_insert_index,
+            state.prefix_highlight,
             &mut hits,
         );
     }

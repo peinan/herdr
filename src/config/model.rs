@@ -982,9 +982,6 @@ pub struct UiConfig {
     /// How prefix mode is indicated. "status_bar" shows the bottom hint bar
     /// (default); "highlight" hides it and recolors the focused pane border and
     /// active tab instead.
-    // Parsed but inert: prefix mode moved to the client shell in upstream
-    // #3487, and the highlight indicator has not been re-implemented there yet.
-    #[allow(dead_code)]
     pub prefix_indicator: PrefixIndicatorConfig,
     /// Tab bar visual style. "classic" is the text-label bar with horizontal
     /// scrolling (default, upstream look); "minimal" is the compact Nerd-Font

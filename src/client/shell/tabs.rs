@@ -22,6 +22,7 @@ pub(crate) fn render_tab_bar(
     tab_scroll: &mut usize,
     reveal_focused_tab: &mut bool,
     tab_drag_insert_index: Option<usize>,
+    prefix_highlight: bool,
     hits: &mut ShellHitMap,
 ) {
     let palette = &config.palette;
@@ -41,6 +42,7 @@ pub(crate) fn render_tab_bar(
             tab_scroll,
             reveal_focused_tab,
             tab_drag_insert_index,
+            prefix_highlight,
             hits,
         ),
         TabBarStyle::Minimal => render_minimal_tabs(
@@ -52,6 +54,7 @@ pub(crate) fn render_tab_bar(
             tab_scroll,
             reveal_focused_tab,
             tab_drag_insert_index,
+            prefix_highlight,
             hits,
         ),
     }
@@ -67,6 +70,7 @@ fn render_classic_tabs(
     tab_scroll: &mut usize,
     reveal_focused_tab: &mut bool,
     tab_drag_insert_index: Option<usize>,
+    prefix_highlight: bool,
     hits: &mut ShellHitMap,
 ) {
     let palette = &config.palette;
@@ -153,7 +157,11 @@ fn render_classic_tabs(
         let style = if tab.focused {
             let base = Style::default()
                 .fg(panel_contrast_fg(palette))
-                .bg(palette.accent);
+                .bg(if prefix_highlight {
+                    palette.yellow
+                } else {
+                    palette.accent
+                });
             if tab.custom_label {
                 base.add_modifier(Modifier::BOLD)
             } else {
@@ -287,6 +295,7 @@ fn render_minimal_tabs(
     tab_scroll: &mut usize,
     reveal_focused_tab: &mut bool,
     tab_drag_insert_index: Option<usize>,
+    prefix_highlight: bool,
     hits: &mut ShellHitMap,
 ) {
     let palette = &config.palette;
@@ -334,7 +343,7 @@ fn render_minimal_tabs(
             break;
         }
         let rect = Rect::new(x, area.y, width, 1);
-        let (marker, fg) = minimal_marker(tab, palette);
+        let (marker, fg) = minimal_marker(tab, palette, prefix_highlight);
         let text = if show_title {
             format!("{marker} {}", tab_label(tab))
         } else {
@@ -382,9 +391,18 @@ fn minimal_slot_width(tab: &ClientShellTab, show_title: bool) -> u16 {
 
 /// Glyph and foreground color for one minimal marker. The only place the
 /// active marker's color is decided.
-fn minimal_marker(tab: &ClientShellTab, palette: &Palette) -> (char, ratatui::style::Color) {
+fn minimal_marker(
+    tab: &ClientShellTab,
+    palette: &Palette,
+    prefix_highlight: bool,
+) -> (char, ratatui::style::Color) {
     if tab.focused {
-        (TAB_MARKER_ACTIVE, palette.accent)
+        let fg = if prefix_highlight {
+            palette.yellow
+        } else {
+            palette.accent
+        };
+        (TAB_MARKER_ACTIVE, fg)
     } else {
         (TAB_MARKER_INACTIVE, palette.overlay1)
     }
