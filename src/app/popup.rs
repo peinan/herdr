@@ -145,9 +145,12 @@ impl App {
             let (estimated_rows, estimated_cols) = self.state.estimate_pane_size();
             ratatui::layout::Rect::new(0, 0, estimated_cols, estimated_rows)
         };
-        let Some(resolved_geometry) =
-            resolve_popup_geometry(geometry.width, geometry.height, terminal_area)
-        else {
+        let Some(resolved_geometry) = resolve_popup_geometry(
+            geometry.width,
+            geometry.height,
+            self.state.popup_padding,
+            terminal_area,
+        ) else {
             return Err(std::io::Error::other("terminal area too small for popup"));
         };
         let rows = resolved_geometry.inner.height;

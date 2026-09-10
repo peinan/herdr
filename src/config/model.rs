@@ -968,6 +968,24 @@ pub struct UiConfig {
     /// Set to false to indicate focus with accent color and bold only.
     /// Default: true.
     pub show_pane_focus_marker: bool,
+    /// Padding, in cells, inside the popup pane between its border and the
+    /// terminal content. Specified per side (`{ top, right, bottom, left }`);
+    /// omitted sides default to 0. Default: all zero (no padding).
+    pub popup_padding: PanePadding,
+    /// Custom popup border title format. Uses the same syntax as
+    /// `pane_title_format`; a popup resolves `$dir` and `$cwd`, plus the git
+    /// variables while a pane shares the repository, and leaves `$process`,
+    /// `$agent` and `$zoom` empty. A popup opened with an explicit name (a
+    /// plugin entrypoint title) keeps that name. Empty disables the format and
+    /// keeps the default label. Default: "".
+    pub popup_title_format: String,
+    /// How much of the popup pane gets the panel background painted behind
+    /// it. "panel" (default) covers the border and the padding; "all" also
+    /// fills in behind content the program left on the terminal's default
+    /// background, so the popup reads as solid; "transparent" covers none of
+    /// it, so a transparent terminal stays transparent around the popup.
+    /// A program that chooses its own background always keeps it.
+    pub popup_background: PopupBackground,
     /// Draw the vertical divider line between the sidebar and the main pane
     /// area. Set to false to hide it. Default: true.
     pub sidebar_divider: bool,
@@ -1037,6 +1055,22 @@ pub struct PanePadding {
     pub bottom: u16,
     /// Cells of padding to the left of the content.
     pub left: u16,
+}
+
+/// How much of the popup pane gets the panel background painted behind it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PopupBackground {
+    /// The border and the padding (default, current behavior). The content
+    /// area keeps whatever background the program inside the popup draws.
+    #[default]
+    Panel,
+    /// The whole popup, filling in behind content the program left on the
+    /// terminal's default background so the popup reads as solid.
+    All,
+    /// None of it, so a transparent terminal stays transparent around the
+    /// popup's content.
+    Transparent,
 }
 
 /// How prefix mode is indicated on screen while the prefix key is pending.
@@ -1306,6 +1340,9 @@ impl Default for UiConfig {
             pane_title_format: String::new(),
             dim_inactive_panes: false,
             show_pane_focus_marker: true,
+            popup_padding: PanePadding::default(),
+            popup_title_format: String::new(),
+            popup_background: PopupBackground::Panel,
             sidebar_divider: true,
             zoom_indicator: "Z".into(),
             zoom_indicator_position: ZoomIndicatorPosition::Tab,
@@ -1745,6 +1782,39 @@ pane_padding = { left = 2 }
                 left: 2
             }
         );
+    }
+
+    #[test]
+    fn popup_style_defaults_and_parses() {
+        let default_config = Config::default();
+        assert_eq!(default_config.ui.popup_padding, PanePadding::default());
+        assert!(default_config.ui.popup_title_format.is_empty());
+        assert_eq!(default_config.ui.popup_background, PopupBackground::Panel);
+
+        let config: Config = toml::from_str(
+            r#"
+[ui]
+popup_padding = { top = 1, left = 2 }
+popup_title_format = "$dir( ⋅ $branch)"
+popup_background = "transparent"
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            config.ui.popup_padding,
+            PanePadding {
+                top: 1,
+                right: 0,
+                bottom: 0,
+                left: 2
+            }
+        );
+        assert_eq!(config.ui.popup_title_format, "$dir( ⋅ $branch)");
+        assert_eq!(config.ui.popup_background, PopupBackground::Transparent);
+        // The pane keys stay independent so an existing pane_padding setting
+        // does not silently change how popups look.
+        assert_eq!(config.ui.pane_padding, PanePadding::default());
+        assert!(config.ui.pane_title_format.is_empty());
     }
 
     #[test]

@@ -85,6 +85,13 @@ pub(crate) struct ClientShellConfig {
     pub(super) tab_bar_align: TabBarAlign,
     pub(super) tab_bar_title: bool,
     pub(super) hide_tab_bar_when_single_tab: bool,
+    /// Padding inside the popup pane's border. The server resolves the same
+    /// value from its own config when it sizes the popup PTY, so a client
+    /// whose config disagrees falls back to the unpadded geometry rather than
+    /// blitting a frame that no longer fits.
+    pub(super) popup_padding: crate::config::PanePadding,
+    /// What fills the popup pane's border and padding.
+    pub(super) popup_background: crate::config::PopupBackground,
     pub(super) spaces: SpacesSidebarConfig,
     pub(super) agents: crate::config::AgentsSidebarConfig,
     pub(super) agent_panel_sort: crate::config::AgentPanelSortConfig,

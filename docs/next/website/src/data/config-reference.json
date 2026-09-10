@@ -1036,6 +1036,47 @@
           "description": "Show the ▌ marker at the start of the focused pane's border title. When false, focus is indicated with accent color and bold only."
         },
         {
+          "key": "ui.popup_padding.top",
+          "type": "integer",
+          "default": "0",
+          "description": "Padding rows, in cells, inside the popup pane between its top border and the terminal content."
+        },
+        {
+          "key": "ui.popup_padding.right",
+          "type": "integer",
+          "default": "0",
+          "description": "Padding columns, in cells, inside the popup pane between its right border and the terminal content."
+        },
+        {
+          "key": "ui.popup_padding.bottom",
+          "type": "integer",
+          "default": "0",
+          "description": "Padding rows, in cells, inside the popup pane between its bottom border and the terminal content."
+        },
+        {
+          "key": "ui.popup_padding.left",
+          "type": "integer",
+          "default": "0",
+          "description": "Padding columns, in cells, inside the popup pane between its left border and the terminal content."
+        },
+        {
+          "key": "ui.popup_title_format",
+          "type": "string",
+          "default": "\"\"",
+          "description": "Custom popup border title, using the same starship-style syntax as pane_title_format. A popup resolves $dir and $cwd, plus $branch, $ahead_behind and $git_status while a pane shares the repository; $process, $agent and $zoom never apply and their conditional groups drop out. A popup opened with an explicit name keeps that name. Empty keeps the built-in label."
+        },
+        {
+          "key": "ui.popup_background",
+          "type": "enum",
+          "default": "\"panel\"",
+          "description": "How much of the popup pane gets the panel background painted behind it: panel covers the border and the padding, all also fills in behind content the program left on the terminal's default background so the popup reads as solid, and transparent covers none of it so a transparent terminal stays transparent around the popup. A program that chooses its own background always keeps it.",
+          "values": [
+            "panel",
+            "all",
+            "transparent"
+          ]
+        },
+        {
           "key": "ui.sidebar_divider",
           "type": "boolean",
           "default": "true",

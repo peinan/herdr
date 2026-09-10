@@ -460,7 +460,7 @@ pub(super) fn render_panes(
 
 pub(crate) fn popup_pane_rects(app: &AppState, area: Rect) -> Option<(Rect, Rect)> {
     let popup = app.popup_pane.as_ref()?;
-    resolve_popup_geometry(popup.width, popup.height, area)
+    resolve_popup_geometry(popup.width, popup.height, app.popup_padding, area)
         .map(|geometry| (geometry.outer, geometry.inner))
 }
 
@@ -743,6 +743,66 @@ fn build_title_facts(
         git_status,
         zoom,
         label: terminal.manual_label.clone().unwrap_or_default(),
+    }
+}
+
+/// Build the popup border label from `app.popup_title_format`.
+///
+/// Precedence mirrors [`custom_pane_border_label`] minus the OSC title, which
+/// the popup border has never consulted: a popup opened with an explicit name
+/// (a plugin entrypoint title, stored as the manual label) keeps it, otherwise
+/// the format is expanded. `None` means the caller keeps its default label.
+pub(crate) fn popup_border_label(
+    app: &AppState,
+    terminal: &crate::terminal::TerminalState,
+) -> Option<String> {
+    if let Some(label) = terminal.manual_label.clone() {
+        return Some(label);
+    }
+    if app.popup_title_format.is_empty() {
+        return None;
+    }
+    let expanded =
+        crate::ui::pane_title::expand(&app.popup_title_format, &popup_title_facts(app, terminal));
+    (!expanded.is_empty()).then_some(expanded)
+}
+
+/// Resolve the [`TitleField`]s a popup terminal can supply.
+///
+/// A popup is not part of any workspace layout, so it has no foreground
+/// process tracking, no agent detection and no zoom state. Its cwd is
+/// inherited from the pane that opened it, and git facts are a lookup into the
+/// same per-repo cache the panes fill, so they resolve only while some pane
+/// shares the repository.
+///
+/// [`TitleField`]: crate::ui::pane_title::TitleField
+fn popup_title_facts(
+    app: &AppState,
+    terminal: &crate::terminal::TerminalState,
+) -> crate::ui::pane_title::TitleFacts {
+    let git = app.pane_git_status(&terminal.cwd);
+    crate::ui::pane_title::TitleFacts {
+        dir: title_dir(&terminal.cwd),
+        cwd: title_cwd(&terminal.cwd),
+        branch: git
+            .and_then(|status| {
+                status
+                    .branch
+                    .clone()
+                    .or_else(|| status.short_commit.clone())
+            })
+            .unwrap_or_default(),
+        ahead_behind: git
+            .and_then(|status| status.ahead_behind)
+            .map(|(ahead, behind)| format_ahead_behind(ahead, behind))
+            .unwrap_or_default(),
+        git_status: git
+            .map(|status| format_git_status(&status.working_tree))
+            .unwrap_or_default(),
+        // `process`, `agent`, `zoom` and `label` stay empty: the first three do
+        // not exist for a popup, and a popup that has a label never reaches the
+        // format at all.
+        ..Default::default()
     }
 }
 
@@ -1329,6 +1389,58 @@ mod tests {
         let row = render_title_row_with_format("$dir", "/home/user/herdr", None, true);
         assert!(row.contains("herdr"), "row: {row:?}");
         assert_eq!(row.matches('Z').count(), 0, "row: {row:?}");
+    }
+
+    fn popup_terminal(cwd: &str, name: Option<&str>) -> TerminalState {
+        let mut terminal = TerminalState::new(crate::terminal::TerminalId::alloc(), cwd.into());
+        if let Some(name) = name {
+            terminal.set_manual_label(name.into());
+        }
+        terminal
+    }
+
+    #[test]
+    fn empty_popup_title_format_keeps_the_default_popup_label() {
+        let app = AppState::test_new();
+        assert_eq!(
+            popup_border_label(&app, &popup_terminal("/home/user/herdr", None)),
+            None
+        );
+    }
+
+    #[test]
+    fn popup_title_format_expands_the_popup_cwd() {
+        let mut app = AppState::test_new();
+        app.popup_title_format = crate::ui::pane_title::parse("$dir").expect("parse format");
+        assert_eq!(
+            popup_border_label(&app, &popup_terminal("/home/user/herdr", None)),
+            Some("herdr".to_string())
+        );
+    }
+
+    #[test]
+    fn popup_name_takes_precedence_over_popup_title_format() {
+        // A plugin entrypoint title arrives as the manual label and keeps
+        // naming its own popup, matching how a renamed pane behaves.
+        let mut app = AppState::test_new();
+        app.popup_title_format = crate::ui::pane_title::parse("$dir").expect("parse format");
+        assert_eq!(
+            popup_border_label(&app, &popup_terminal("/home/user/herdr", Some("rp"))),
+            Some("rp".to_string())
+        );
+    }
+
+    #[test]
+    fn popup_title_format_drops_groups_built_only_from_pane_facts() {
+        // `$process`, `$agent` and `$zoom` never resolve for a popup, so a
+        // group holding only those disappears instead of leaving a separator.
+        let mut app = AppState::test_new();
+        app.popup_title_format =
+            crate::ui::pane_title::parse("$dir( ⋅ $process$agent$zoom)").expect("parse format");
+        assert_eq!(
+            popup_border_label(&app, &popup_terminal("/home/user/herdr", None)),
+            Some("herdr".to_string())
+        );
     }
 
     #[test]

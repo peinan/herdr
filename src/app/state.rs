@@ -843,6 +843,13 @@ pub struct AppState {
     /// borders use the default label path.
     pub pane_title_format: Vec<crate::ui::pane_title::Segment>,
     pub dim_inactive_panes: bool,
+    /// Padding inside the popup pane's border. Projected from
+    /// `[ui] popup_padding`. The client resolves the same value from its own
+    /// config so both sides agree on the popup's terminal area.
+    pub popup_padding: PanePadding,
+    /// Parsed `[ui] popup_title_format`. Empty means the feature is off and the
+    /// popup border keeps its default label.
+    pub popup_title_format: Vec<crate::ui::pane_title::Segment>,
     /// Show the `▌` marker at the start of the focused pane's border title.
     /// Projected from `[ui] show_pane_focus_marker`.
     pub show_pane_focus_marker: bool,
@@ -1103,6 +1110,8 @@ impl AppState {
             show_agent_labels_on_pane_borders: false,
             pane_title_format: Vec::new(),
             dim_inactive_panes: true,
+            popup_padding: PanePadding::default(),
+            popup_title_format: Vec::new(),
             show_pane_focus_marker: true,
             zoom_indicator: "Z".into(),
             zoom_indicator_position: ZoomIndicatorPosition::Tab,

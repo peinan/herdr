@@ -337,6 +337,25 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # false to indicate focus with accent color and bold only.
 # show_pane_focus_marker = true
 
+# Padding, in cells, inside the popup pane between its border and the terminal
+# content. Per side; omitted sides default to 0. Independent from pane_padding.
+# popup_padding = { top = 0, right = 0, bottom = 0, left = 0 }
+
+# Custom popup border title, using the same syntax as pane_title_format. A
+# popup resolves $dir and $cwd, plus the git variables while a pane shares the
+# repository; $process, $agent and $zoom never apply to a popup and their
+# conditional groups drop out. A popup opened with an explicit name (a plugin
+# entrypoint title) keeps that name; empty (default) keeps the "popup" label.
+# popup_title_format = "$dir"
+
+# How much of the popup pane gets the panel background painted behind it.
+# "panel" covers the border and the padding; "all" also fills in behind
+# content the program left on the terminal's default background, so the popup
+# reads as solid; "transparent" covers none of it, so a transparent terminal
+# stays transparent around the popup. A program that chooses its own
+# background always keeps it.
+# popup_background = "panel"
+
 # Draw the vertical divider between the sidebar and the main pane area.
 # sidebar_divider = true
 
