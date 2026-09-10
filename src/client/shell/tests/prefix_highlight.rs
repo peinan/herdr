@@ -143,13 +143,21 @@ fn surface_cell(frame: &FrameData, origin: Rect, x: u16, y: u16) -> &crate::prot
     &frame.cells[index]
 }
 
-fn tab_background(frame: &FrameData, hits: &ShellHitMap, tab_id: &str) -> u32 {
+fn tab_cell<'a>(
+    frame: &'a FrameData,
+    hits: &ShellHitMap,
+    tab_id: &str,
+) -> &'a crate::protocol::CellData {
     let (rect, _) = hits
         .tabs
         .iter()
         .find(|(_, id)| id == tab_id)
         .unwrap_or_else(|| panic!("hit for {tab_id}"));
-    frame.cells[usize::from(rect.y) * usize::from(frame.width) + usize::from(rect.x)].bg
+    &frame.cells[usize::from(rect.y) * usize::from(frame.width) + usize::from(rect.x)]
+}
+
+fn tab_background(frame: &FrameData, hits: &ShellHitMap, tab_id: &str) -> u32 {
+    tab_cell(frame, hits, tab_id).bg
 }
 
 #[test]
@@ -330,4 +338,35 @@ fn bottom_tab_bar_keeps_its_hits_and_status_accent_under_prefix_highlight() {
         status_bar.hits.tabs.is_empty(),
         "the hint bar owns the bottom row in status_bar mode"
     );
+}
+
+#[test]
+fn prefix_highlight_recolors_the_minimal_active_marker() {
+    let mut config = highlight_config();
+    config.ui.tab_bar_style = TabBarStyle::Minimal;
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    state.set_snapshot(Box::new(two_tab_snapshot()));
+    state.set_pane_surface(bordered_surface());
+    let palette = state.config.palette.clone();
+    let accent = crate::protocol::color_to_u32(palette.accent);
+    let yellow = crate::protocol::color_to_u32(palette.yellow);
+    let overlay1 = crate::protocol::color_to_u32(palette.overlay1);
+
+    let terminal = state.compose(106, 20).expect("minimal markers");
+    let active = tab_cell(&terminal, &state.hits, "tab_1");
+    assert_eq!(active.symbol, "\u{F09DE}");
+    assert_eq!(active.fg, accent);
+
+    assert!(state.handle_input_bytes(&[0x02]).repaint);
+    let frame = state.compose(106, 20).expect("prefix minimal markers");
+    let active = tab_cell(&frame, &state.hits, "tab_1");
+    assert_eq!(active.symbol, "\u{F09DE}");
+    assert_eq!(active.fg, yellow);
+    let inactive = tab_cell(&frame, &state.hits, "tab_2");
+    assert_eq!(inactive.symbol, "\u{EABC}");
+    assert_eq!(inactive.fg, overlay1, "inactive markers are unaffected");
+
+    state.handle_input_bytes(&[0x1b]);
+    let restored = state.compose(106, 20).expect("restored minimal markers");
+    assert_eq!(tab_cell(&restored, &state.hits, "tab_1").fg, accent);
 }
