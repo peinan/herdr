@@ -1,7 +1,7 @@
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Layout, Rect},
-    style::Color,
+    style::{Color, Modifier},
 };
 
 use crate::app::state::Palette;
@@ -160,6 +160,21 @@ fn blank_orphan_continuation(buffer: &mut Buffer, x: u16, y: u16) {
     }
 }
 
+/// Marks every cell in `area` dim, pushing it behind whatever is drawn on top.
+///
+/// Callers dim first and draw the foreground afterwards: the widgets that
+/// follow overwrite their cells wholesale, so they land at full brightness
+/// without having to undim themselves.
+pub(crate) fn dim_buffer(buffer: &mut Buffer, area: Rect) {
+    for y in area.top()..area.bottom() {
+        for x in area.left()..area.right() {
+            if let Some(cell) = buffer.cell_mut((x, y)) {
+                cell.set_style(cell.style().add_modifier(Modifier::DIM));
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -229,6 +244,27 @@ mod tests {
         // a trailing glyph itself.
         assert_eq!(symbol_at(&buffer, 4, 0), "え");
         assert_eq!(symbol_at(&buffer, 5, 0), "");
+    }
+
+    #[test]
+    fn dim_buffer_marks_only_the_given_rect() {
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 6, 3));
+
+        dim_buffer(&mut buffer, Rect::new(2, 1, 3, 2));
+
+        let dim_at = |x: u16, y: u16| {
+            buffer
+                .cell((x, y))
+                .unwrap()
+                .style()
+                .add_modifier
+                .contains(Modifier::DIM)
+        };
+        assert!(dim_at(2, 1));
+        assert!(dim_at(4, 2));
+        assert!(!dim_at(1, 1));
+        assert!(!dim_at(5, 1));
+        assert!(!dim_at(2, 0));
     }
 
     #[test]

@@ -355,6 +355,10 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # stays transparent around the popup. A program that chooses its own
 # background always keeps it.
 # popup_background = "panel"
+# Dim what is behind the popup pane while it is open. "off" (default) leaves
+# the background alone, "all" dims everything outside the popup including the
+# sidebar and tab bar, and "panes" dims only the pane area.
+# popup_dim_background = "off"
 
 # Draw the vertical divider between the sidebar and the main pane area.
 # sidebar_divider = true

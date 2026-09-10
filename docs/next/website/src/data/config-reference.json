@@ -1077,6 +1077,17 @@
           ]
         },
         {
+          "key": "ui.popup_dim_background",
+          "type": "enum",
+          "default": "\"off\"",
+          "description": "Dim what is behind the popup pane while it is open: off leaves the background alone, all dims everything outside the popup including the sidebar and tab bar, and panes dims only the pane area.",
+          "values": [
+            "off",
+            "all",
+            "panes"
+          ]
+        },
+        {
           "key": "ui.sidebar_divider",
           "type": "boolean",
           "default": "true",

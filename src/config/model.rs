@@ -986,6 +986,10 @@ pub struct UiConfig {
     /// it, so a transparent terminal stays transparent around the popup.
     /// A program that chooses its own background always keeps it.
     pub popup_background: PopupBackground,
+    /// Dim what is behind the popup pane while it is open. "off" (default)
+    /// leaves the background as-is, "all" dims everything outside the popup
+    /// including the sidebar and tab bar, and "panes" dims only the pane area.
+    pub popup_dim_background: PopupDimBackground,
     /// Draw the vertical divider line between the sidebar and the main pane
     /// area. Set to false to hide it. Default: true.
     pub sidebar_divider: bool,
@@ -1071,6 +1075,19 @@ pub enum PopupBackground {
     /// None of it, so a transparent terminal stays transparent around the
     /// popup's content.
     Transparent,
+}
+
+/// How much of the screen behind an open popup pane is dimmed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PopupDimBackground {
+    /// Leave the background at full brightness (default, current behavior).
+    #[default]
+    Off,
+    /// Dim everything outside the popup, sidebar and tab bar included.
+    All,
+    /// Dim only the pane area, leaving the sidebar and tab bar untouched.
+    Panes,
 }
 
 /// How prefix mode is indicated on screen while the prefix key is pending.
@@ -1343,6 +1360,7 @@ impl Default for UiConfig {
             popup_padding: PanePadding::default(),
             popup_title_format: String::new(),
             popup_background: PopupBackground::Panel,
+            popup_dim_background: PopupDimBackground::Off,
             sidebar_divider: true,
             zoom_indicator: "Z".into(),
             zoom_indicator_position: ZoomIndicatorPosition::Tab,
@@ -1790,6 +1808,10 @@ pane_padding = { left = 2 }
         assert_eq!(default_config.ui.popup_padding, PanePadding::default());
         assert!(default_config.ui.popup_title_format.is_empty());
         assert_eq!(default_config.ui.popup_background, PopupBackground::Panel);
+        assert_eq!(
+            default_config.ui.popup_dim_background,
+            PopupDimBackground::Off
+        );
 
         let config: Config = toml::from_str(
             r#"
@@ -1797,6 +1819,7 @@ pane_padding = { left = 2 }
 popup_padding = { top = 1, left = 2 }
 popup_title_format = "$dir( ⋅ $branch)"
 popup_background = "transparent"
+popup_dim_background = "panes"
 "#,
         )
         .unwrap();
@@ -1811,6 +1834,7 @@ popup_background = "transparent"
         );
         assert_eq!(config.ui.popup_title_format, "$dir( ⋅ $branch)");
         assert_eq!(config.ui.popup_background, PopupBackground::Transparent);
+        assert_eq!(config.ui.popup_dim_background, PopupDimBackground::Panes);
         // The pane keys stay independent so an existing pane_padding setting
         // does not silently change how popups look.
         assert_eq!(config.ui.pane_padding, PanePadding::default());

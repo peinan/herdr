@@ -44,12 +44,7 @@ pub(crate) fn render_client_overlay(
             | ClientShellOverlay::ContextMenu(_)
             | ClientShellOverlay::GlobalMenu(_)
     ) {
-        for y in b.area.y..b.area.bottom() {
-            for x in b.area.x..b.area.right() {
-                let c = &mut b[(x, y)];
-                c.set_style(c.style().add_modifier(Modifier::DIM));
-            }
-        }
+        crate::ui::dim_buffer(b, b.area);
     }
     match o {
         ClientShellOverlay::Onboarding => render_onboarding_overlay(b, p),
