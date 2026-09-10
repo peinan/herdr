@@ -1063,7 +1063,7 @@
           "key": "ui.prefix_indicator",
           "type": "enum",
           "default": "\"status_bar\"",
-          "description": "How prefix mode is indicated: status_bar shows the bottom hint bar; highlight hides it and recolors the focused pane border and active tab instead. highlight is pending re-implementation on the client shell after the upstream 0.9.0 sync; accepted so existing configs keep loading.",
+          "description": "How prefix mode is indicated: status_bar shows the bottom hint bar; highlight hides it and recolors the focused pane border and active tab instead.",
           "values": [
             "status_bar",
             "highlight"
