@@ -81,6 +81,9 @@ pub(crate) struct ClientShellConfig {
     /// focused pane border and the active tab.
     pub(super) prefix_indicator: PrefixIndicatorConfig,
     pub(super) tab_bar_position: TabBarPositionConfig,
+    pub(super) tab_bar_style: TabBarStyle,
+    pub(super) tab_bar_align: TabBarAlign,
+    pub(super) tab_bar_title: bool,
     pub(super) hide_tab_bar_when_single_tab: bool,
     pub(super) spaces: SpacesSidebarConfig,
     pub(super) agents: crate::config::AgentsSidebarConfig,

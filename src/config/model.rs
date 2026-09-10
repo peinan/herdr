@@ -986,20 +986,13 @@ pub struct UiConfig {
     /// Tab bar visual style. "classic" is the text-label bar with horizontal
     /// scrolling (default, upstream look); "minimal" is the compact Nerd-Font
     /// glyph marker strip.
-    // Parsed but inert: the tab bar moved to the client shell in upstream
-    // #3487, and the minimal style has not been re-implemented there yet.
-    #[allow(dead_code)]
     pub tab_bar_style: TabBarStyle,
     /// Horizontal alignment for the minimal tab bar strip ("left" or "right").
     /// Ignored by the classic style, which is always left-aligned. Default:
     /// "right".
-    // Parsed but inert until the minimal tab bar returns (see tab_bar_style).
-    #[allow(dead_code)]
     pub tab_bar_align: TabBarAlign,
     /// Render each tab's name alongside its glyph in the minimal style. Ignored
     /// by the classic style, which always shows names. Default: false.
-    // Parsed but inert until the minimal tab bar returns (see tab_bar_style).
-    #[allow(dead_code)]
     pub tab_bar_title: bool,
     /// Hide the tab row when the workspace has one tab. Default: false.
     pub hide_tab_bar_when_single_tab: bool,
