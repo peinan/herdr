@@ -5,7 +5,7 @@ use ratatui::{
 };
 
 use crate::app::state::Palette;
-use crate::protocol::render_ansi::symbol_cell_width;
+use crate::protocol::render_ansi::{is_wide_continuation, is_wide_head};
 
 pub(super) fn panel_contrast_fg(palette: &Palette) -> Color {
     match palette.panel_bg {
@@ -110,39 +110,52 @@ pub(crate) fn continue_button_rect(area: Rect) -> Rect {
     )
 }
 
-/// Blanks the surviving half of a double-width grapheme that an overlay drawn
-/// over `area` cut in two.
+/// Blanks the halves of double-width graphemes left dangling across the
+/// vertical edges of `area` after something was drawn into it.
 ///
 /// A wide grapheme is stored as a head cell holding the glyph plus a
-/// continuation cell holding an empty symbol. An overlay only rewrites cells
-/// inside `area`, so a grapheme straddling a vertical edge survives as a half
-/// pair, and the ANSI encoder derives cursor advance purely from the current
-/// frame: a leftover head one column left of `area` swallows the overlay's
-/// first column, and an orphaned continuation cell one column right of `area`
-/// emits no bytes at all and keeps whatever the host already showed there.
-pub(crate) fn sanitize_overlay_edges(buffer: &mut Buffer, area: Rect) {
+/// continuation cell holding an empty symbol, and the ANSI encoder derives
+/// cursor advance purely from the current frame: it paints a head across the
+/// following column and skips it, and it emits no bytes at all for a
+/// continuation. A rect-bounded write only rewrites cells inside `area`, so
+/// any pair straddling an edge is left half rewritten and one of the two
+/// columns is then rendered from the wrong content. Three repairs, per row:
+///
+/// - a head one column left of `area`, whose second column `area` just took
+/// - a head in `area`'s last column, whose second column is outside `area`
+/// - a continuation one column right of `area`, whose head `area` just took
+///
+/// The last two only apply when `area` has a neighbour to the right at all.
+/// Flush with the buffer's edge there is no other content to corrupt, and a
+/// trailing wide glyph is the terminal's own clipping problem.
+pub(crate) fn repair_wide_grapheme_edges(buffer: &mut Buffer, area: Rect) {
     if area.is_empty() {
         return;
     }
+    let has_right_neighbour = area.right() < buffer.area.right();
     for y in area.top()..area.bottom() {
         if area.left() > 0 {
-            if let Some(cell) = buffer.cell_mut((area.left() - 1, y)) {
-                if symbol_cell_width(cell.symbol()) > 1 {
-                    cell.set_symbol(" ");
-                }
-            }
+            blank_wide_head(buffer, area.left() - 1, y);
         }
-        let right = area.right();
-        let covered_by_overlay = buffer
-            .cell((right - 1, y))
-            .is_some_and(|cell| symbol_cell_width(cell.symbol()) > 1);
-        if covered_by_overlay {
-            continue;
+        if has_right_neighbour {
+            blank_wide_head(buffer, area.right() - 1, y);
+            blank_orphan_continuation(buffer, area.right(), y);
         }
-        if let Some(cell) = buffer.cell_mut((right, y)) {
-            if cell.symbol().is_empty() {
-                cell.set_symbol(" ");
-            }
+    }
+}
+
+fn blank_wide_head(buffer: &mut Buffer, x: u16, y: u16) {
+    if let Some(cell) = buffer.cell_mut((x, y)) {
+        if is_wide_head(cell.symbol()) {
+            cell.set_symbol(" ");
+        }
+    }
+}
+
+fn blank_orphan_continuation(buffer: &mut Buffer, x: u16, y: u16) {
+    if let Some(cell) = buffer.cell_mut((x, y)) {
+        if is_wide_continuation(cell.symbol()) {
+            cell.set_symbol(" ");
         }
     }
 }
@@ -163,67 +176,67 @@ mod tests {
     }
 
     #[test]
-    fn blanks_a_wide_head_that_spills_into_the_overlay() {
+    fn blanks_a_wide_head_whose_second_column_the_rect_took() {
         let mut buffer = Buffer::empty(Rect::new(0, 0, 10, 2));
         set_wide(&mut buffer, 3, 0, "あ");
         // Row 1 keeps a narrow neighbour to prove untouched columns survive.
         buffer.cell_mut((3, 1)).unwrap().set_symbol("x");
-        let overlay = Rect::new(4, 0, 4, 2);
+        let rect = Rect::new(4, 0, 4, 2);
         buffer.set_string(4, 0, "····", ratatui::style::Style::default());
         buffer.set_string(4, 1, "····", ratatui::style::Style::default());
 
-        sanitize_overlay_edges(&mut buffer, overlay);
+        repair_wide_grapheme_edges(&mut buffer, rect);
 
         assert_eq!(symbol_at(&buffer, 3, 0), " ");
         assert_eq!(symbol_at(&buffer, 3, 1), "x");
     }
 
     #[test]
-    fn blanks_an_orphaned_continuation_right_of_the_overlay() {
+    fn blanks_a_continuation_whose_head_the_rect_took() {
         let mut buffer = Buffer::empty(Rect::new(0, 0, 10, 1));
-        // The head at column 6 is inside the overlay and has been overwritten
-        // by it; only the continuation at column 7 is left behind.
+        // The head at column 6 is inside the rect and has been overwritten by
+        // it; only the continuation at column 7 is left behind.
         set_wide(&mut buffer, 6, 0, "い");
-        let overlay = Rect::new(3, 0, 4, 1);
+        let rect = Rect::new(3, 0, 4, 1);
         buffer.set_string(3, 0, "····", ratatui::style::Style::default());
 
-        sanitize_overlay_edges(&mut buffer, overlay);
+        repair_wide_grapheme_edges(&mut buffer, rect);
 
         assert_eq!(symbol_at(&buffer, 7, 0), " ");
     }
 
     #[test]
-    fn keeps_a_continuation_that_still_has_its_head() {
+    fn blanks_a_wide_head_the_rect_left_in_its_last_column() {
         let mut buffer = Buffer::empty(Rect::new(0, 0, 10, 1));
-        let overlay = Rect::new(3, 0, 4, 1);
-        // The overlay itself ends with a wide grapheme, so column 7 is a
-        // legitimate continuation and must stay empty.
+        // A clipped copy can end on a head whose second column was never
+        // written, so the glyph would paint over content the rect does not own.
         set_wide(&mut buffer, 6, 0, "う");
 
-        sanitize_overlay_edges(&mut buffer, overlay);
+        repair_wide_grapheme_edges(&mut buffer, Rect::new(3, 0, 4, 1));
 
-        assert_eq!(symbol_at(&buffer, 6, 0), "う");
-        assert_eq!(symbol_at(&buffer, 7, 0), "");
+        assert_eq!(symbol_at(&buffer, 6, 0), " ");
+        assert_eq!(symbol_at(&buffer, 7, 0), " ");
     }
 
     #[test]
-    fn handles_overlays_flush_with_the_buffer_edges() {
+    fn leaves_a_trailing_wide_head_alone_at_the_buffer_edge() {
         let mut buffer = Buffer::empty(Rect::new(0, 0, 6, 1));
         set_wide(&mut buffer, 4, 0, "え");
 
-        sanitize_overlay_edges(&mut buffer, Rect::new(0, 0, 6, 1));
+        repair_wide_grapheme_edges(&mut buffer, Rect::new(0, 0, 6, 1));
 
-        // No column exists on either side, so nothing is rewritten.
+        // There is no neighbouring content to corrupt, and the terminal clips
+        // a trailing glyph itself.
         assert_eq!(symbol_at(&buffer, 4, 0), "え");
         assert_eq!(symbol_at(&buffer, 5, 0), "");
     }
 
     #[test]
-    fn empty_overlays_are_a_no_op() {
+    fn empty_rects_are_a_no_op() {
         let mut buffer = Buffer::empty(Rect::new(0, 0, 6, 1));
         set_wide(&mut buffer, 1, 0, "お");
 
-        sanitize_overlay_edges(&mut buffer, Rect::new(3, 0, 0, 1));
+        repair_wide_grapheme_edges(&mut buffer, Rect::new(3, 0, 0, 1));
 
         assert_eq!(symbol_at(&buffer, 1, 0), "お");
     }

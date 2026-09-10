@@ -174,6 +174,7 @@ pub(super) fn render_notification_card(
             buffer,
         );
     }
+    crate::ui::repair_wide_grapheme_edges(buffer, rect);
     rect
 }
 
