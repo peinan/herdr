@@ -16,7 +16,7 @@ git diff --stat upstream/master...main                 # 変更ファイル一�
 git diff upstream/master...main -- src/config/model.rs # 追加した設定フィールド
 ```
 
-最終更新: 2026-09-10
+最終更新: 2026-09-11
 
 ## 機能一覧
 
@@ -31,6 +31,9 @@ git diff upstream/master...main -- src/config/model.rs # 追加した設定フ�
 | タブバースタイル | `ui.tab_bar_{style,align,title}` | `classic`/`minimal`(グリフ帯)を選択、**既定 `classic`**。0.9.0 sync 後にクライアントシェル(`src/client/shell/tabs.rs`)へ再実装([#34](https://github.com/peinan/herdr/issues/34))。`tab_bar_position` は upstream 同名キーに統一(既定 `top`) | 2026-06-27 | [#10](https://github.com/peinan/herdr/pull/10) / [`c19f18b`](https://github.com/peinan/herdr/commit/c19f18b), [#24](https://github.com/peinan/herdr/pull/24) / [`68fe136`](https://github.com/peinan/herdr/commit/68fe136), [#39](https://github.com/peinan/herdr/pull/39) / [`53b2d25`](https://github.com/peinan/herdr/commit/53b2d25) |
 | prefix 待機表示 | `ui.prefix_indicator` | prefix 待機の示し方(バー or 枠+タブ強調)。0.9.0 sync 後にクライアント合成(`src/client/shell/composition.rs`)へ再実装([#35](https://github.com/peinan/herdr/issues/35)) | 2026-06-27 | [#5](https://github.com/peinan/herdr/pull/5) / [`aa108e7`](https://github.com/peinan/herdr/commit/aa108e7), [#38](https://github.com/peinan/herdr/pull/38) / [`0d24729`](https://github.com/peinan/herdr/commit/0d24729) |
 | repeatable prefix バインド | `keys.*` / `keys.repeat_timeout` | tmux `bind -r` 風に素キーで繰り返し。0.9.0 sync 後にクライアントシェル(`src/client/shell/input.rs`)へ再実装([#36](https://github.com/peinan/herdr/issues/36)) | 2026-06-26 | [#1](https://github.com/peinan/herdr/pull/1) / [`4874e19`](https://github.com/peinan/herdr/commit/4874e19), [#37](https://github.com/peinan/herdr/pull/37) / [`b9e047d`](https://github.com/peinan/herdr/commit/b9e047d) |
+| popup 内余白 / タイトル書式 | `ui.popup_padding` / `ui.popup_title_format` | popup ペイン(セッションモーダル端末)の枠内余白と枠タイトル書式。pane 側キーとは独立で既定は無効。padding はサーバ(PTY サイズ)とクライアント(blit)が同じ純粋関数に渡して一致させる | 2026-09-11 | [#45](https://github.com/peinan/herdr/pull/45) / [`94b2948`](https://github.com/peinan/herdr/commit/94b2948) |
+| popup 背景の塗り範囲 | `ui.popup_background` | popup に panel 背景をどこまで敷くか。`panel`(既定・枠＋余白)/`all`(内容の背後まで＝不透明)/`transparent`(どこも塗らず端末背景のまま)。プログラムが自前で塗ったセルはどの値でも保持 | 2026-09-11 | [#45](https://github.com/peinan/herdr/pull/45) / [`9de3877`](https://github.com/peinan/herdr/commit/9de3877) |
+| popup 表示中の背景減光 | `ui.popup_dim_background` | popup が開いている間、背後を減光してモーダルらしく見せる。`off`(既定)/`all`(サイドバー・タブバー含む)/`panes`(ペイン面のみ) | 2026-09-11 | [#46](https://github.com/peinan/herdr/pull/46) / [`032524f`](https://github.com/peinan/herdr/commit/032524f) |
 | 個人用 Makefile | 新規ファイル | build / install ターゲット | 2026-06-26 | [`38f7787`](https://github.com/peinan/herdr/commit/38f7787) |
 | `CLAUDE.local.md` | 新規ファイル | フォークのブランチ運用・同期・PR 手順 | 2026-06-28 | [`541eb1c`](https://github.com/peinan/herdr/commit/541eb1c), [`926ccc1`](https://github.com/peinan/herdr/commit/926ccc1) |
 
@@ -58,6 +61,10 @@ git diff upstream/master...main -- src/config/model.rs # 追加した設定フ�
 | `ui.tab_bar_align` | enum | `"right"` | `minimal` のときの寄せ。`left`/`right`。`classic` では無効 |
 | `ui.tab_bar_title` | bool | `false` | `minimal` でタブ名も併記するか。`classic` では常にテキスト |
 | `ui.prefix_indicator` | enum | `"status_bar"` | prefix 待機の表示。`status_bar`=下部ヒントバー / `highlight`=バーを隠しフォーカス枠+アクティブタブを再着色 |
+| `ui.popup_padding` | table | `{}`(全 0) | popup の枠と端末内容の間の余白(セル)。`{ top, right, bottom, left }` で省略辺 0。`pane_padding` とは独立。内容 1x1 を残しクランプ |
+| `ui.popup_title_format` | string | `""` | popup 枠タイトルの書式(`pane_title_format` と同じ構文)。空=従来どおり `popup`。解決できる変数は下の補足参照 |
+| `ui.popup_background` | enum | `"panel"` | popup に panel 背景を敷く範囲。`panel`=枠＋余白(従来) / `all`=内容の背後まで(不透明) / `transparent`=どこも塗らない(端末背景が透ける) |
+| `ui.popup_dim_background` | enum | `"off"` | popup 表示中の背後の減光。`off`=従来どおり減光なし / `all`=popup 以外の全画面 / `panes`=ペイン面のみ |
 | `keys.repeat_timeout` | u64 (ms) | `500` | repeatable バインドがアーム状態を保つ時間。`0` は既定値に丸める |
 | `keys.<action>`(テーブル形式) | `{ key, repeat }` | `repeat = false` | `{ key = "prefix+n", repeat = true }` で tmux `bind -r` 風の繰り返しを有効化。文字列/配列形式は repeat しない |
 
@@ -92,6 +99,39 @@ pane_title_format = "$dir $process( ⋅ $branch$ahead_behind$git_status)( $zoom)
   エージェント内のディレクトリ移動に追従する。git も約1.5秒ポーリングで `git checkout` 等に
   追従し、`$git_status`(dirty)は毎ポーリング再計算・作業ツリー変化でも即再描画。
   per-pane git は repo 単位キーなので、同一リポジトリの別 worktree のペインは各自のブランチを表示。
+
+## 補足: popup のスタイル (`popup_*`)
+
+popup ペイン(`type = "popup"` のキーバインドやプラグインが開くセッションモーダル端末)の見た目。
+pane 側のキーとは**独立**にした。`pane_padding` を流用すると、既にペインに余白を入れている人の
+popup が黙って変わってしまいオプトインにならないため。3 キーとも既定は従来の描画のまま。
+
+```toml
+[ui]
+popup_padding        = { top = 1, right = 2, bottom = 1, left = 2 }
+popup_title_format   = "$dir"
+popup_background     = "all"    # panel(既定) | all | transparent
+popup_dim_background = "all"    # off(既定)   | all | panes
+```
+
+- **padding**: 枠の内側・スペーサ列の手前に入る(通常ペインと同じ合成順)。popup の PTY サイズは
+  サーバが、描画矩形はクライアントが、それぞれ同じ純粋関数 `resolve_popup_geometry` に自分の
+  設定値を渡して決めるので両者が一致する。`ClientShellPopupSurface` は generation-1 の凍結
+  bincode から到達可能なのでワイヤには足していない。設定が食い違いうる遠隔クライアントでは、
+  受け取ったフレームが padding 無しのサイズと完全一致したときだけ padding を落として内容の
+  クリップを避ける(リサイズ中の一時的な不一致では padding を維持し、点滅させない)。
+- **title**: サーバ側で展開して解決済み文字列をワイヤに載せる(プロトコル変更なし)。優先順位は
+  **明示名(プラグインのタイトル) → 書式 → `popup`**。通常ペインの OSC タイトル優先だけは、
+  popup が元々 OSC を見ていないので踏襲していない(見ると既定挙動が変わるため)。
+  解決できるのは `$dir` / `$cwd`(popup を開いたペインから継承した cwd)と、同じリポジトリの
+  ペインが別にあるときだけ埋まる `$branch` / `$ahead_behind` / `$git_status`。
+  `$process` / `$agent` / `$zoom` は popup にペイン ID がなく検出も無効なので常に空で、
+  それらだけを含む条件付きグループは丸ごと消える。
+- **background**: `all` のみ内容領域に触れる。`blit_pane_surface` の**後**に、背景が
+  `Color::Reset`(端末デフォルト)のセルだけを `panel_bg` に差し替えるので、全画面 TUI など
+  自前で背景を塗ったセルはどの値でも保持される。
+- **dim**: 完全にクライアント表示状態。減光を先に、popup をその上に描くので popup 自身は明るい。
+  モーダルオーバーレイは popup より後に描かれるため、オーバーレイが popup ごと減光する挙動は不変。
 
 ## 補足: タブバースタイル (`tab_bar_style`)
 
@@ -142,6 +182,24 @@ repeat_timeout = 500
 ## 変更履歴
 
 新しい順。詳細は各表を参照。
+
+### 2026-09-11
+- popup ペインのスタイルを設定可能に。`ui.popup_padding` / `ui.popup_title_format`(pane 側キーとは独立、既定は無効)と
+  `ui.popup_background`(`panel` 既定 / `all` / `transparent`)を追加 — [#43](https://github.com/peinan/herdr/issues/43) → [#45](https://github.com/peinan/herdr/pull/45) ([`94b2948`](https://github.com/peinan/herdr/commit/94b2948), [`9de3877`](https://github.com/peinan/herdr/commit/9de3877))
+  - padding は PTY サイズ(サーバ)と blit 矩形(クライアント)が同じ純粋関数に自分の設定値を渡して一致させる。
+    ワイヤは不変。設定が食い違う遠隔クライアントは、フレームが padding 無しのサイズと一致したときだけ padding を落とす。
+  - `popup_background = "transparent"` は端末を透過にしている環境で枠と余白の不透明な帯を消す。
+    `all` は逆に内容の背後まで塗って popup を不透明にする(プログラムが自前で塗ったセルは保持)。
+- `ui.popup_dim_background` 追加(`off` 既定 / `all` / `panes`)。popup 表示中に背後を減光してモーダルらしく見せる。
+  既存のモーダルオーバーレイ用インライン減光ループを `crate::ui::dim_buffer` に括り出して共用 — [#40](https://github.com/peinan/herdr/issues/40) → [#46](https://github.com/peinan/herdr/pull/46) ([`032524f`](https://github.com/peinan/herdr/commit/032524f))
+- **fix**: 全角(2 セル幅)文字が popup やオーバーレイの枠線を食う不具合を修正 — [#41](https://github.com/peinan/herdr/issues/41) → [#44](https://github.com/peinan/herdr/pull/44) ([`a9a1889`](https://github.com/peinan/herdr/commit/a9a1889), [`ee47d3b`](https://github.com/peinan/herdr/commit/ee47d3b))
+  - ワイド書記素は「先頭セル＝グリフ／後続セル＝空記号」で表現され、ANSI エンコーダは現フレームの記号幅だけで桁送りを決める。
+    矩形境界で半分だけ上書きされたペアが残ると、その桁が別のセルから描画される。
+  - `crate::ui::repair_wide_grapheme_edges` を追加し、矩形の左隣に残った先頭 / 最終列に残った先頭 / 右隣に残った孤児の
+    後続セルの 3 パターンを潰す。バッファ右端に接した矩形の最終列だけは端末側クリップに任せて触らない。
+  - 適用先は popup、`overlays.rs::panel()`(help / settings / navigator / rename / confirm-close / onboarding /
+    release notes / product announcement / worktree 3 種 / 両メニュー)、通知トースト、エンドポイント通知バナー、
+    クリップボードトースト、config 診断行、および `blit_pane_surface`(クリップコピーの鏡像ケース)。
 
 ### 2026-09-10
 - upstream v0.9.0(+14 commits、`120c6820`)まで段階マージ(v0.8.0 → v0.8.2 → master)で取り込み — [`69321a3`](https://github.com/peinan/herdr/commit/69321a3), [`d7a381f`](https://github.com/peinan/herdr/commit/d7a381f), [`f48d90e`](https://github.com/peinan/herdr/commit/f48d90e)
