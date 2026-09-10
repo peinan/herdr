@@ -302,6 +302,29 @@ fn blit_pane_surface(target: &mut FrameData, source: &FrameData, area: Rect) {
     target.graphics.clear();
 }
 
+/// Paints `bg` behind every cell in `area` that was left on the terminal's
+/// default background.
+///
+/// A program that picked its own background keeps it; this only fills the
+/// cells that would otherwise let a transparent terminal show through.
+fn fill_terminal_default_background(frame: &mut FrameData, area: Rect, bg: u32) {
+    if area.is_empty() || frame.width == 0 {
+        return;
+    }
+    let terminal_default = crate::protocol::color_to_u32(ratatui::style::Color::Reset);
+    for y in area.top()..area.bottom() {
+        for x in area.left()..area.right() {
+            let index = usize::from(y) * usize::from(frame.width) + usize::from(x);
+            let Some(cell) = frame.cells.get_mut(index) else {
+                continue;
+            };
+            if cell.bg == terminal_default {
+                cell.bg = bg;
+            }
+        }
+    }
+}
+
 /// [`crate::ui::repair_wide_grapheme_edges`] for a [`FrameData`], for the
 /// writers that compose cells directly instead of through a ratatui buffer.
 fn repair_frame_wide_grapheme_edges(frame: &mut FrameData, area: Rect) {

@@ -348,6 +348,14 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # entrypoint title) keeps that name; empty (default) keeps the "popup" label.
 # popup_title_format = "$dir"
 
+# How much of the popup pane gets the panel background painted behind it.
+# "panel" covers the border and the padding; "all" also fills in behind
+# content the program left on the terminal's default background, so the popup
+# reads as solid; "transparent" covers none of it, so a transparent terminal
+# stays transparent around the popup. A program that chooses its own
+# background always keeps it.
+# popup_background = "panel"
+
 # Draw the vertical divider between the sidebar and the main pane area.
 # sidebar_divider = true
 

@@ -218,6 +218,7 @@ mod input_domain;
 mod keybindings_settings;
 mod mobile;
 mod mouse_selection;
+mod popup_background;
 mod popup_focus_projection;
 mod popup_padding;
 mod popup_wide_graphemes;

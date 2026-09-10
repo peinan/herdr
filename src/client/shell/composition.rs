@@ -519,11 +519,20 @@ impl ClientShellState {
                 &popup.frame,
             ) {
                 let mut composed = frame.to_ratatui_buffer()?;
+                // This reaches only the border and the padding; the content
+                // area is overwritten by the popup's own cells below, and
+                // filled in afterwards when the whole popup should be solid.
+                let chrome_bg = match self.config.popup_background {
+                    crate::config::PopupBackground::Panel | crate::config::PopupBackground::All => {
+                        self.config.palette.panel_bg
+                    }
+                    crate::config::PopupBackground::Transparent => ratatui::style::Color::Reset,
+                };
                 let block = ratatui::widgets::Block::default()
                     .borders(ratatui::widgets::Borders::ALL)
                     .border_style(ratatui::style::Style::default().fg(self.config.palette.accent))
                     .title(popup.title.clone())
-                    .style(ratatui::style::Style::default().bg(self.config.palette.panel_bg));
+                    .style(ratatui::style::Style::default().bg(chrome_bg));
                 ratatui::widgets::Widget::render(
                     ratatui::widgets::Clear,
                     geometry.outer,
@@ -533,6 +542,13 @@ impl ClientShellState {
                 crate::ui::repair_wide_grapheme_edges(&mut composed, geometry.outer);
                 frame.replace_from_ratatui_buffer_preserving_effects(&composed, None);
                 blit_pane_surface(&mut frame, &popup.frame, geometry.inner);
+                if self.config.popup_background == crate::config::PopupBackground::All {
+                    fill_terminal_default_background(
+                        &mut frame,
+                        geometry.inner,
+                        crate::protocol::color_to_u32(self.config.palette.panel_bg),
+                    );
+                }
                 self.hits.popup = Some(PaneHit {
                     rect: geometry.outer,
                     inner_rect: geometry.inner,
