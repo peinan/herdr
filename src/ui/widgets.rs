@@ -1,9 +1,11 @@
 use ratatui::{
+    buffer::Buffer,
     layout::{Constraint, Layout, Rect},
     style::Color,
 };
 
 use crate::app::state::Palette;
+use crate::protocol::render_ansi::symbol_cell_width;
 
 pub(super) fn panel_contrast_fg(palette: &Palette) -> Color {
     match palette.panel_bg {
@@ -106,4 +108,123 @@ pub(crate) fn continue_button_rect(area: Rect) -> Rect {
         action_button_width(Some("↵"), "continue"),
         1,
     )
+}
+
+/// Blanks the surviving half of a double-width grapheme that an overlay drawn
+/// over `area` cut in two.
+///
+/// A wide grapheme is stored as a head cell holding the glyph plus a
+/// continuation cell holding an empty symbol. An overlay only rewrites cells
+/// inside `area`, so a grapheme straddling a vertical edge survives as a half
+/// pair, and the ANSI encoder derives cursor advance purely from the current
+/// frame: a leftover head one column left of `area` swallows the overlay's
+/// first column, and an orphaned continuation cell one column right of `area`
+/// emits no bytes at all and keeps whatever the host already showed there.
+pub(crate) fn sanitize_overlay_edges(buffer: &mut Buffer, area: Rect) {
+    if area.is_empty() {
+        return;
+    }
+    for y in area.top()..area.bottom() {
+        if area.left() > 0 {
+            if let Some(cell) = buffer.cell_mut((area.left() - 1, y)) {
+                if symbol_cell_width(cell.symbol()) > 1 {
+                    cell.set_symbol(" ");
+                }
+            }
+        }
+        let right = area.right();
+        let covered_by_overlay = buffer
+            .cell((right - 1, y))
+            .is_some_and(|cell| symbol_cell_width(cell.symbol()) > 1);
+        if covered_by_overlay {
+            continue;
+        }
+        if let Some(cell) = buffer.cell_mut((right, y)) {
+            if cell.symbol().is_empty() {
+                cell.set_symbol(" ");
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Writes a double-width grapheme as the terminal renderer does: the glyph
+    /// on the head cell and an empty symbol on the continuation cell.
+    fn set_wide(buffer: &mut Buffer, x: u16, y: u16, symbol: &str) {
+        buffer.cell_mut((x, y)).unwrap().set_symbol(symbol);
+        buffer.cell_mut((x + 1, y)).unwrap().set_symbol("");
+    }
+
+    fn symbol_at(buffer: &Buffer, x: u16, y: u16) -> &str {
+        buffer.cell((x, y)).unwrap().symbol()
+    }
+
+    #[test]
+    fn blanks_a_wide_head_that_spills_into_the_overlay() {
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 10, 2));
+        set_wide(&mut buffer, 3, 0, "あ");
+        // Row 1 keeps a narrow neighbour to prove untouched columns survive.
+        buffer.cell_mut((3, 1)).unwrap().set_symbol("x");
+        let overlay = Rect::new(4, 0, 4, 2);
+        buffer.set_string(4, 0, "····", ratatui::style::Style::default());
+        buffer.set_string(4, 1, "····", ratatui::style::Style::default());
+
+        sanitize_overlay_edges(&mut buffer, overlay);
+
+        assert_eq!(symbol_at(&buffer, 3, 0), " ");
+        assert_eq!(symbol_at(&buffer, 3, 1), "x");
+    }
+
+    #[test]
+    fn blanks_an_orphaned_continuation_right_of_the_overlay() {
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 10, 1));
+        // The head at column 6 is inside the overlay and has been overwritten
+        // by it; only the continuation at column 7 is left behind.
+        set_wide(&mut buffer, 6, 0, "い");
+        let overlay = Rect::new(3, 0, 4, 1);
+        buffer.set_string(3, 0, "····", ratatui::style::Style::default());
+
+        sanitize_overlay_edges(&mut buffer, overlay);
+
+        assert_eq!(symbol_at(&buffer, 7, 0), " ");
+    }
+
+    #[test]
+    fn keeps_a_continuation_that_still_has_its_head() {
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 10, 1));
+        let overlay = Rect::new(3, 0, 4, 1);
+        // The overlay itself ends with a wide grapheme, so column 7 is a
+        // legitimate continuation and must stay empty.
+        set_wide(&mut buffer, 6, 0, "う");
+
+        sanitize_overlay_edges(&mut buffer, overlay);
+
+        assert_eq!(symbol_at(&buffer, 6, 0), "う");
+        assert_eq!(symbol_at(&buffer, 7, 0), "");
+    }
+
+    #[test]
+    fn handles_overlays_flush_with_the_buffer_edges() {
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 6, 1));
+        set_wide(&mut buffer, 4, 0, "え");
+
+        sanitize_overlay_edges(&mut buffer, Rect::new(0, 0, 6, 1));
+
+        // No column exists on either side, so nothing is rewritten.
+        assert_eq!(symbol_at(&buffer, 4, 0), "え");
+        assert_eq!(symbol_at(&buffer, 5, 0), "");
+    }
+
+    #[test]
+    fn empty_overlays_are_a_no_op() {
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 6, 1));
+        set_wide(&mut buffer, 1, 0, "お");
+
+        sanitize_overlay_edges(&mut buffer, Rect::new(3, 0, 0, 1));
+
+        assert_eq!(symbol_at(&buffer, 1, 0), "お");
+    }
 }
