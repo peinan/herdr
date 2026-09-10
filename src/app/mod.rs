@@ -137,8 +137,6 @@ pub struct App {
     pub(crate) agent_metadata_deadline: Option<Instant>,
     pub(crate) pending_agent_resume_deadline: Option<Instant>,
     pub(crate) session_save_deadline: Option<Instant>,
-    /// Deadline after which an "armed" repeatable prefix binding stops repeating
-    /// and drops out of `Mode::Prefix`. `None` whenever not armed. Client-only.
     pub(crate) session_save_thread: Option<std::thread::JoinHandle<()>>,
     pane_exit_checkpoint_pending: bool,
     pub(crate) detached_process_children: Vec<std::process::Child>,
