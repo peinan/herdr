@@ -127,6 +127,10 @@ popup_dim_background = "all"    # off(既定)   | all | panes
   ペインが別にあるときだけ埋まる `$branch` / `$ahead_behind` / `$git_status`。
   `$process` / `$agent` / `$zoom` は popup にペイン ID がなく検出も無効なので常に空で、
   それらだけを含む条件付きグループは丸ごと消える。
+  枠への描き方は通常ペインと同じ ` label `(trim 済み・前後 1 スペース・枠幅に収まらなければ `…` で
+  切り詰め)。ratatui の `Block` はタイトルを角グリフの直後のセルから書き始めるので、素の文字列を
+  渡していた頃は枠に密着していた([#48](https://github.com/peinan/herdr/pull/48))。この詰めだけは
+  クライアントが自分の描く外枠幅に対して行う(サーバは生ラベルを送るまま)。
 - **background**: `all` のみ内容領域に触れる。`blit_pane_surface` の**後**に、背景が
   `Color::Reset`(端末デフォルト)のセルだけを `panel_bg` に差し替えるので、全画面 TUI など
   自前で背景を塗ったセルはどの値でも保持される。
@@ -192,6 +196,13 @@ repeat_timeout = 500
     `all` は逆に内容の背後まで塗って popup を不透明にする(プログラムが自前で塗ったセルは保持)。
 - `ui.popup_dim_background` 追加(`off` 既定 / `all` / `panes`)。popup 表示中に背後を減光してモーダルらしく見せる。
   既存のモーダルオーバーレイ用インライン減光ループを `crate::ui::dim_buffer` に括り出して共用 — [#40](https://github.com/peinan/herdr/issues/40) → [#46](https://github.com/peinan/herdr/pull/46) ([`032524f`](https://github.com/peinan/herdr/commit/032524f))
+- **fix**: popup の枠タイトルが角に密着していたのを、通常ペインと同じ前後 1 スペース付きに修正 — [#47](https://github.com/peinan/herdr/issues/47) → [#48](https://github.com/peinan/herdr/pull/48) ([`6e45fbf`](https://github.com/peinan/herdr/commit/6e45fbf))
+  - ratatui の `Block` はタイトルを角グリフの直後から書き始めるため、生ラベルを渡すと `┌popup titl┐` になる。
+    pane 側の `pane_border_title`(trim → ` label ` → 枠幅に合わせて `…` で切り詰め)を `popup_border_title`
+    として共用したので、書式に自前の前後スペースを書いていても二重にならず、長いラベルが末尾スペースや
+    角を食うこともない。
+  - 詰めはクライアント表示側の責務。サーバは生ラベルを送り続け、クライアントが自分が描く外枠の幅
+    (`ui.popup_padding` と端末サイズでクライアントごとに変わる)に対して詰める。ワイヤ・プロトコルは不変。
 - **fix**: 全角(2 セル幅)文字が popup やオーバーレイの枠線を食う不具合を修正 — [#41](https://github.com/peinan/herdr/issues/41) → [#44](https://github.com/peinan/herdr/pull/44) ([`a9a1889`](https://github.com/peinan/herdr/commit/a9a1889), [`ee47d3b`](https://github.com/peinan/herdr/commit/ee47d3b))
   - ワイド書記素は「先頭セル＝グリフ／後続セル＝空記号」で表現され、ANSI エンコーダは現フレームの記号幅だけで桁送りを決める。
     矩形境界で半分だけ上書きされたペアが残ると、その桁が別のセルから描画される。
