@@ -1,6 +1,8 @@
 mod classic;
 mod minimal;
 
+pub(crate) use classic::tab_bar_content_area;
+
 use ratatui::{layout::Rect, Frame};
 
 use crate::app::AppState;

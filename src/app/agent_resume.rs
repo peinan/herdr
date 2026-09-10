@@ -131,6 +131,7 @@ impl App {
             self.state.pane_borders,
             self.state.single_pane_border,
             self.state.pane_gaps,
+            self.state.pane_outer_borders,
             self.state.pane_padding,
         );
 
@@ -293,6 +294,7 @@ fn derived_pending_agent_resume_pane_infos(
     pane_borders: bool,
     single_pane_border: bool,
     pane_gaps: bool,
+    pane_outer_borders: bool,
     pane_padding: crate::config::PanePadding,
 ) -> Vec<crate::layout::PaneInfo> {
     crate::ui::apply_pane_chrome(
@@ -300,6 +302,7 @@ fn derived_pending_agent_resume_pane_infos(
         pane_borders,
         single_pane_border,
         pane_gaps,
+        pane_outer_borders,
     )
     .into_iter()
     .map(|mut info| {
