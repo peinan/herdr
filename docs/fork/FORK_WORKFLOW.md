@@ -42,10 +42,43 @@ git config merge.conflictStyle zdiff3   # 共通ベースを表示（古い git 
 ```
 
 - 自動アップデート通知は `~/.config/herdr/config.toml`（dotfiles 側）の `[update] version_check = false` で停止済み → [§5](#5-自動アップデート通知)。
-- ビルド/テストには zig が要る（`build.rs` が `zig build` を実行）。非対話 PATH に無いので前置する:
+- ツールチェーンは mise で入れる（`rust-toolchain.toml` は 1.96.1、Zig は `vendor/libghostty-vt/build.zig.zon` の 0.15.2）:
   ```bash
-  export ZIG=~/.local/share/mise/installs/zig/latest/bin/zig
+  mise use -g rust@1.96.1 just@latest bun@1.3.14 cargo:cargo-nextest
+  mise use -g zig@0.15.2 node@25   # 未導入なら
   ```
+  `just check` は Rust に加えて **bun と node** も使う（`docs-contract-test` / `integration-assets-test`）。
+- ビルド/テストには `ZIG` の指定が要る（`build.rs` が `zig build` を実行。mise の zig は非対話 PATH に乗らない）。
+  さらに **macOS 26 の Command Line Tools SDK（MacOSX26.x.sdk）では `libSystem.tbd` に `arm64-macos` ターゲットが無く、
+  zig 0.15.2 は libSystem を一切リンクできない**（`undefined symbol: _exit` 等が大量に出る）。zig は PATH 上の
+  `xcrun --show-sdk-path` で SDK を探すので、旧 15.4 SDK を返す `xcrun` シムを zig だけに見せるラッパを使う
+  （`SDKROOT` や `zig build --sysroot` はビルドランナー自身のリンクには効かない）:
+  ```bash
+  mkdir -p ~/.local/share/herdr-fork/bin
+  cat > ~/.local/share/herdr-fork/bin/xcrun <<'EOF'
+  #!/bin/sh
+  case " $* " in
+    *" --show-sdk-path "*) echo /Library/Developer/CommandLineTools/SDKs/MacOSX15.4.sdk ;;
+    *" --show-sdk-version "*) echo 15.4 ;;
+    *) exec /usr/bin/xcrun "$@" ;;
+  esac
+  EOF
+  cat > ~/.local/share/herdr-fork/zig <<'EOF'
+  #!/bin/sh
+  export PATH="$HOME/.local/share/herdr-fork/bin:$PATH"
+  exec "$HOME/.local/share/mise/installs/zig/0.15.2/zig" "$@"
+  EOF
+  chmod +x ~/.local/share/herdr-fork/bin/xcrun ~/.local/share/herdr-fork/zig
+  export ZIG=~/.local/share/herdr-fork/zig
+  mise exec -- just check
+  ```
+  15.4 SDK が CLT から消えたら、`arm64-macos` を含む別 SDK を指す。
+- herdr セッションの中でテストを走らせるときは `HERDR_*` 環境変数を全部外す（PTY 系テストが誤動作する）:
+  `env -u HERDR_ENV -u HERDR_PANE_ID -u HERDR_SOCKET_PATH -u HERDR_TAB_ID -u HERDR_WORKSPACE_ID mise exec -- just check`
+- 既知の環境依存テスト（macOS 26.6、素の upstream でも同一に失敗する）: `tests/live_handoff.rs` の
+  `live_handoff_keeps_unmanaged_agent_name_bound_to_saved_session`（`/bin/sleep` の環境変数が他プロセスから見えず
+  `HERDR_AGENT` ヒントを検出できない）と `live_handoff_preserves_pane_process_io`（`os error 22`）。`just check` は
+  fail-fast なので、`cargo nextest run --no-fail-fast` で全体を見てこの 2 件だけなら合格扱いにする。
 
 ## 1. 機能開発（日常の主作業）
 
@@ -85,6 +118,12 @@ just check
 git push origin main
 ```
 
+- 複数リリース分遅れた場合は **リリースタグ単位で段階マージ**する（`git merge v0.8.0` → `just check` → commit → 次のタグ）。
+  各段の解決が `rerere` に記録され、最後の段の衝突が「フォーク独自変更 vs upstream の書き直し」に絞れる。
+  2026-09-10 の 0.9.0 sync（367 commits、upstream #3487 の shell クライアント化を含む）は `sync/upstream-0.9.0` worktree で
+  この手順を踏み、`main` へ `--ff-only` で取り込んだ（経緯は [`FORK_FEATURES.md`](FORK_FEATURES.md) の変更履歴）。
+- upstream 側のパス変更: `website/latest.json` / `website/preview.json` は `distribution/` 配下へ移動（0.9.0）。
+
 その後、フォークバイナリを更新するならローカル再ビルド → [§4](#4-フォークバイナリの更新再ビルド)。
 
 ### タイミング / 頻度
@@ -114,9 +153,13 @@ git push origin main
 `herdr update` は**使わない**。アップデータは upstream（herdr.dev）を見るので、実行すると upstream の公式バイナリでフォークが上書きされ、フォーク機能が消える。取り込み後にローカルでビルドし直す:
 
 ```bash
-just build          # → target/release/herdr
-# PATH 上の herdr に入れ替え（例: cargo install --path .）
+ZIG=~/.local/share/herdr-fork/zig mise exec -- just build   # → target/release/herdr（§0 の zig ラッパ前提）
+cp ~/.local/bin/herdr ~/.local/bin/herdr.prev                  # 現行を退避
+install -m 0755 target/release/herdr ~/.local/bin/herdr        # 入れ替え（`herdr server stop` → 再起動で反映）
 ```
+
+`make build` / `make install` は `mise exec zig@0.15.2 -- just build` を呼ぶため、§0 の xcrun シムが PATH に無いと
+macOS 26 の SDK 問題でリンクに失敗する。当面は上記のように `ZIG` にラッパを渡す。
 
 ## 5. 自動アップデート通知
 

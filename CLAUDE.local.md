@@ -36,6 +36,7 @@ git push origin main
 - `rerere` + `merge.conflictStyle=zdiff3` は有効化済み（→ FORK_WORKFLOW §0）。
 - `just check` は UI 機能の欠落を検出できない。マージ後に自分のカスタマイズの描画も目視する。
 - 進行中の `feat/*` worktree が少ないときに取り込む。
+- 複数リリース分遅れたらリリースタグ単位で段階マージ（`v0.8.0` → `v0.8.2` → `upstream/master`）。直近: 2026-09-10 に v0.9.0 まで同期（詳細は `docs/fork/FORK_FEATURES.md` 変更履歴、再実装待ちは issue #34/#35/#36）。
 
 ## 機能開発 / PR
 
@@ -54,8 +55,15 @@ gh api repos/peinan/herdr/pulls \
 - **「`master` へ反映する」手順の上書き:** `AGENTS.md`（Multi-agent isolation）は共有チェックアウトを fast-forward して `origin/master` に push せよと書くが、このフォークでは個人の作業は上記フォーク内 PR で `main` にランディングする。`master` はリリース時の `main:master` 反映でのみ動く。
 - **アップストリーム管理ファイル（`AGENTS.md`, `README`, `.github/workflows/*`, `config/model.rs` の既定 等）に個人変更を入れない**（取り込みのたびのコンフリクトを抑えるため。個人設定はこのファイルやユーザ config に置く）。
 - **コミット規約:** 小文字 conventional commits、絵文字なし、**AI の co-author 行なし**。`refs #<n>`（`fixes`/`closes` ではなく）は実 issue のみ。コミット文面は事前に提案して合意を取る。
-- **ビルド・テストには `ZIG` の設定が必要**（mise 管理の zig は非対話シェルの PATH に乗らない）:
+- **ツールチェーンは mise**（rust 1.96.1 / just / bun 1.3.14 / cargo-nextest / zig 0.15.2 / node）。`just check` は bun と node も要る。
+- **ビルド・テストには `ZIG` の指定が必要**（mise 管理の zig は非対話シェルの PATH に乗らない）。さらに macOS 26 の CLT SDK では
+  zig 0.15.2 が libSystem をリンクできないため、`xcrun --show-sdk-path` を 15.4 SDK に固定する zig ラッパを `ZIG` に渡す
+  （手順は FORK_WORKFLOW §0）:
 
 ```bash
-ZIG=~/.local/share/mise/installs/zig/latest/bin/zig just check
+ZIG=~/.local/share/herdr-fork/zig mise exec -- just check
 ```
+
+- herdr セッション内でテストするときは `HERDR_*` 環境変数を全部外す（`env -u HERDR_ENV -u HERDR_PANE_ID -u HERDR_SOCKET_PATH -u HERDR_TAB_ID -u HERDR_WORKSPACE_ID ...`）。
+- `tests/live_handoff.rs` の 2 件（`..._keeps_unmanaged_agent_name_bound_to_saved_session`, `..._preserves_pane_process_io`）は
+  この Mac（macOS 26.6）では素の upstream でも落ちる環境依存。`cargo nextest run --no-fail-fast` でこの 2 件だけなら合格扱い。
