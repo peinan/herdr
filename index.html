@@ -7,7 +7,7 @@
 <title>herdr-fork — herdr を自分仕様にする opt-in UI 拡張</title>
 <meta name="description" content="ターミナル常駐のエージェントマルチプレクサ herdr の個人フォーク。ペイン枠・タイトル・タブバー・キー操作の細部を config.toml でオプトイン調整できる拡張を upstream の上に積んでいます。">
 <meta property="og:title" content="herdr-fork">
-<meta property="og:description" content="herdr の個人フォーク。見た目と手触りを config.toml でオプトイン調整できる 10 機能・15 設定キー。既定は upstream と同じ。">
+<meta property="og:description" content="herdr の個人フォーク。見た目と手触りを config.toml でオプトイン調整できる 12 機能・17 設定キー。既定は upstream と同じ。">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://peinan.github.io/herdr/">
 <meta name="twitter:card" content="summary">
@@ -327,9 +327,6 @@ button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
 /* card demo states */
 #d-pad .pane-body{padding:0 2px}
 #d-pad[data-pad="on"] .pane-body{padding:8px 16px}
-#d-single .pane{transition:border-color .25s}
-#d-single[data-sb="false"] .pane{border-color:transparent}
-#d-single[data-sb="false"] .pane-title{opacity:0}
 #d-dim[data-dim="true"] .pane:not(.is-focus){border-color:var(--line-soft)}
 #d-dim[data-dim="true"] .pane:not(.is-focus)>.pane-body,
 #d-dim[data-dim="true"] .pane:not(.is-focus)>.pane-title{opacity:.34}
@@ -411,19 +408,93 @@ footer{margin-top:110px;border-top:1px solid var(--line-soft)}
   *,*::before,*::after{animation:none!important;transition:none!important}
   html{scroll-behavior:auto}
 }
+
+/* ───── icons (tabler outline, inlined as a sprite) ───── */
+.sprite{display:none}
+.i{width:1em;height:1em;flex:none;fill:none;stroke:currentColor;stroke-width:2;
+   stroke-linecap:round;stroke-linejoin:round;vertical-align:-.15em}
+.topnav .i,.btn .i,.foot-links .i,.prlink .i,.refnote .i,.ins-note .i{
+  width:14px;height:14px;stroke-width:1.9}
+.sec-eyebrow .i{width:14px;height:14px}
+.ico{width:34px;height:34px;border-radius:9px;display:grid;place-items:center;flex:none;
+  color:var(--amber);background:color-mix(in srgb,var(--amber) 10%,transparent);
+  border:1px solid color-mix(in srgb,var(--amber) 20%,transparent)}
+.ico .i{width:18px;height:18px;stroke-width:1.7}
+.pol .ico{margin-bottom:14px}
+.card-head{align-items:center}
+.card-head .chl{display:flex;align-items:center;gap:11px;min-width:0}
+.card-head .ico{width:28px;height:28px;border-radius:8px}
+.card-head .ico .i{width:15px;height:15px}
+.flag-copy .fkey .i{width:14px;height:14px;stroke-width:1.9}
+
+/* ───── fix note ───── */
+.fixnote{display:flex;gap:14px;align-items:flex-start;margin-top:8px;
+  border:1px solid var(--line-soft);border-left:2px solid var(--green);
+  border-radius:10px;padding:18px 20px;background:var(--bg-raise)}
+.fixnote .ico{color:var(--green);background:color-mix(in srgb,var(--green) 10%,transparent);
+  border-color:color-mix(in srgb,var(--green) 22%,transparent)}
+.fixnote h3{font-size:1rem;margin:0 0 4px}
+.fixnote p{color:var(--text-dim);font-size:.9rem;margin:0}
+.fixnote .prlink{display:inline-block;margin-top:8px}
+@media(max-width:720px){.fixnote{flex-direction:column;gap:10px}}
+
+/* ───── popup demo ───── */
+.popstage{position:relative;min-height:176px}
+/* the popup overwrites the cells behind it; only its own background varies,
+   so the pane never shows through the content area. */
+.pop{position:absolute;left:33%;right:6%;top:19%;bottom:11%;
+  --pad-y:11px;--pad-x:17px;background:var(--term);
+  border:1px solid var(--amber);border-radius:3px}
+.pop-ring{position:absolute;inset:0;border-style:solid;border-color:transparent;
+  border-width:var(--pad-y) var(--pad-x);pointer-events:none}
+.pop-title{position:absolute;top:-.78em;left:11px;padding:0 6px;z-index:2;
+  font-family:var(--mono);font-size:11px;color:var(--amber);background:var(--term)}
+.pop-body{position:relative;z-index:1;padding:var(--pad-y) var(--pad-x);
+  font-family:var(--mono);font-size:11.5px;line-height:1.75;color:var(--term-text);white-space:pre}
+#d-pop[data-ppad="off"] .pop{--pad-y:1px;--pad-x:3px}
+#d-pop[data-pbg="panel"] .pop-ring,
+#d-pop[data-pbg="all"] .pop-ring{border-color:var(--bg-raise)}
+#d-pop[data-pbg="all"] .pop-body{background:var(--bg-raise)}
+#d-pop[data-pbg="transparent"] .pop{background:var(--term)}
+#d-pop[data-pdim="all"] .t-body{opacity:.38}
+#d-pop[data-pdim="panes"] .t-main{opacity:.38}
 </style>
 </head>
 <body>
+
+<svg class="sprite" aria-hidden="true" focusable="false">
+<symbol id="i-adjustments-horizontal" viewBox="0 0 24 24"><path d="M14 6m-2 0a2 2 0 1 0 4 0a2 2 0 1 0 -4 0"/><path d="M4 6l8 0"/><path d="M16 6l4 0"/><path d="M8 12m-2 0a2 2 0 1 0 4 0a2 2 0 1 0 -4 0"/><path d="M4 12l2 0"/><path d="M10 12l10 0"/><path d="M17 18m-2 0a2 2 0 1 0 4 0a2 2 0 1 0 -4 0"/><path d="M4 18l11 0"/><path d="M19 18l1 0"/></symbol>
+<symbol id="i-app-window" viewBox="0 0 24 24"><path d="M3 5m0 2a2 2 0 0 1 2 -2h14a2 2 0 0 1 2 2v10a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2z"/><path d="M6 8h.01"/><path d="M9 8h.01"/></symbol>
+<symbol id="i-arrow-down" viewBox="0 0 24 24"><path d="M12 5l0 14"/><path d="M18 13l-6 6"/><path d="M6 13l6 6"/></symbol>
+<symbol id="i-book-2" viewBox="0 0 24 24"><path d="M19 4v16h-12a2 2 0 0 1 -2 -2v-12a2 2 0 0 1 2 -2h12z"/><path d="M19 16h-12a2 2 0 0 0 -2 2"/><path d="M9 8h6"/></symbol>
+<symbol id="i-box-padding" viewBox="0 0 24 24"><path d="M4 4m0 2a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2z"/><path d="M8 16v.01"/><path d="M8 12v.01"/><path d="M8 8v.01"/><path d="M16 16v.01"/><path d="M16 12v.01"/><path d="M16 8v.01"/><path d="M12 8v.01"/><path d="M12 16v.01"/></symbol>
+<symbol id="i-brand-github" viewBox="0 0 24 24"><path d="M9 19c-4.3 1.4 -4.3 -2.5 -6 -3m12 5v-3.5c0 -1 .1 -1.4 -.5 -2c2.8 -.3 5.5 -1.4 5.5 -6a4.6 4.6 0 0 0 -1.3 -3.2a4.2 4.2 0 0 0 -.1 -3.2s-1.1 -.3 -3.5 1.3a12.3 12.3 0 0 0 -6.2 0c-2.4 -1.6 -3.5 -1.3 -3.5 -1.3a4.2 4.2 0 0 0 -.1 3.2a4.6 4.6 0 0 0 -1.3 3.2c0 4.6 2.7 5.7 5.5 6c-.6 .6 -.6 1.2 -.5 2v3.5"/></symbol>
+<symbol id="i-bug" viewBox="0 0 24 24"><path d="M9 9v-1a3 3 0 0 1 6 0v1"/><path d="M8 9h8a6 6 0 0 1 1 3v3a5 5 0 0 1 -10 0v-3a6 6 0 0 1 1 -3"/><path d="M3 13l4 0"/><path d="M17 13l4 0"/><path d="M12 20l0 -6"/><path d="M4 19l3.35 -2"/><path d="M20 19l-3.35 -2"/><path d="M4 7l3.75 2.4"/><path d="M20 7l-3.75 2.4"/></symbol>
+<symbol id="i-contrast" viewBox="0 0 24 24"><path d="M12 12m-9 0a9 9 0 1 0 18 0a9 9 0 1 0 -18 0"/><path d="M12 17a5 5 0 0 0 0 -10v10"/></symbol>
+<symbol id="i-external-link" viewBox="0 0 24 24"><path d="M12 6h-6a2 2 0 0 0 -2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2 -2v-6"/><path d="M11 13l9 -9"/><path d="M15 4h5v5"/></symbol>
+<symbol id="i-git-merge" viewBox="0 0 24 24"><path d="M7 18m-2 0a2 2 0 1 0 4 0a2 2 0 1 0 -4 0"/><path d="M7 6m-2 0a2 2 0 1 0 4 0a2 2 0 1 0 -4 0"/><path d="M17 12m-2 0a2 2 0 1 0 4 0a2 2 0 1 0 -4 0"/><path d="M7 8l0 8"/><path d="M7 8a4 4 0 0 0 4 4h4"/></symbol>
+<symbol id="i-keyboard" viewBox="0 0 24 24"><path d="M2 6m0 2a2 2 0 0 1 2 -2h16a2 2 0 0 1 2 2v8a2 2 0 0 1 -2 2h-16a2 2 0 0 1 -2 -2z"/><path d="M6 10l0 .01"/><path d="M10 10l0 .01"/><path d="M14 10l0 .01"/><path d="M18 10l0 .01"/><path d="M6 14l0 .01"/><path d="M18 14l0 .01"/><path d="M10 14l4 .01"/></symbol>
+<symbol id="i-layout-navbar" viewBox="0 0 24 24"><path d="M4 4m0 2a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2z"/><path d="M4 9l16 0"/></symbol>
+<symbol id="i-layout-sidebar" viewBox="0 0 24 24"><path d="M4 4m0 2a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2z"/><path d="M9 4l0 16"/></symbol>
+<symbol id="i-list-details" viewBox="0 0 24 24"><path d="M13 5h8"/><path d="M13 9h5"/><path d="M13 15h8"/><path d="M13 19h5"/><path d="M3 4m0 1a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v4a1 1 0 0 1 -1 1h-4a1 1 0 0 1 -1 -1z"/><path d="M3 14m0 1a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v4a1 1 0 0 1 -1 1h-4a1 1 0 0 1 -1 -1z"/></symbol>
+<symbol id="i-maximize" viewBox="0 0 24 24"><path d="M4 8v-2a2 2 0 0 1 2 -2h2"/><path d="M4 16v2a2 2 0 0 0 2 2h2"/><path d="M16 4h2a2 2 0 0 1 2 2v2"/><path d="M16 20h2a2 2 0 0 0 2 -2v-2"/></symbol>
+<symbol id="i-radar-2" viewBox="0 0 24 24"><path d="M12 12m-1 0a1 1 0 1 0 2 0a1 1 0 1 0 -2 0"/><path d="M15.51 15.56a5 5 0 1 0 -3.51 1.44"/><path d="M18.832 17.86a9 9 0 1 0 -6.832 3.14"/><path d="M12 12v9"/></symbol>
+<symbol id="i-terminal-2" viewBox="0 0 24 24"><path d="M8 9l3 3l-3 3"/><path d="M13 15l3 0"/><path d="M3 4m0 2a2 2 0 0 1 2 -2h14a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2z"/></symbol>
+<symbol id="i-text-caption" viewBox="0 0 24 24"><path d="M4 15h16"/><path d="M4 4m0 1a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v4a1 1 0 0 1 -1 1h-4a1 1 0 0 1 -1 -1z"/><path d="M4 20h12"/></symbol>
+<symbol id="i-toggle-right" viewBox="0 0 24 24"><path d="M16 12m-2 0a2 2 0 1 0 4 0a2 2 0 1 0 -4 0"/><path d="M2 6m0 6a6 6 0 0 1 6 -6h8a6 6 0 0 1 6 6v0a6 6 0 0 1 -6 6h-8a6 6 0 0 1 -6 -6z"/></symbol>
+</svg>
+
 
 <header class="tophat">
   <div class="wrap">
     <a class="brand" href="#"><span class="ps">❯</span>peinan/herdr</a>
     <nav class="topnav">
       <a href="#features" class="opt">features</a>
+      <a href="#popup" class="opt">popup</a>
       <a href="#keys" class="opt">keys</a>
       <a href="#reference" class="opt">reference</a>
       <a href="#install" class="opt">install</a>
-      <a href="https://github.com/peinan/herdr">GitHub ↗</a>
+      <a href="https://github.com/peinan/herdr"><svg class="i" aria-hidden="true"><use href="#i-brand-github"/></svg> GitHub <svg class="i" aria-hidden="true"><use href="#i-external-link"/></svg></a>
     </nav>
   </div>
 </header>
@@ -436,10 +507,10 @@ footer{margin-top:110px;border-top:1px solid var(--line-soft)}
     <p class="eyebrow"># personal fork of <a href="https://github.com/ogulcancelik/herdr">ogulcancelik/herdr</a></p>
     <h1>herdr<span class="fk">-fork</span><span class="cur" aria-hidden="true"></span></h1>
     <p class="lede">エージェントの多重化は upstream のまま。<br>見た目と手触りだけ、config.toml で自分仕様に。</p>
-    <p class="sub">herdr はターミナル常駐のエージェントマルチプレクサ。このフォークはその上に、ペイン枠・タイトル・タブバー・キー操作の細部を調整できる <strong>10 機能・15 設定キー</strong>を積んでいます。既定値はすべて upstream 相当 — 何も書かなければ、本家と同じ見た目・挙動で動きます。</p>
+    <p class="sub">herdr はターミナル常駐のエージェントマルチプレクサ。このフォークはその上に、ペイン枠・タイトル・タブバー・キー操作の細部を調整できる <strong>12 機能・17 設定キー</strong>を積んでいます。既定値はすべて upstream 相当 — 何も書かなければ、本家と同じ見た目・挙動で動きます。</p>
     <div class="cta">
-      <a class="btn primary" href="https://github.com/peinan/herdr">GitHub で見る</a>
-      <a class="btn" href="#features">機能を見る ↓</a>
+      <a class="btn primary" href="https://github.com/peinan/herdr"><svg class="i" aria-hidden="true"><use href="#i-brand-github"/></svg> GitHub で見る</a>
+      <a class="btn" href="#features">機能を見る <svg class="i" aria-hidden="true"><use href="#i-arrow-down"/></svg></a>
     </div>
 
     <div class="heroDemo demo" id="d-hero" data-tabs="minimal" data-dim="true" data-fmt="on">
@@ -490,21 +561,24 @@ footer{margin-top:110px;border-top:1px solid var(--line-soft)}
 <section class="sec" id="policy">
   <div class="wrap">
     <div class="sec-head">
-      <p class="sec-eyebrow"># philosophy</p>
+      <p class="sec-eyebrow"><svg class="i" aria-hidden="true"><use href="#i-adjustments-horizontal"/></svg> # philosophy</p>
       <h2>既定は、本家のまま。</h2>
     </div>
     <div class="pol">
       <article>
+        <span class="ico"><svg class="i" aria-hidden="true"><use href="#i-toggle-right"/></svg></span>
         <p class="pk"># opt-in by default</p>
         <h3>素の起動は upstream と同一</h3>
         <p>フォーク独自の UI はすべてスイッチ式。設定を書かない限り本家相当の見た目・挙動で、欲しい変化だけを config.toml で有効化する方針です。</p>
       </article>
       <article>
+        <span class="ico"><svg class="i" aria-hidden="true"><use href="#i-radar-2"/></svg></span>
         <p class="pk"># native detection</p>
         <h3>シェルフックなしで動く</h3>
         <p>ペインタイトルのプロセス名・cwd・git 情報は herdr 本体の syscall ベース検出から描画。.zshrc のフックや OSC 7 の設定は不要です。</p>
       </article>
       <article>
+        <span class="ico"><svg class="i" aria-hidden="true"><use href="#i-git-merge"/></svg></span>
         <p class="pk"># upstream-tracking</p>
         <h3>本家に追従し続ける</h3>
         <p>upstream/master を merge ベースで継続的に取り込み。差分は <a href="https://github.com/peinan/herdr/blob/main/docs/fork/FORK_FEATURES.md">FORK_FEATURES.md</a> に機能単位で記録しています。</p>
@@ -517,7 +591,7 @@ footer{margin-top:110px;border-top:1px solid var(--line-soft)}
 <section class="sec" id="features">
   <div class="wrap">
     <div class="sec-head">
-      <p class="sec-eyebrow">[ui]</p>
+      <p class="sec-eyebrow"><svg class="i" aria-hidden="true"><use href="#i-layout-navbar"/></svg> [ui]</p>
       <h2>見た目を、細部まで。</h2>
       <p>各デモの設定値はクリックで切り替えられます。PR 番号はフォークリポジトリの Pull Request へのリンクです。</p>
     </div>
@@ -525,7 +599,7 @@ footer{margin-top:110px;border-top:1px solid var(--line-soft)}
     <!-- flagship: pane_title_format -->
     <div class="flag">
       <div class="flag-copy">
-        <p class="fkey">ui.pane_title_format</p>
+        <p class="fkey"><svg class="i" aria-hidden="true"><use href="#i-text-caption"/></svg> ui.pane_title_format</p>
         <h3>starship 風のペインタイトル書式</h3>
         <p>ペイン枠のタイトルを <code class="mono">$変数</code> と条件付きグループで自由に記述。ディレクトリ・真のフォアグラウンドプロセス名・ペイン単位の git 状態(ブランチ / ahead-behind / dirty)を herdr がネイティブに検出して描画します。</p>
         <ul>
@@ -575,13 +649,14 @@ footer{margin-top:110px;border-top:1px solid var(--line-soft)}
     <!-- flagship: tab_bar_style -->
     <div class="flag rev">
       <div class="flag-copy">
-        <p class="fkey">ui.tab_bar_{style,position,align,title}</p>
+        <p class="fkey"><svg class="i" aria-hidden="true"><use href="#i-layout-navbar"/></svg> ui.tab_bar_{style,align,title}</p>
         <h3>タブバーを 2 系統から選ぶ</h3>
-        <p>upstream の上部テキストタブ(<code class="mono">classic</code>)と、このフォークが導入したグリフ帯(<code class="mono">minimal</code>)を切り替え。minimal は位置・寄せ・タブ名併記をパラメータで調整できます。</p>
+        <p>upstream の上部テキストタブ(<code class="mono">classic</code>)と、このフォークが導入したグリフ帯(<code class="mono">minimal</code>)を切り替え。minimal は寄せとタブ名併記をパラメータで調整できます。</p>
         <ul>
           <li>classic: 自動採番・カスタム名・タブ多数時の横スクロールを持つ本家の見た目</li>
-          <li>minimal: タブバーの占有を 1 行のグリフ帯まで縮小。position / align / title で調整</li>
-          <li>position・align・title は minimal のときだけ有効(classic では常に上・テキスト)</li>
+          <li>minimal: タブバーの占有を 1 行のグリフ帯まで縮小。align / title で調整</li>
+          <li><code class="mono">tab_bar_position</code> は upstream 共通キー(既定 <code class="mono">"top"</code>)。classic にも効きます</li>
+          <li>align・title は minimal のときだけ有効(classic では常にテキスト)</li>
         </ul>
         <span class="prlink">refs: <a href="https://github.com/peinan/herdr/pull/10">#10</a> · <a href="https://github.com/peinan/herdr/pull/24">#24</a></span>
       </div>
@@ -589,7 +664,7 @@ footer{margin-top:110px;border-top:1px solid var(--line-soft)}
         <div class="panel demo" id="d-tab" data-style="minimal" data-pos="bottom" data-align="right" data-title="false">
           <pre class="cfg"><span class="tbl">[ui]</span>
 <span class="k">tab_bar_style</span>    = <span class="radio" data-demo="d-tab" data-key="style"><button data-value="classic" aria-pressed="false">"classic"</button><button data-value="minimal" aria-pressed="true">"minimal"</button></span>
-<span class="k">tab_bar_position</span> = <span class="radio" data-demo="d-tab" data-key="pos" data-needs="style:minimal"><button data-value="top" aria-pressed="false">"top"</button><button data-value="bottom" aria-pressed="true">"bottom"</button></span>
+<span class="k">tab_bar_position</span> = <span class="radio" data-demo="d-tab" data-key="pos"><button data-value="top" aria-pressed="false">"top"</button><button data-value="bottom" aria-pressed="true">"bottom"</button></span>
 <span class="k">tab_bar_align</span>    = <span class="radio" data-demo="d-tab" data-key="align" data-needs="style:minimal"><button data-value="left" aria-pressed="false">"left"</button><button data-value="right" aria-pressed="true">"right"</button></span>
 <span class="k">tab_bar_title</span>    = <span class="radio" data-demo="d-tab" data-key="title" data-needs="style:minimal"><button data-value="false" aria-pressed="true">false</button><button data-value="true" aria-pressed="false">true</button></span></pre>
           <div class="stage">
@@ -614,7 +689,7 @@ footer{margin-top:110px;border-top:1px solid var(--line-soft)}
     <div class="grid-cards">
 
       <article class="card">
-        <div class="card-head"><h3>ペイン内余白</h3><a class="pr" href="https://github.com/peinan/herdr/pull/15">#15</a></div>
+        <div class="card-head"><span class="chl"><span class="ico"><svg class="i" aria-hidden="true"><use href="#i-box-padding"/></svg></span><h3>ペイン内余白</h3></span><a class="pr" href="https://github.com/peinan/herdr/pull/15">#15</a></div>
         <p>ペイン枠(または画面端)と端末内容の間に、セル単位の余白を上下左右で指定。PTY サイズと描画が一致し、スクロールバーは余白の内側に寄ります。</p>
         <pre class="cfg"><span class="k">ui.pane_padding</span> = <button class="pill" data-demo="d-pad" data-key="pad" data-vals="off|on" data-disp="{}|{ top = 1, left = 2 }" data-i="1" aria-label="ui.pane_padding の値を切り替え">{ top = 1, left = 2 }</button></pre>
         <div class="demo" id="d-pad" data-pad="on">
@@ -629,22 +704,7 @@ footer{margin-top:110px;border-top:1px solid var(--line-soft)}
       </article>
 
       <article class="card">
-        <div class="card-head"><h3>単独ペインの枠</h3><a class="pr" href="https://github.com/peinan/herdr/pull/11">#11</a></div>
-        <p>ペインが 1 つだけのタブでも枠とタイトルを描画。タイトル書式と組み合わせると、全画面で作業しつつ git 状態を常時視界に置けます。</p>
-        <pre class="cfg"><span class="k">ui.single_pane_border</span> = <button class="pill" data-demo="d-single" data-key="sb" data-vals="false|true" data-disp="false|true" data-i="1" aria-label="ui.single_pane_border の値を切り替え">true</button></pre>
-        <div class="demo" id="d-single" data-sb="true">
-          <div class="term mini"><div class="t-main">
-            <div class="pane is-focus">
-              <span class="pane-title"><span class="fmark">▌ </span><span class="s-dir">herdr</span> <span class="s-proc">nvim</span><span class="s-sep"> ⋅ </span><span class="s-br">main</span></span>
-              <div class="pane-body"><span class="ln">7</span> <span class="kw">pub struct</span> <span class="fn">Workspace</span> {
-<span class="ln">8</span>     tabs: Vec&lt;Tab&gt;,</div>
-            </div>
-          </div></div>
-        </div>
-      </article>
-
-      <article class="card">
-        <div class="card-head"><h3>非アクティブペイン減光</h3><a class="pr" href="https://github.com/peinan/herdr/pull/22">#2 · #22</a></div>
+        <div class="card-head"><span class="chl"><span class="ico"><svg class="i" aria-hidden="true"><use href="#i-contrast"/></svg></span><h3>非アクティブペイン減光</h3></span><a class="pr" href="https://github.com/peinan/herdr/pull/22">#2 · #22</a></div>
         <p>フォーカス外のペインを常時薄くして、いま見ている場所を強調。既定 false は upstream 挙動(prefix / コマンドモード時のみ減光)です。</p>
         <pre class="cfg"><span class="k">ui.dim_inactive_panes</span> = <button class="pill" data-demo="d-dim" data-key="dim" data-vals="false|true" data-disp="false|true" data-i="1" aria-label="ui.dim_inactive_panes の値を切り替え">true</button></pre>
         <div class="demo" id="d-dim" data-dim="true">
@@ -662,7 +722,7 @@ footer{margin-top:110px;border-top:1px solid var(--line-soft)}
       </article>
 
       <article class="card">
-        <div class="card-head"><h3>フォーカスマーカー</h3><a class="pr" href="https://github.com/peinan/herdr/pull/23">#23</a></div>
+        <div class="card-head"><span class="chl"><span class="ico"><svg class="i" aria-hidden="true"><use href="#i-text-caption"/></svg></span><h3>フォーカスマーカー</h3></span><a class="pr" href="https://github.com/peinan/herdr/pull/23">#23</a></div>
         <p>フォーカスペインのタイトル先頭に付く <code class="mono">▌</code> マーカーの表示切替。false にすると色と太字だけでフォーカスを示します。</p>
         <pre class="cfg"><span class="k">ui.show_pane_focus_marker</span> = <button class="pill" data-demo="d-marker" data-key="fm" data-vals="true|false" data-disp="true|false" data-i="0" aria-label="ui.show_pane_focus_marker の値を切り替え">true</button></pre>
         <div class="demo" id="d-marker" data-fm="true">
@@ -680,7 +740,7 @@ footer{margin-top:110px;border-top:1px solid var(--line-soft)}
       </article>
 
       <article class="card">
-        <div class="card-head"><h3>サイドバー区切り線</h3><a class="pr" href="https://github.com/peinan/herdr/pull/3">#3</a></div>
+        <div class="card-head"><span class="chl"><span class="ico"><svg class="i" aria-hidden="true"><use href="#i-layout-sidebar"/></svg></span><h3>サイドバー区切り線</h3></span><a class="pr" href="https://github.com/peinan/herdr/pull/3">#3</a></div>
         <p>サイドバーとペイン領域の間の縦区切り線を消して、地続きの 1 画面として見せられます。</p>
         <pre class="cfg"><span class="k">ui.sidebar_divider</span> = <button class="pill" data-demo="d-div" data-key="sd" data-vals="true|false" data-disp="true|false" data-i="0" aria-label="ui.sidebar_divider の値を切り替え">true</button></pre>
         <div class="demo" id="d-div" data-sd="true">
@@ -701,8 +761,8 @@ footer{margin-top:110px;border-top:1px solid var(--line-soft)}
       </article>
 
       <article class="card">
-        <div class="card-head"><h3>ズームマーカー</h3><a class="pr" href="https://github.com/peinan/herdr/pull/25">#4 · #25</a></div>
-        <p><code class="mono">prefix+z</code> ズーム中を示すマーカーの文字と表示位置。タブ・ペイン枠・両方・非表示から選べます(文字は <code class="mono">ui.zoom_indicator</code>、既定 "Z")。</p>
+        <div class="card-head"><span class="chl"><span class="ico"><svg class="i" aria-hidden="true"><use href="#i-maximize"/></svg></span><h3>ズームマーカー</h3></span><a class="pr" href="https://github.com/peinan/herdr/pull/25">#4 · #25</a></div>
+        <p><code class="mono">prefix+z</code> ズーム中を示すマーカーの文字と表示位置(文字は <code class="mono">ui.zoom_indicator</code>、既定 "Z")。0.9.0 sync 以降、タブ側は upstream 固定の <code class="mono"> Z</code> になり、このキーはペイン枠側にだけ効きます。</p>
         <pre class="cfg"><span class="k">ui.zoom_indicator_position</span> =
   <span class="radio" data-demo="d-zoom" data-key="zpos"><button data-value="tab" aria-pressed="true">"tab"</button><button data-value="pane" aria-pressed="false">"pane"</button><button data-value="both" aria-pressed="false">"both"</button><button data-value="none" aria-pressed="false">"none"</button></span></pre>
         <div class="demo" id="d-zoom" data-zpos="tab">
@@ -719,7 +779,7 @@ footer{margin-top:110px;border-top:1px solid var(--line-soft)}
       </article>
 
       <article class="card wide">
-        <div class="card-head"><h3>prefix 待機表示</h3><a class="pr" href="https://github.com/peinan/herdr/pull/5">#5</a></div>
+        <div class="card-head"><span class="chl"><span class="ico"><svg class="i" aria-hidden="true"><use href="#i-keyboard"/></svg></span><h3>prefix 待機表示</h3></span><a class="pr" href="https://github.com/peinan/herdr/pull/5">#5</a></div>
         <p>prefix キー待機中の示し方。既定は下部ヒントバー、<code class="mono">highlight</code> はバーを隠してフォーカス枠とアクティブタブを再着色します。</p>
         <pre class="cfg"><span class="k">ui.prefix_indicator</span> =
   <span class="radio" data-demo="d-prefix" data-key="pi"><button data-value="status_bar" aria-pressed="true">"status_bar"</button><button data-value="highlight" aria-pressed="false">"highlight"</button></span></pre>
@@ -741,11 +801,81 @@ footer{margin-top:110px;border-top:1px solid var(--line-soft)}
   </div>
 </section>
 
+<!-- ═════════ popup ═════════ -->
+<section class="sec" id="popup">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="sec-eyebrow"><svg class="i" aria-hidden="true"><use href="#i-app-window"/></svg> [ui] popup</p>
+      <h2>popup も、同じ手触りで。</h2>
+      <p>キーバインドやプラグインが開くセッションモーダル端末にも、ペインと同じ余白とタイトル書式を。背景の塗り方と背後の減光も選べます。</p>
+    </div>
+
+    <div class="flag">
+      <div class="flag-copy">
+        <p class="fkey"><svg class="i" aria-hidden="true"><use href="#i-app-window"/></svg> ui.popup_{padding,title_format,background,dim_background}</p>
+        <h3>透過ターミナルでも、崩れない</h3>
+        <p>popup の枠と余白は panel 背景で塗られるので、端末を透過にしていると popup のまわりだけ不透明な帯が浮きます。塗る範囲を選べるようにしました。</p>
+        <ul>
+          <li><code class="mono">popup_background</code> — <code class="mono">panel</code>(枠と余白だけ・従来)/ <code class="mono">all</code>(内容の背後まで塗って不透明)/ <code class="mono">transparent</code>(どこも塗らず端末背景が透ける)</li>
+          <li>popup の中のプログラムが自分で塗った背景は、どの値でもそのまま残ります</li>
+          <li><code class="mono">popup_padding</code> / <code class="mono">popup_title_format</code> はペイン側キーと独立。pane に余白を入れていても popup の見た目は変わりません</li>
+          <li>padding はサーバが決める PTY サイズとクライアントの描画矩形を同じ関数で一致させるので、popup 内の折り返しが崩れません</li>
+          <li><code class="mono">popup_dim_background</code> — 背後を減光してモーダルらしく。<code class="mono">all</code> はサイドバーごと、<code class="mono">panes</code> はペイン面だけ</li>
+        </ul>
+        <span class="prlink">refs: <a href="https://github.com/peinan/herdr/pull/45">#45</a> · <a href="https://github.com/peinan/herdr/pull/46">#46</a></span>
+      </div>
+      <div class="flag-demo">
+        <div class="panel demo" id="d-pop" data-ppad="on" data-pbg="panel" data-pdim="off">
+          <pre class="cfg"><span class="tbl">[ui]</span>
+<span class="k">popup_padding</span>        = <button class="pill" data-demo="d-pop" data-key="ppad" data-vals="off|on" data-disp="{}|{ top = 1, left = 2 }" data-i="1" aria-label="ui.popup_padding の値を切り替え">{ top = 1, left = 2 }</button>
+<span class="k">popup_background</span>     = <span class="radio" data-demo="d-pop" data-key="pbg"><button data-value="panel" aria-pressed="true">"panel"</button><button data-value="all" aria-pressed="false">"all"</button><button data-value="transparent" aria-pressed="false">"transparent"</button></span>
+<span class="k">popup_dim_background</span> = <span class="radio" data-demo="d-pop" data-key="pdim"><button data-value="off" aria-pressed="true">"off"</button><button data-value="all" aria-pressed="false">"all"</button><button data-value="panes" aria-pressed="false">"panes"</button></span></pre>
+          <div class="stage">
+            <div class="term mini popstage">
+              <div class="t-body">
+                <div class="t-side">
+                  <div class="sb-h">❯ herdr</div>
+                  <div class="row"><span class="dot w"></span>claude</div>
+                  <div class="row"><span class="dot d"></span>tests</div>
+                </div>
+                <div class="t-main">
+                  <div class="pane is-focus">
+                    <span class="pane-title"><span class="fmark">▌ </span>zsh</span>
+                    <div class="pane-body">日本語の全角テキストで背景を
+埋める 仕様と実装 テスト 日本語
+の全角テキストで背景を埋める
+仕様と実装 テスト 日本語の全角</div>
+                  </div>
+                </div>
+              </div>
+              <div class="pop">
+                <span class="pop-ring" aria-hidden="true"></span>
+                <span class="pop-title">herdr</span>
+                <div class="pop-body"><span class="sh">lazygit</span>
+<span class="ok">✓ 3 files staged</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="fixnote">
+      <span class="ico"><svg class="i" aria-hidden="true"><use href="#i-bug"/></svg></span>
+      <div>
+        <h3>ついでに: 全角文字が枠線を食う不具合を修正</h3>
+        <p>背景に日本語などの 2 セル幅文字があると、popup やモーダルの枠線がその行だけ消えていました。ワイド書記素が矩形の境界で半分だけ上書きされると、エンコーダが桁送りを誤って枠の 1 桁を描かなくなるためです。popup・全モーダル・トースト類・ペイン面のコピーまで、同じ修復を通しました。</p>
+        <span class="prlink">refs: <a href="https://github.com/peinan/herdr/pull/44">#44</a></span>
+      </div>
+    </div>
+  </div>
+</section>
+
 <!-- ═════════ [keys] ═════════ -->
 <section class="sec" id="keys">
   <div class="wrap">
     <div class="sec-head">
-      <p class="sec-eyebrow">[keys]</p>
+      <p class="sec-eyebrow"><svg class="i" aria-hidden="true"><use href="#i-keyboard"/></svg> [keys]</p>
       <h2>繰り返しは、prefix 一回で。</h2>
       <p>tmux の <code class="mono">bind -r</code> 風。prefix を押した後の一定時間は「アーム状態」になり、素のキーだけで同じ操作を連打できます。</p>
     </div>
@@ -775,7 +905,7 @@ footer{margin-top:110px;border-top:1px solid var(--line-soft)}
 <section class="sec" id="reference">
   <div class="wrap">
     <div class="sec-head">
-      <p class="sec-eyebrow"># reference</p>
+      <p class="sec-eyebrow"><svg class="i" aria-hidden="true"><use href="#i-list-details"/></svg> # reference</p>
       <h2>追加した設定キー一覧</h2>
     </div>
     <div class="tblwrap">
@@ -784,23 +914,25 @@ footer{margin-top:110px;border-top:1px solid var(--line-soft)}
         <tbody>
           <tr><td class="key">ui.pane_padding</td><td class="typ">table</td><td class="def">{}</td><td>枠(端)と端末内容の間の余白(セル単位、省略辺は 0)</td></tr>
           <tr><td class="key">ui.pane_title_format</td><td class="typ">string</td><td class="def">""</td><td>starship 風のペイン枠タイトル書式。空なら従来挙動</td></tr>
-          <tr><td class="key">ui.single_pane_border</td><td class="typ">bool</td><td class="def">false</td><td>ペインが 1 つだけでも枠を描く</td></tr>
           <tr><td class="key">ui.dim_inactive_panes</td><td class="typ">bool</td><td class="def">false</td><td>非フォーカスペインを常時減光(false は upstream 挙動)</td></tr>
           <tr><td class="key">ui.show_pane_focus_marker</td><td class="typ">bool</td><td class="def">true</td><td>フォーカスペインの ▌ マーカー表示</td></tr>
           <tr><td class="key">ui.sidebar_divider</td><td class="typ">bool</td><td class="def">true</td><td>サイドバーとペイン領域の縦区切り線</td></tr>
           <tr><td class="key">ui.zoom_indicator</td><td class="typ">string</td><td class="def">"Z"</td><td>ズーム時のマーカー文字("" で非表示)</td></tr>
-          <tr><td class="key">ui.zoom_indicator_position</td><td class="typ">enum</td><td class="def">"tab"</td><td>マーカー位置: tab / pane / both / none</td></tr>
+          <tr><td class="key">ui.zoom_indicator_position</td><td class="typ">enum</td><td class="def">"tab"</td><td>マーカー位置: tab / pane / both / none(0.9.0 以降ペイン側にのみ作用)</td></tr>
           <tr><td class="key">ui.tab_bar_style</td><td class="typ">enum</td><td class="def">"classic"</td><td>classic=上部テキストタブ / minimal=グリフ帯</td></tr>
-          <tr><td class="key">ui.tab_bar_position</td><td class="typ">enum</td><td class="def">"bottom"</td><td>minimal の位置: top / bottom</td></tr>
           <tr><td class="key">ui.tab_bar_align</td><td class="typ">enum</td><td class="def">"right"</td><td>minimal の寄せ: left / right</td></tr>
           <tr><td class="key">ui.tab_bar_title</td><td class="typ">bool</td><td class="def">false</td><td>minimal でタブ名も併記する</td></tr>
           <tr><td class="key">ui.prefix_indicator</td><td class="typ">enum</td><td class="def">"status_bar"</td><td>prefix 待機の表示: status_bar / highlight</td></tr>
+          <tr><td class="key">ui.popup_padding</td><td class="typ">table</td><td class="def">{}</td><td>popup の枠と端末内容の間の余白(pane 側と独立)</td></tr>
+          <tr><td class="key">ui.popup_title_format</td><td class="typ">string</td><td class="def">""</td><td>popup 枠タイトルの書式。空なら従来どおり <span class="mono">popup</span></td></tr>
+          <tr><td class="key">ui.popup_background</td><td class="typ">enum</td><td class="def">"panel"</td><td>panel=枠と余白 / all=内容の背後まで / transparent=塗らない</td></tr>
+          <tr><td class="key">ui.popup_dim_background</td><td class="typ">enum</td><td class="def">"off"</td><td>popup 表示中の背後の減光: off / all / panes</td></tr>
           <tr><td class="key">keys.repeat_timeout</td><td class="typ">u64 (ms)</td><td class="def">500</td><td>repeatable バインドがアーム状態を保つ時間</td></tr>
           <tr><td class="key">keys.&lt;action&gt;</td><td class="typ">table</td><td class="def">repeat = false</td><td><span class="mono" style="font-size:12px">{ key, repeat }</span> 形式で bind -r 風の繰り返しを有効化</td></tr>
         </tbody>
       </table>
     </div>
-    <p class="refnote"># 全キー省略可。詳細な仕様は <a href="https://github.com/peinan/herdr/blob/main/docs/fork/FORK_FEATURES.md">FORK_FEATURES.md</a>(2026-07-08 更新)を参照。</p>
+    <p class="refnote"><svg class="i" aria-hidden="true"><use href="#i-book-2"/></svg> 全キー省略可。詳細な仕様は <a href="https://github.com/peinan/herdr/blob/main/docs/fork/FORK_FEATURES.md">FORK_FEATURES.md</a>(2026-09-11 更新)を参照。 <code class="mono">tab_bar_position</code> は upstream 共通キーなのでこの表には載せていません。</p>
   </div>
 </section>
 
@@ -808,7 +940,7 @@ footer{margin-top:110px;border-top:1px solid var(--line-soft)}
 <section class="sec" id="install">
   <div class="wrap">
     <div class="sec-head">
-      <p class="sec-eyebrow"># install</p>
+      <p class="sec-eyebrow"><svg class="i" aria-hidden="true"><use href="#i-terminal-2"/></svg> # install</p>
       <h2>手元で動かす</h2>
     </div>
     <div class="install">
@@ -845,10 +977,10 @@ footer{margin-top:110px;border-top:1px solid var(--line-soft)}
     <div class="foot-main">
       <p style="max-width:560px">herdr は <a href="https://github.com/ogulcancelik">Ogulcan Celik</a> 氏による Apache-2.0 のプロジェクト(<a href="https://herdr.dev">herdr.dev</a>)。このページは個人フォーク <a href="https://github.com/peinan/herdr">peinan/herdr</a> の非公式な紹介で、upstream とは無関係です。</p>
       <div class="foot-links">
-        <a href="https://github.com/peinan/herdr">fork repo</a>
-        <a href="https://github.com/peinan/herdr/blob/main/docs/fork/FORK_FEATURES.md">FORK_FEATURES.md</a>
-        <a href="https://github.com/ogulcancelik/herdr">upstream</a>
-        <a href="https://herdr.dev">herdr.dev</a>
+        <a href="https://github.com/peinan/herdr"><svg class="i" aria-hidden="true"><use href="#i-brand-github"/></svg> fork repo</a>
+        <a href="https://github.com/peinan/herdr/blob/main/docs/fork/FORK_FEATURES.md"><svg class="i" aria-hidden="true"><use href="#i-book-2"/></svg> FORK_FEATURES.md</a>
+        <a href="https://github.com/ogulcancelik/herdr"><svg class="i" aria-hidden="true"><use href="#i-git-merge"/></svg> upstream</a>
+        <a href="https://herdr.dev"><svg class="i" aria-hidden="true"><use href="#i-external-link"/></svg> herdr.dev</a>
       </div>
     </div>
   </div>
