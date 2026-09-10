@@ -141,9 +141,6 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # prefix = "ctrl+b"
 
 # Window (ms) a repeatable prefix binding stays armed for bare-key repeat. Default: 500.
-# NOTE: repeatable prefix bindings are not available in this build (pending
-# re-implementation on the client shell after the upstream 0.9.0 sync). The key
-# is accepted so existing configs keep loading.
 # repeat_timeout = 500
 
 # Prefix-mode actions
@@ -181,7 +178,6 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # focus_pane_down = "prefix+j"
 # focus_pane_up = "prefix+k"
 # focus_pane_right = "prefix+l"
-# NOTE: repeat = true is accepted but inert in this build (see repeat_timeout above).
 # Use the table form with repeat = true for tmux `bind -r` style repeat: after the
 # prefix, the bare key keeps firing until you press anything else or repeat_timeout
 # elapses. Repeat applies to navigation/cycling actions (workspace/agent/tab next-prev,
