@@ -43,6 +43,9 @@ pub(super) enum MouseAction {
         source_ws_idx: usize,
         insert_idx: usize,
     },
+    MoveWorkspaceBlock {
+        params: crate::api::schema::WorkspaceMoveBlockParams,
+    },
     MoveTab {
         ws_idx: usize,
         source_tab_idx: usize,
@@ -480,6 +483,10 @@ impl AppState {
                     }
                 }
 
+                if self.mode_bar_covers_tab_row(mouse.column, mouse.row) {
+                    return None;
+                }
+
                 if self.on_tab_scroll_left_button(mouse.column, mouse.row) {
                     self.scroll_tabs_left();
                     return None;
@@ -561,9 +568,8 @@ impl AppState {
                         self.view.workspace_card_areas.clone()
                     };
                     if let Some(card) = cards.iter().find(|card| {
-                        mouse.row == card.rect.y
-                            && mouse.column == card.rect.x
-                            && mouse.column < card.rect.x + card.rect.width
+                        let chevron = crate::ui::workspace_group_chevron_rect(card);
+                        mouse.row == chevron.y && mouse.column == chevron.x && chevron.width > 0
                     }) {
                         if let Some((key, collapsed)) =
                             crate::ui::workspace_parent_group_state(self, card.ws_idx)
@@ -671,21 +677,21 @@ impl AppState {
                     }
                 }
 
-                let workspace_drop_index = self.workspace_drop_index_at_row(mouse.row);
+                let workspace_drop_target = self.workspace_drop_target_at_row(mouse.row);
                 let tab_drop_index = self.tab_drop_index_at(mouse.column, mouse.row);
                 if self.drag.is_none() {
                     if let Some(press) = &self.workspace_press {
                         let delta_col = mouse.column.abs_diff(press.start_col);
                         let delta_row = mouse.row.abs_diff(press.start_row);
-                        let can_reorder = self
-                            .workspaces
-                            .get(press.ws_idx)
-                            .is_some_and(|ws| ws.worktree_space().is_none());
+                        let can_reorder = self.workspaces.get(press.ws_idx).is_some_and(|ws| {
+                            ws.worktree_space()
+                                .is_none_or(|space| !space.is_linked_worktree)
+                        });
                         if can_reorder && delta_col.max(delta_row) >= WORKSPACE_DRAG_THRESHOLD {
                             self.drag = Some(DragState {
                                 target: DragTarget::WorkspaceReorder {
                                     source_ws_idx: press.ws_idx,
-                                    insert_idx: workspace_drop_index,
+                                    drop_target: workspace_drop_target,
                                 },
                             });
                         }
@@ -705,10 +711,10 @@ impl AppState {
                 }
 
                 if let Some(DragState {
-                    target: DragTarget::WorkspaceReorder { insert_idx, .. },
+                    target: DragTarget::WorkspaceReorder { drop_target, .. },
                 }) = &mut self.drag
                 {
-                    *insert_idx = workspace_drop_index;
+                    *drop_target = workspace_drop_target;
                 } else if let Some(DragState {
                     target:
                         DragTarget::TabReorder {
@@ -796,7 +802,7 @@ impl AppState {
 
             MouseEventKind::Up(MouseButton::Left) => {
                 // Mouse-up either finishes a drag selection or releases after a
-                // double-click copy; the latter is already finalized.
+                // double-click word selection; the latter is already finalized.
                 if let Some(selection) = self.selection.as_ref() {
                     let was_click = selection.was_just_click();
                     let was_finalized = selection.is_finalized();
@@ -808,7 +814,7 @@ impl AppState {
                     if was_click {
                         self.selection = None;
                     } else if was_finalized {
-                        // Double-click copy already finalized this selection.
+                        // Double-click already finalized this word selection.
                     } else if self.copy_on_select {
                         self.copy_selection(terminal_runtimes);
                     } else if let Some(selection) = self.selection.as_mut() {
@@ -837,13 +843,33 @@ impl AppState {
                         target:
                             DragTarget::WorkspaceReorder {
                                 source_ws_idx,
-                                insert_idx: Some(insert_idx),
+                                drop_target: Some(drop_target),
                             },
                     }) => {
-                        return Some(MouseAction::MoveWorkspace {
-                            source_ws_idx,
-                            insert_idx,
-                        });
+                        if let Some(params) =
+                            self.workspace_move_block_params(source_ws_idx, drop_target)
+                        {
+                            if self
+                                .workspaces
+                                .get(source_ws_idx)
+                                .is_some_and(|workspace| workspace.worktree_space().is_some())
+                            {
+                                return Some(MouseAction::MoveWorkspaceBlock { params });
+                            }
+                            let insert_idx = params
+                                .before_workspace_id
+                                .as_ref()
+                                .and_then(|id| {
+                                    self.workspaces
+                                        .iter()
+                                        .position(|workspace| workspace.id == *id)
+                                })
+                                .unwrap_or(self.workspaces.len());
+                            return Some(MouseAction::MoveWorkspace {
+                                source_ws_idx,
+                                insert_idx,
+                            });
+                        }
                     }
                     Some(DragState {
                         target:
@@ -889,6 +915,9 @@ impl AppState {
                     let _ = self.forward_pane_mouse_button(terminal_runtimes, &info, mouse);
                 }
             }
+
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+                if self.mode_bar_covers_tab_row(mouse.column, mouse.row) => {}
 
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
                 if self.on_tab_bar(mouse.column, mouse.row) =>
@@ -1041,7 +1070,8 @@ impl AppState {
             }
 
             MouseEventKind::Down(MouseButton::Right)
-                if self.tab_at(mouse.column, mouse.row).is_some() =>
+                if !self.mode_bar_covers_tab_row(mouse.column, mouse.row)
+                    && self.tab_at(mouse.column, mouse.row).is_some() =>
             {
                 if let (Some(ws_idx), Some(tab_idx)) =
                     (self.active, self.tab_at(mouse.column, mouse.row))
@@ -1248,6 +1278,15 @@ impl AppState {
                     && col < area.x + area.width)
                     .then_some(idx)
             })
+    }
+
+    fn mode_bar_covers_tab_row(&self, col: u16, row: u16) -> bool {
+        self.tab_bar_position == crate::config::TabBarPositionConfig::Bottom
+            && matches!(
+                self.mode,
+                Mode::Navigate | Mode::Prefix | Mode::Copy | Mode::Resize
+            )
+            && self.on_tab_bar(col, row)
     }
 
     pub(super) fn on_tab_bar(&self, col: u16, row: u16) -> bool {
@@ -2918,6 +2957,7 @@ mod tests {
             80,
             app.state.pane_scrollback_limit_bytes,
             app.state.host_terminal_theme,
+            app.state.host_terminal_appearance,
             crate::pane::PaneShellConfig::new(&app.state.default_shell, app.state.shell_mode),
             app.event_tx.clone(),
             app.render_notify.clone(),
@@ -3346,6 +3386,7 @@ mod tests {
             mouse_protocol_encoding: crate::input::MouseProtocolEncoding::Sgr,
             mouse_alternate_scroll: true,
             modify_other_keys: false,
+            color_scheme_reporting: false,
         };
 
         assert_eq!(wheel_routing(input_state), WheelRouting::MouseReport);
@@ -3380,6 +3421,63 @@ mod tests {
             tab_bar.y,
         ));
         assert_eq!(app.state.workspaces[0].active_tab, 0);
+    }
+
+    #[test]
+    fn bottom_mode_bar_consumes_hidden_tab_mouse_actions() {
+        let mut app = app_for_mouse_test();
+        let mut ws = Workspace::test_new("one");
+        ws.test_add_tab(Some("two"));
+        app.state.workspaces = vec![ws];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = Mode::Prefix;
+        app.state.tab_bar_position = crate::config::TabBarPositionConfig::Bottom;
+
+        crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 106, 20));
+        let second_tab = app.state.view.tab_hit_areas[1];
+        let new_tab = app.state.view.new_tab_hit_area;
+
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            second_tab.x,
+            second_tab.y,
+        ));
+        app.handle_mouse(mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            second_tab.x,
+            second_tab.y,
+        ));
+        app.handle_mouse(mouse(
+            MouseEventKind::ScrollDown,
+            second_tab.x,
+            second_tab.y,
+        ));
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Right),
+            second_tab.x,
+            second_tab.y,
+        ));
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            new_tab.x,
+            new_tab.y,
+        ));
+
+        app.state.drag = Some(DragState {
+            target: DragTarget::SidebarDivider,
+        });
+        app.handle_mouse(mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            second_tab.x,
+            second_tab.y,
+        ));
+
+        assert_eq!(app.state.workspaces[0].active_tab, 0);
+        assert_eq!(app.state.workspaces[0].tabs.len(), 2);
+        assert!(app.state.context_menu.is_none());
+        assert!(app.state.tab_press.is_none());
+        assert!(app.state.drag.is_none());
     }
 
     #[test]
@@ -3964,6 +4062,7 @@ mod tests {
             mouse_protocol_encoding: crate::input::MouseProtocolEncoding::Default,
             mouse_alternate_scroll: true,
             modify_other_keys: false,
+            color_scheme_reporting: false,
         };
 
         assert_eq!(wheel_routing(input_state), WheelRouting::AlternateScroll);
@@ -3980,6 +4079,7 @@ mod tests {
             mouse_protocol_encoding: crate::input::MouseProtocolEncoding::Default,
             mouse_alternate_scroll: true,
             modify_other_keys: false,
+            color_scheme_reporting: false,
         };
 
         assert_eq!(wheel_routing(input_state), WheelRouting::HostScroll);

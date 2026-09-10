@@ -125,6 +125,18 @@ impl TitleFacts {
     }
 }
 
+/// Whether `segments` reference `field` anywhere, including inside groups.
+///
+/// Lets consumers such as the git refresh demand ask which facts a format
+/// actually needs without expanding it.
+pub fn references(segments: &[Segment], field: TitleField) -> bool {
+    segments.iter().any(|segment| match segment {
+        Segment::Literal(_) => false,
+        Segment::Var(var) => *var == field,
+        Segment::Group(inner) => references(inner, field),
+    })
+}
+
 /// Parse a `[ui] pane_title_format` string into a [`Segment`] sequence.
 ///
 /// Grammar (v1):
@@ -289,6 +301,16 @@ fn group_has_value(segments: &[Segment], facts: &TitleFacts) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn references_finds_fields_inside_groups_only_when_present() {
+        let segments = parse("$dir( $branch$git_status)").expect("parse");
+        assert!(references(&segments, TitleField::Dir));
+        assert!(references(&segments, TitleField::Branch));
+        assert!(references(&segments, TitleField::GitStatus));
+        assert!(!references(&segments, TitleField::AheadBehind));
+        assert!(!references(&[], TitleField::Dir));
+    }
 
     fn facts() -> TitleFacts {
         TitleFacts {

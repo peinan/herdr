@@ -135,9 +135,8 @@ impl ClientConnection {
         }
     }
 
-    pub(crate) fn request_full_redraw(&mut self) {
-        self.render_state.reset_baseline();
-        self.graphics_surface_reset_pending = true;
+    pub(crate) fn request_repaint(&mut self) {
+        self.render_state.request_repaint();
         self.pane_graphics_render_pending = false;
     }
 
@@ -198,6 +197,11 @@ impl ClientConnection {
                             self.set_host_appearance(Some(color.inferred_appearance()), false);
                     }
                 }
+                crate::raw_input::RawInputEvent::HostPaletteColors { colors } => {
+                    for &(index, color) in colors {
+                        next_theme = next_theme.with_palette_color(index, color);
+                    }
+                }
                 crate::raw_input::RawInputEvent::HostColorSchemeChanged(appearance) => {
                     changed |= self.set_host_appearance(Some(*appearance), true);
                 }
@@ -253,6 +257,7 @@ pub(crate) fn events_include_interaction(events: &[crate::raw_input::RawInputEve
         matches!(
             event,
             crate::raw_input::RawInputEvent::Key(_)
+                | crate::raw_input::RawInputEvent::Text(_)
                 | crate::raw_input::RawInputEvent::Mouse(_)
                 | crate::raw_input::RawInputEvent::Paste(_)
                 | crate::raw_input::RawInputEvent::OuterFocusGained

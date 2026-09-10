@@ -37,8 +37,8 @@ fn pane_border_title(label: &str, pane_width: u16, show_focus_marker: bool) -> O
     }
 }
 
-fn stable_terminal_inner_rect(pane_inner: Rect) -> Rect {
-    if pane_inner.width <= 4 {
+fn stable_terminal_inner_rect(pane_inner: Rect, pane_scrollbars: bool) -> Rect {
+    if !pane_scrollbars || pane_inner.width <= 4 {
         return pane_inner;
     }
 
@@ -169,8 +169,12 @@ fn runtime_for_tab_pane<'a>(
         .map(|runtime| (terminal_id, runtime))
 }
 
-fn stable_scrollbar_gutter(rt: &TerminalRuntime, pane_inner: Rect) -> (Rect, Option<Rect>) {
-    let inner_rect = stable_terminal_inner_rect(pane_inner);
+fn stable_scrollbar_gutter(
+    rt: &TerminalRuntime,
+    pane_inner: Rect,
+    pane_scrollbars: bool,
+) -> (Rect, Option<Rect>) {
+    let inner_rect = stable_terminal_inner_rect(pane_inner, pane_scrollbars);
     if inner_rect == pane_inner {
         return (inner_rect, None);
     }
@@ -207,7 +211,7 @@ pub(super) fn resize_tab_panes(
                 Borders::NONE
             };
             let pane_inner = apply_pane_padding(pane_inner_rect(area, borders), app.pane_padding);
-            let inner_rect = stable_terminal_inner_rect(pane_inner);
+            let inner_rect = stable_terminal_inner_rect(pane_inner, app.pane_scrollbars);
             if !app.direct_attach_resize_locks.contains(terminal_id) {
                 rt.resize(
                     inner_rect.height,
@@ -230,7 +234,7 @@ pub(super) fn resize_tab_panes(
             apply_pane_padding(pane_inner_rect(info.rect, info.borders), app.pane_padding);
 
         if let Some((terminal_id, rt)) = runtime_for_tab_pane(terminal_runtimes, tab, info.id) {
-            let inner_rect = stable_terminal_inner_rect(pane_inner);
+            let inner_rect = stable_terminal_inner_rect(pane_inner, app.pane_scrollbars);
             if !app.direct_attach_resize_locks.contains(terminal_id) {
                 rt.resize(
                     inner_rect.height,
@@ -271,7 +275,8 @@ pub(super) fn compute_pane_infos(
         let mut inner_rect = pane_inner;
         let mut scrollbar_rect = None;
         if let Some(rt) = app.runtime_for_pane_in_workspace(terminal_runtimes, ws_idx, focused_id) {
-            (inner_rect, scrollbar_rect) = stable_scrollbar_gutter(rt, pane_inner);
+            (inner_rect, scrollbar_rect) =
+                stable_scrollbar_gutter(rt, pane_inner, app.pane_scrollbars);
             if resize_panes
                 && ws.terminal_id(focused_id).is_some_and(|terminal_id| {
                     !app.direct_attach_resize_locks.contains(terminal_id)
@@ -309,7 +314,8 @@ pub(super) fn compute_pane_infos(
         let mut inner_rect = pane_inner;
         let mut scrollbar_rect = None;
         if let Some(rt) = app.runtime_for_pane_in_workspace(terminal_runtimes, ws_idx, info.id) {
-            (inner_rect, scrollbar_rect) = stable_scrollbar_gutter(rt, pane_inner);
+            (inner_rect, scrollbar_rect) =
+                stable_scrollbar_gutter(rt, pane_inner, app.pane_scrollbars);
             if resize_panes
                 && ws.terminal_id(info.id).is_some_and(|terminal_id| {
                     !app.direct_attach_resize_locks.contains(terminal_id)
@@ -1968,7 +1974,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pane_scrollbar_reserves_last_column_from_terminal_area() {
+    async fn pane_scrollbar_setting_controls_reserved_column() {
         let mut app = AppState::test_new();
         let mut workspace = Workspace::test_new("test");
         let root_pane = workspace.tabs[0].root_pane;
@@ -1998,6 +2004,20 @@ mod tests {
         assert_eq!(info.rect, area);
         assert_eq!(info.scrollbar_rect, Some(Rect::new(49, 3, 1, 8)));
         assert_eq!(info.inner_rect, Rect::new(10, 3, 39, 8));
+
+        app.pane_scrollbars = false;
+        let infos = compute_pane_infos(
+            &app,
+            &terminal_runtimes,
+            area,
+            false,
+            crate::kitty_graphics::HostCellSize::default(),
+        );
+        let info = &infos[0];
+
+        assert_eq!(info.rect, area);
+        assert_eq!(info.scrollbar_rect, None);
+        assert_eq!(info.inner_rect, area);
     }
 
     #[test]
@@ -2010,6 +2030,7 @@ mod tests {
                 g: 14,
                 b: 16,
             }),
+            ..Default::default()
         };
         let expected_style = automatic_selection_style(&palette, host_theme);
         let selection = Some(Selection::range(PaneId::from_raw(1), 0, 0, 2, None));
@@ -2075,6 +2096,7 @@ mod tests {
                     g: 14,
                     b: 16,
                 }),
+                ..Default::default()
             },
         );
 
