@@ -211,14 +211,15 @@ fn parse_cjk_ime_agents(names: &[String]) -> Vec<crate::detect::Agent> {
     out
 }
 
-/// Parse `[ui] pane_title_format` for startup, logging and falling back to the
-/// empty (feature-off) format on error. The live-reload path parses inline so
-/// it can surface the error through `ConfigReloadReport.diagnostics` instead.
-fn parse_pane_title_format(format: &str) -> Vec<crate::ui::pane_title::Segment> {
+/// Parse a `[ui]` border title format for startup, logging and falling back to
+/// the empty (feature-off) format on error. The live-reload path parses inline
+/// so it can surface the error through `ConfigReloadReport.diagnostics`
+/// instead.
+fn parse_title_format(key: &str, format: &str) -> Vec<crate::ui::pane_title::Segment> {
     match crate::ui::pane_title::parse(format) {
         Ok(segments) => segments,
         Err(err) => {
-            tracing::warn!(error = %err, "invalid [ui] pane_title_format; ignoring");
+            tracing::warn!(error = %err, "invalid [ui] {key}; ignoring");
             Vec::new()
         }
     }
@@ -505,8 +506,16 @@ impl App {
             pane_gaps: config.ui.pane_gaps,
             pane_padding: config.ui.pane_padding,
             show_agent_labels_on_pane_borders: config.ui.show_agent_labels_on_pane_borders,
-            pane_title_format: parse_pane_title_format(&config.ui.pane_title_format),
+            pane_title_format: parse_title_format(
+                "pane_title_format",
+                &config.ui.pane_title_format,
+            ),
             dim_inactive_panes: config.ui.dim_inactive_panes,
+            popup_padding: config.ui.popup_padding,
+            popup_title_format: parse_title_format(
+                "popup_title_format",
+                &config.ui.popup_title_format,
+            ),
             show_pane_focus_marker: config.ui.show_pane_focus_marker,
             zoom_indicator: config.ui.zoom_indicator.clone(),
             zoom_indicator_position: config.ui.zoom_indicator_position,
@@ -870,6 +879,16 @@ impl App {
                     }
                 }
                 self.state.dim_inactive_panes = config.ui.dim_inactive_panes;
+                self.state.popup_padding = config.ui.popup_padding;
+                match crate::ui::pane_title::parse(&config.ui.popup_title_format) {
+                    Ok(segments) => self.state.popup_title_format = segments,
+                    Err(err) => {
+                        diagnostics.push(format!(
+                            "ui.popup_title_format is invalid ({err}); keeping the default popup title"
+                        ));
+                        self.state.popup_title_format = Vec::new();
+                    }
+                }
                 self.state.show_pane_focus_marker = config.ui.show_pane_focus_marker;
                 self.state.zoom_indicator = config.ui.zoom_indicator.clone();
                 self.state.zoom_indicator_position = config.ui.zoom_indicator_position;

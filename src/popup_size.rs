@@ -3,6 +3,8 @@ use std::borrow::Cow;
 use ratatui::layout::Rect;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+use crate::config::PanePadding;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PopupSize {
     Cells(u16),
@@ -47,9 +49,17 @@ pub(crate) struct PopupResolvedGeometry {
     pub inner: Rect,
 }
 
+/// Resolves the popup's outer frame and the terminal area inside it.
+///
+/// `padding` (`[ui] popup_padding`) is applied inside the border and outside
+/// the reserved spacer column, mirroring how a normal pane composes its inner
+/// rect. Both the server, which sizes the popup PTY, and the client, which
+/// blits the rendered frame, resolve the geometry through this function, so
+/// they must pass the same padding to stay in agreement.
 pub(crate) fn resolve_popup_geometry(
     width: Option<PopupSize>,
     height: Option<PopupSize>,
+    padding: PanePadding,
     area: Rect,
 ) -> Option<PopupResolvedGeometry> {
     let default_width = area.width.saturating_div(2).max(6);
@@ -70,19 +80,21 @@ pub(crate) fn resolve_popup_geometry(
 
     let outer_x = area.x + (area.width.saturating_sub(outer_width)) / 2;
     let outer_y = area.y + (area.height.saturating_sub(outer_height)) / 2;
-    let pane_inner_width = outer_width.saturating_sub(2);
-    let pane_inner_height = outer_height.saturating_sub(2);
-    let terminal_cols = if pane_inner_width <= 4 {
-        pane_inner_width
-    } else {
-        pane_inner_width.saturating_sub(1)
-    };
-    let inner = Rect::new(
-        outer_x.saturating_add(1),
-        outer_y.saturating_add(1),
-        terminal_cols,
-        pane_inner_height,
+    let pane_inner = crate::ui::apply_pane_padding(
+        Rect::new(
+            outer_x.saturating_add(1),
+            outer_y.saturating_add(1),
+            outer_width.saturating_sub(2),
+            outer_height.saturating_sub(2),
+        ),
+        padding,
     );
+    let terminal_cols = if pane_inner.width <= 4 {
+        pane_inner.width
+    } else {
+        pane_inner.width.saturating_sub(1)
+    };
+    let inner = Rect::new(pane_inner.x, pane_inner.y, terminal_cols, pane_inner.height);
     Some(PopupResolvedGeometry {
         outer: Rect::new(outer_x, outer_y, outer_width, outer_height),
         inner,
@@ -171,7 +183,7 @@ impl schemars::JsonSchema for PopupSize {
 
 #[cfg(test)]
 mod tests {
-    use super::PopupSize;
+    use super::{PanePadding, PopupSize};
 
     #[test]
     fn parses_cells_and_percent() {
@@ -213,6 +225,7 @@ mod tests {
         let resolved = super::resolve_popup_geometry(
             Some(PopupSize::Percent(80)),
             Some(PopupSize::Percent(40)),
+            PanePadding::default(),
             ratatui::layout::Rect::new(0, 0, 100, 30),
         )
         .unwrap();
@@ -225,6 +238,7 @@ mod tests {
         let resolved = super::resolve_popup_geometry(
             Some(PopupSize::Percent(100)),
             Some(PopupSize::Percent(100)),
+            PanePadding::default(),
             ratatui::layout::Rect::new(4, 2, 100, 30),
         )
         .unwrap();
@@ -238,15 +252,60 @@ mod tests {
         let resolved = super::resolve_popup_geometry(
             Some(PopupSize::Cells(4)),
             None,
+            PanePadding::default(),
             ratatui::layout::Rect::new(0, 0, 80, 24),
         )
         .unwrap();
         assert_eq!(resolved.outer.width, 6);
         assert_eq!(resolved.inner.width, 4);
 
-        assert!(
-            super::resolve_popup_geometry(None, None, ratatui::layout::Rect::new(0, 0, 5, 24),)
-                .is_none()
-        );
+        assert!(super::resolve_popup_geometry(
+            None,
+            None,
+            PanePadding::default(),
+            ratatui::layout::Rect::new(0, 0, 5, 24),
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn padding_shrinks_the_inner_area_inside_the_border() {
+        let resolved = super::resolve_popup_geometry(
+            Some(PopupSize::Percent(80)),
+            Some(PopupSize::Percent(40)),
+            PanePadding {
+                top: 1,
+                right: 2,
+                bottom: 3,
+                left: 4,
+            },
+            ratatui::layout::Rect::new(0, 0, 100, 30),
+        )
+        .unwrap();
+
+        // The outer frame is unchanged; only the terminal area moves in.
+        assert_eq!(resolved.outer, ratatui::layout::Rect::new(10, 9, 80, 12));
+        // 78 inner columns - 4 left - 2 right = 72, minus the spacer column.
+        assert_eq!(resolved.inner, ratatui::layout::Rect::new(15, 11, 71, 6));
+    }
+
+    #[test]
+    fn padding_is_clamped_so_content_always_survives() {
+        let resolved = super::resolve_popup_geometry(
+            Some(PopupSize::Cells(6)),
+            Some(PopupSize::Cells(4)),
+            PanePadding {
+                top: 40,
+                right: 40,
+                bottom: 40,
+                left: 40,
+            },
+            ratatui::layout::Rect::new(0, 0, 80, 24),
+        )
+        .unwrap();
+
+        assert_eq!(resolved.outer, ratatui::layout::Rect::new(37, 10, 6, 4));
+        assert_eq!(resolved.inner.width, 1);
+        assert_eq!(resolved.inner.height, 1);
     }
 }

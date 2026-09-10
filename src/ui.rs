@@ -17,6 +17,7 @@ pub(crate) use self::onboarding::{
     ONBOARDING_SUBTITLE, ONBOARDING_TITLE,
 };
 pub(crate) use self::panes::apply_pane_padding;
+pub(crate) use self::panes::popup_border_label;
 #[cfg(all(test, unix))]
 pub(crate) use self::panes::popup_pane_rects;
 use self::panes::resize_popup_pane;

@@ -219,6 +219,7 @@ mod keybindings_settings;
 mod mobile;
 mod mouse_selection;
 mod popup_focus_projection;
+mod popup_padding;
 mod popup_wide_graphemes;
 mod prefix_highlight;
 mod prefix_repeat;

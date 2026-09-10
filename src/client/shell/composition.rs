@@ -511,9 +511,13 @@ impl ClientShellState {
         if let Some(popup) = surface.popup.as_deref() {
             let width = popup.width.map(client_popup_size);
             let height = popup.height.map(client_popup_size);
-            if let Some(geometry) =
-                crate::popup_size::resolve_popup_geometry(width, height, layout.pane_surface)
-            {
+            if let Some(geometry) = client_popup_geometry(
+                width,
+                height,
+                self.config.popup_padding,
+                layout.pane_surface,
+                &popup.frame,
+            ) {
                 let mut composed = frame.to_ratatui_buffer()?;
                 let block = ratatui::widgets::Block::default()
                     .borders(ratatui::widgets::Borders::ALL)
@@ -809,6 +813,40 @@ fn render_client_copy_search_highlights(
             }
         }
     }
+}
+
+/// Resolves the popup geometry this client will blit the server's frame into.
+///
+/// The server sizes the popup PTY from its own `[ui] popup_padding`, so a
+/// remote client whose config disagrees would otherwise blit a frame that no
+/// longer fits its inner rect and lose the right and bottom edges. Only a
+/// frame that matches the unpadded geometry exactly proves the disagreement;
+/// any other mismatch is a resize still in flight, where keeping the padded
+/// geometry avoids flickering the padding off for one frame.
+fn client_popup_geometry(
+    width: Option<crate::popup_size::PopupSize>,
+    height: Option<crate::popup_size::PopupSize>,
+    padding: crate::config::PanePadding,
+    area: Rect,
+    frame: &FrameData,
+) -> Option<crate::popup_size::PopupResolvedGeometry> {
+    let fits = |geometry: &crate::popup_size::PopupResolvedGeometry| {
+        geometry.inner.width == frame.width && geometry.inner.height == frame.height
+    };
+    let padded = crate::popup_size::resolve_popup_geometry(width, height, padding, area)?;
+    if fits(&padded) {
+        return Some(padded);
+    }
+    let unpadded = crate::popup_size::resolve_popup_geometry(
+        width,
+        height,
+        crate::config::PanePadding::default(),
+        area,
+    )?;
+    if fits(&unpadded) {
+        return Some(unpadded);
+    }
+    Some(padded)
 }
 
 fn client_popup_size(size: crate::protocol::ClientShellPopupSize) -> crate::popup_size::PopupSize {
