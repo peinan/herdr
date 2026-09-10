@@ -222,6 +222,7 @@ mod popup_background;
 mod popup_dim;
 mod popup_focus_projection;
 mod popup_padding;
+mod popup_title;
 mod popup_wide_graphemes;
 mod prefix_highlight;
 mod prefix_repeat;

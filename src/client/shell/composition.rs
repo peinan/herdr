@@ -542,7 +542,10 @@ impl ClientShellState {
                 let block = ratatui::widgets::Block::default()
                     .borders(ratatui::widgets::Borders::ALL)
                     .border_style(ratatui::style::Style::default().fg(self.config.palette.accent))
-                    .title(popup.title.clone())
+                    .title(
+                        crate::ui::popup_border_title(&popup.title, geometry.outer.width)
+                            .unwrap_or_default(),
+                    )
                     .style(ratatui::style::Style::default().bg(chrome_bg));
                 ratatui::widgets::Widget::render(
                     ratatui::widgets::Clear,
