@@ -434,12 +434,14 @@ impl ClientShellState {
         if super::contains(self.hits.tab_scroll_right, point) {
             return Some(tabs.len());
         }
-        let left_edge = if first_index == 0 {
+        // Without scroll buttons (minimal style, or mouse chrome off) the
+        // hidden tabs have no drop target, so the edges clamp to the strip.
+        let left_edge = if first_index == 0 || self.hits.tab_scroll_left.width == 0 {
             first_rect.x
         } else {
             self.hits.tab_scroll_left.right()
         };
-        let right_edge = if last_index + 1 >= tabs.len() {
+        let right_edge = if last_index + 1 >= tabs.len() || self.hits.tab_scroll_right.width == 0 {
             last_rect.right()
         } else {
             self.hits.tab_scroll_right.x.saturating_sub(1)

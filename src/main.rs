@@ -358,9 +358,6 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 
 # Tab bar style: "classic" (text labels with horizontal scrolling) or "minimal"
 # (compact Nerd-Font glyph marker strip).
-# NOTE: "minimal" is not available in this build (pending re-implementation on the
-# client shell after the upstream 0.9.0 sync); the key is accepted so existing
-# configs keep loading. tab_bar_align and tab_bar_title are inert with it.
 # tab_bar_style = "classic"
 
 # Desktop tab row placement: "top" or "bottom".
