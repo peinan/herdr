@@ -59,6 +59,7 @@ impl ClientShellState {
                 sidebar_collapsed: false,
                 sidebar_section_split: self.sidebar_section_split,
                 tab_drag_insert_index: None,
+                prefix_highlight: false,
                 selected_workspace_id: self
                     .navigate_workspace_id
                     .as_ref()
@@ -108,6 +109,14 @@ impl ClientShellState {
         FrameData::from_ratatui_buffer_with_hyperlinks(&buffer, None, &[])
     }
 
+    /// True when prefix mode should be signalled by recoloring the focused pane
+    /// border and the active tab instead of drawing the bottom hint bar.
+    /// Driven by `[ui] prefix_indicator = "highlight"`.
+    pub(super) fn prefix_highlight_active(&self) -> bool {
+        self.mode == ClientShellMode::Prefix
+            && self.config.prefix_indicator == PrefixIndicatorConfig::Highlight
+    }
+
     pub(crate) fn compose(&mut self, cols: u16, rows: u16) -> Option<FrameData> {
         if self.last_composed_size != Some((cols, rows)) && self.mode == ClientShellMode::Navigate {
             self.reveal_navigation_workspace = true;
@@ -141,6 +150,7 @@ impl ClientShellState {
             Some(ClientChromeDrag::Tab { insert_index, .. }) => *insert_index,
             _ => None,
         };
+        let prefix_highlight = self.prefix_highlight_active();
         let (dragged_workspace_id, workspace_drop_indicator_row) = match &self.chrome_drag {
             Some(ClientChromeDrag::Workspace {
                 source_workspace_id,
@@ -171,6 +181,7 @@ impl ClientShellState {
                 sidebar_collapsed: self.sidebar_collapsed,
                 sidebar_section_split: self.sidebar_section_split,
                 tab_drag_insert_index,
+                prefix_highlight,
                 selected_workspace_id: self
                     .navigate_workspace_id
                     .as_ref()
@@ -263,7 +274,10 @@ impl ClientShellState {
         let mobile_navigate_panel = !layout.mobile_header.is_empty()
             && self.mode == ClientShellMode::Navigate
             && self.endpoint_error.is_none();
-        let mode_bar = if mobile_navigate_panel || self.overlay.is_some() {
+        let mode_bar = if mobile_navigate_panel
+            || self.overlay.is_some()
+            || (prefix_highlight && self.endpoint_error.is_none())
+        {
             None
         } else {
             render::render_mode_bar(
@@ -289,6 +303,15 @@ impl ClientShellState {
             frame.cells[start..start + usize::from(bar.width)].to_vec()
         });
         blit_pane_surface(&mut frame, &surface.frame, layout.pane_surface);
+        if prefix_highlight {
+            highlight_focused_pane_border(
+                &mut frame,
+                surface,
+                layout.pane_surface,
+                crate::protocol::color_to_u32(self.config.palette.accent),
+                crate::protocol::color_to_u32(self.config.palette.yellow),
+            );
+        }
         restore_mode_bar(&mut frame, mode_bar, mode_bar_cells.as_deref());
         let has_selection = self
             .selection
@@ -649,6 +672,84 @@ fn client_copy_surface_coherent(copy_mode: Option<&ClientCopyModeState>, hit: &P
                         && scroll.max_offset_from_bottom == copy_mode.max_offset_from_bottom
                 })
         })
+}
+
+fn surface_rect_contains(rect: crate::protocol::SurfaceRect, area: Rect, x: u16, y: u16) -> bool {
+    let left = area.x.saturating_add(rect.x);
+    let top = area.y.saturating_add(rect.y);
+    x >= left
+        && x < left.saturating_add(rect.width)
+        && y >= top
+        && y < top.saturating_add(rect.height)
+}
+
+/// Repaints the focused pane's border ring from `from` to `to` in the composed
+/// frame.
+///
+/// The server already draws that border and its title in the accent color, so
+/// prefix highlighting only has to swap the foreground client-side; nothing
+/// about prefix mode has to reach the server. The ring mirrors the server's
+/// `line_touches_pane` geometry: the pane rect's own edges plus the seam column
+/// and row it shares with the panes to the right and below. Content and
+/// scrollbar cells are skipped, and the `from` filter leaves unfocused borders,
+/// padding, and endpoints with a different palette untouched.
+fn highlight_focused_pane_border(
+    frame: &mut FrameData,
+    surface: &PaneSurfaceFrame,
+    area: Rect,
+    from: u32,
+    to: u32,
+) {
+    let Some(focused) = surface.panes.iter().find(|pane| pane.focused) else {
+        return;
+    };
+    if focused.rect.width == 0 || focused.rect.height == 0 {
+        return;
+    }
+    let left = area.x.saturating_add(focused.rect.x);
+    let top = area.y.saturating_add(focused.rect.y);
+    let right = left.saturating_add(focused.rect.width).saturating_sub(1);
+    let bottom = top.saturating_add(focused.rect.height).saturating_sub(1);
+    let seam_x = right.saturating_add(1);
+    let seam_y = bottom.saturating_add(1);
+    let frame_width = usize::from(frame.width);
+    let mut recolor = |x: u16, y: u16| {
+        if x < area.x
+            || x >= area.right()
+            || x >= frame.width
+            || y < area.y
+            || y >= area.bottom()
+            || y >= frame.height
+        {
+            return;
+        }
+        if surface.panes.iter().any(|pane| {
+            surface_rect_contains(pane.inner_rect, area, x, y)
+                || pane
+                    .scrollbar_rect
+                    .is_some_and(|rect| surface_rect_contains(rect, area, x, y))
+        }) {
+            return;
+        }
+        let index = usize::from(y)
+            .saturating_mul(frame_width)
+            .saturating_add(usize::from(x));
+        if let Some(cell) = frame.cells.get_mut(index) {
+            if cell.fg == from {
+                cell.fg = to;
+            }
+        }
+    };
+    for y in [top, bottom, seam_y] {
+        for x in left..=seam_x {
+            recolor(x, y);
+        }
+    }
+    for x in [left, right, seam_x] {
+        for y in top..=seam_y {
+            recolor(x, y);
+        }
+    }
 }
 
 fn render_client_copy_search_highlights(

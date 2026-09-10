@@ -12,6 +12,7 @@ pub(crate) fn render_tab_bar(
     tab_scroll: &mut usize,
     reveal_focused_tab: &mut bool,
     tab_drag_insert_index: Option<usize>,
+    prefix_highlight: bool,
     hits: &mut ShellHitMap,
 ) {
     let palette = &config.palette;
@@ -103,7 +104,11 @@ pub(crate) fn render_tab_bar(
         let style = if tab.focused {
             let base = Style::default()
                 .fg(panel_contrast_fg(palette))
-                .bg(palette.accent);
+                .bg(if prefix_highlight {
+                    palette.yellow
+                } else {
+                    palette.accent
+                });
             if tab.custom_label {
                 base.add_modifier(Modifier::BOLD)
             } else {
