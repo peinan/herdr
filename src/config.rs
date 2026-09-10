@@ -38,7 +38,7 @@ pub use self::{
     window_title::{WindowTitlePart, WindowTitleTemplate, WindowTitleToken},
 };
 
-pub(crate) use self::keybinds::parse_key_combo;
+pub(crate) use self::keybinds::{parse_key_combo, resolve_repeat_timeout};
 pub(crate) use self::write::{update_file_at, write_edit, ConfigEdit};
 pub(crate) use self::{
     io::upsert_top_level_bool,

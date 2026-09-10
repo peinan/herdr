@@ -95,6 +95,9 @@ pub(crate) struct ClientShellConfig {
     pub(super) palette: Palette,
     pub(super) keybinds: LiveKeybindConfig,
     pub(super) local_keys: crate::config::KeysConfig,
+    /// How long an "armed" repeatable prefix binding stays in prefix mode.
+    /// Local-only: endpoint keybinding profiles never carry `repeat_timeout`.
+    pub(super) prefix_repeat_timeout: std::time::Duration,
     pub(super) keybinding_source: ClientShellKeybindingSource,
     pub(super) prompt_new_tab_name: bool,
     pub(super) prompt_new_workspace_name: bool,
@@ -954,6 +957,9 @@ pub(crate) struct ClientShellState {
     pub(super) pane_scroll_targets: HashMap<String, usize>,
     pub(super) copy_feedback: Option<crate::app::state::CopyFeedback>,
     pub(super) copy_feedback_deadline: Option<std::time::Instant>,
+    /// Deadline after which an "armed" repeatable prefix binding stops
+    /// repeating and drops out of prefix mode. `None` whenever not armed.
+    pub(super) prefix_repeat_deadline: Option<std::time::Instant>,
     pub(super) host_mouse_pixels: Option<crate::input::mouse::HostPixels>,
     pub(super) input_leases: ClientInputLeases,
     pub(super) popup_pending: bool,
@@ -1109,6 +1115,7 @@ impl ClientShellState {
             pane_scroll_targets: HashMap::new(),
             copy_feedback: None,
             copy_feedback_deadline: None,
+            prefix_repeat_deadline: None,
             host_mouse_pixels: None,
             input_leases: ClientInputLeases::default(),
             popup_pending: false,
@@ -1820,11 +1827,35 @@ impl ClientShellState {
         repaint
     }
 
+    /// Drop out of an "armed" repeatable prefix binding once its repeat window
+    /// elapses. Returns whether the mode changed.
+    pub(crate) fn tick_prefix_repeat(&mut self, now: std::time::Instant) -> bool {
+        let mut changed = false;
+        if self
+            .prefix_repeat_deadline
+            .is_some_and(|deadline| now >= deadline)
+        {
+            self.prefix_repeat_deadline = None;
+            if self.mode == ClientShellMode::Prefix {
+                self.mode = self.copy_or_terminal_mode();
+                changed = true;
+            }
+        }
+        changed
+    }
+
     pub(crate) fn timer_delay(&self, now: std::time::Instant) -> std::time::Duration {
         let default = std::time::Duration::from_millis(100);
-        self.selection_autoscroll_deadline
-            .map(|deadline| deadline.saturating_duration_since(now).min(default))
-            .unwrap_or(default)
+        [
+            self.selection_autoscroll_deadline,
+            self.prefix_repeat_deadline,
+        ]
+        .into_iter()
+        .flatten()
+        .map(|deadline| deadline.saturating_duration_since(now))
+        .min()
+        .unwrap_or(default)
+        .min(default)
     }
 
     pub(crate) fn invalidate_pane_surface(&mut self) {

@@ -144,6 +144,9 @@ impl ClientShellConfig {
                     keybinds: config.keybinds(),
                 }),
             local_keys: config.keys.clone(),
+            prefix_repeat_timeout: crate::config::resolve_repeat_timeout(
+                config.keys.repeat_timeout,
+            ),
             keybinding_source: ClientShellKeybindingSource::Local,
             prompt_new_tab_name: config.ui.prompt_new_tab_name,
             prompt_new_workspace_name: config.ui.prompt_new_workspace_name,
@@ -297,6 +300,8 @@ impl ClientShellConfig {
             match config.live_keybinds_with_diagnostics() {
                 Ok((mut keybinds, keybind_diagnostics)) => {
                     self.local_keys = config.keys.clone();
+                    self.prefix_repeat_timeout =
+                        crate::config::resolve_repeat_timeout(config.keys.repeat_timeout);
                     if self.keybinding_source == ClientShellKeybindingSource::RemoteLocal {
                         keybinds.keybinds.custom_commands.clear();
                     }
@@ -462,6 +467,7 @@ mod tests {
         next.ui.status_indicators = crate::config::StatusIndicatorStyle::Symbols;
         next.ui.sidebar.agents = toml::from_str("rows = [[{ token = 'machine', rules = [{ equals = 'Local', bold = true }] }]]\nrow_gap = 2").unwrap();
         next.keys.prefix = "ctrl+a".to_owned();
+        next.keys.repeat_timeout = 750;
 
         let diagnostics = shell.apply_live_config(&next, &[], &[]);
 
@@ -478,6 +484,10 @@ mod tests {
         );
         assert_eq!(shell.agents.row_gap, 2);
         assert_eq!(
+            shell.prefix_repeat_timeout,
+            std::time::Duration::from_millis(750)
+        );
+        assert_eq!(
             shell.agents.rows[0][0].style_for_value("Local").bold,
             Some(true)
         );
@@ -491,6 +501,10 @@ mod tests {
         assert_eq!(
             shell.keybinds.prefix,
             (KeyCode::Char('a'), KeyModifiers::CONTROL)
+        );
+        assert_eq!(
+            shell.prefix_repeat_timeout,
+            std::time::Duration::from_millis(750)
         );
     }
 
@@ -523,11 +537,13 @@ mod tests {
         let mut initial = Config::default();
         initial.ui.sidebar_width = 29;
         initial.keys.prefix = "ctrl+x".to_owned();
+        initial.keys.repeat_timeout = 250;
         let mut shell = ClientShellConfig::from_config(&initial);
 
         let mut invalid = Config::default();
         invalid.ui.sidebar_width = 35;
         invalid.keys.prefix = "ctrl+a".to_owned();
+        invalid.keys.repeat_timeout = 750;
         let invalid_sections = vec!["ui".to_owned(), "keys".to_owned()];
         shell.apply_live_config(&invalid, &[], &invalid_sections);
 
@@ -535,6 +551,10 @@ mod tests {
         assert_eq!(
             shell.keybinds.prefix,
             (KeyCode::Char('x'), KeyModifiers::CONTROL)
+        );
+        assert_eq!(
+            shell.prefix_repeat_timeout,
+            std::time::Duration::from_millis(250)
         );
     }
 }
