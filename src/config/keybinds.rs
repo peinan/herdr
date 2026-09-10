@@ -2,7 +2,6 @@
 use crossterm::event::KeyEvent;
 use crossterm::event::{KeyCode, KeyModifiers};
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
 use tracing::warn;
 
 use super::Config;
@@ -14,22 +13,10 @@ pub type KeyCombo = (KeyCode, KeyModifiers);
 /// Default `keys.repeat_timeout` (milliseconds) for repeatable prefix bindings.
 pub(crate) const DEFAULT_REPEAT_TIMEOUT_MS: u64 = 500;
 
-/// Resolve a configured `keys.repeat_timeout` (milliseconds) to a `Duration`,
-/// clamping `0` to the default so an "armed" prefix state can always expire.
-pub(crate) fn resolve_repeat_timeout(millis: u64) -> Duration {
-    let millis = if millis == 0 {
-        DEFAULT_REPEAT_TIMEOUT_MS
-    } else {
-        millis
-    };
-    Duration::from_millis(millis)
-}
-
 #[derive(Debug, Clone)]
 pub struct LiveKeybindConfig {
     pub prefix: KeyCombo,
     pub keybinds: Keybinds,
-    pub repeat_timeout: Duration,
 }
 
 /// Key field of a [`BindingConfig::Table`]. A single key (`"prefix+j"`) or a
@@ -195,6 +182,9 @@ pub struct ResolvedBinding {
     pub label: String,
     /// tmux `bind -r` style repeat opt-in. Only action bindings parsed from a
     /// table config can be `true`; navigate/indexed bindings are always `false`.
+    // Parsed but inert: key routing moved to the client shell in upstream #3487
+    // and repeatable prefix bindings have not been re-implemented there yet.
+    #[allow(dead_code)]
     pub repeatable: bool,
 }
 
@@ -215,6 +205,18 @@ pub struct ActionKeybinds {
 }
 
 impl ActionKeybinds {
+    pub(crate) fn from_labels(labels: &[String]) -> Result<Self, String> {
+        let mut bindings = Vec::new();
+        for label in labels {
+            match parse_binding_string(label) {
+                Some(ParsedBinding::Single(binding)) => bindings.push(binding),
+                Some(ParsedBinding::Range(range)) => bindings.extend(range),
+                None => return Err(format!("invalid endpoint command binding: {label}")),
+            }
+        }
+        Ok(Self { bindings })
+    }
+
     #[cfg(test)]
     pub fn prefix(label: &str) -> Self {
         let raw = if label.starts_with("prefix+") {
@@ -257,13 +259,6 @@ impl ActionKeybinds {
         self.bindings
             .iter()
             .any(|binding| binding.trigger.is_prefix() && binding.matches_terminal_key(key))
-    }
-
-    /// Whether a prefix binding matching `key` opted in to repeat.
-    pub fn repeatable_for_key(&self, key: &TerminalKey) -> bool {
-        self.bindings.iter().any(|binding| {
-            binding.repeatable && binding.trigger.is_prefix() && binding.matches_terminal_key(key)
-        })
     }
 
     pub fn matches_direct_key(&self, key: &TerminalKey) -> bool {
@@ -2318,9 +2313,6 @@ swap_pane_down = { key = "prefix+shift+j", repeat = true }
         let keybinds = config.keybinds();
         assert_eq!(keybinds.swap_pane_down.bindings.len(), 1);
         assert!(keybinds.swap_pane_down.bindings[0].repeatable);
-        assert!(keybinds
-            .swap_pane_down
-            .repeatable_for_key(&TerminalKey::new(KeyCode::Char('j'), KeyModifiers::SHIFT)));
     }
 
     #[test]
@@ -2421,8 +2413,6 @@ swap_pane_down = { key = "prefix+nonsense", repeat = true }
     fn repeat_timeout_defaults_to_500ms() {
         let config = Config::default();
         assert_eq!(config.keys.repeat_timeout, DEFAULT_REPEAT_TIMEOUT_MS);
-        let live = config.live_keybinds().expect("default config is valid");
-        assert_eq!(live.repeat_timeout, Duration::from_millis(500));
     }
 
     #[test]
@@ -2435,26 +2425,6 @@ repeat_timeout = 750
         )
         .unwrap();
         assert_eq!(config.keys.repeat_timeout, 750);
-        let live = config.live_keybinds().expect("config is valid");
-        assert_eq!(live.repeat_timeout, Duration::from_millis(750));
-    }
-
-    #[test]
-    fn repeat_timeout_zero_clamps_to_default_with_diagnostic() {
-        let config: Config = toml::from_str(
-            r#"
-[keys]
-repeat_timeout = 0
-"#,
-        )
-        .unwrap();
-        let (live, diagnostics) = config
-            .live_keybinds_with_diagnostics()
-            .expect("config is valid");
-        assert_eq!(live.repeat_timeout, Duration::from_millis(500));
-        assert!(diagnostics
-            .iter()
-            .any(|diag| diag.contains("keys.repeat_timeout = 0")));
     }
 
     #[test]

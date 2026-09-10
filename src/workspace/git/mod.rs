@@ -19,6 +19,3 @@ pub use self::{
         GitWorkingTree,
     },
 };
-
-#[cfg(test)]
-pub(super) use self::status::git_ahead_behind;

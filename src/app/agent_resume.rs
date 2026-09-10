@@ -129,7 +129,6 @@ impl App {
             tab,
             terminal_area,
             self.state.pane_borders,
-            self.state.single_pane_border,
             self.state.pane_gaps,
             self.state.pane_outer_borders,
             self.state.pane_padding,
@@ -291,8 +290,7 @@ impl App {
 fn derived_pending_agent_resume_pane_infos(
     tab: &crate::workspace::Tab,
     terminal_area: Rect,
-    pane_borders: bool,
-    single_pane_border: bool,
+    pane_borders: crate::config::PaneBordersConfig,
     pane_gaps: bool,
     pane_outer_borders: bool,
     pane_padding: crate::config::PanePadding,
@@ -300,7 +298,6 @@ fn derived_pending_agent_resume_pane_infos(
     crate::ui::apply_pane_chrome(
         tab.layout.panes(terminal_area),
         pane_borders,
-        single_pane_border,
         pane_gaps,
         pane_outer_borders,
     )
@@ -365,7 +362,7 @@ mod tests {
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
         App::new(
             &crate::config::Config::default(),
-            true,
+            crate::app::AppPolicy::TEST,
             None,
             api_rx,
             crate::api::EventHub::default(),
