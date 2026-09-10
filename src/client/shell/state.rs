@@ -92,6 +92,8 @@ pub(crate) struct ClientShellConfig {
     pub(super) popup_padding: crate::config::PanePadding,
     /// What fills the popup pane's border and padding.
     pub(super) popup_background: crate::config::PopupBackground,
+    /// How much of the screen behind an open popup pane is dimmed.
+    pub(super) popup_dim_background: crate::config::PopupDimBackground,
     pub(super) spaces: SpacesSidebarConfig,
     pub(super) agents: crate::config::AgentsSidebarConfig,
     pub(super) agent_panel_sort: crate::config::AgentPanelSortConfig,

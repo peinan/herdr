@@ -47,7 +47,7 @@ pub(crate) use self::tab_surface::{
 };
 pub(crate) use self::text::truncate_end;
 pub(crate) use self::widgets::{
-    centered_popup_rect, modal_stack_areas, repair_wide_grapheme_edges,
+    centered_popup_rect, dim_buffer, modal_stack_areas, repair_wide_grapheme_edges,
 };
 
 use crate::app::AppState;

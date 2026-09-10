@@ -528,6 +528,17 @@ impl ClientShellState {
                     }
                     crate::config::PopupBackground::Transparent => ratatui::style::Color::Reset,
                 };
+                // Dim first: the popup's own Clear, block and content all
+                // overwrite their cells afterwards, so the popup stays bright
+                // without having to undim itself.
+                let dim_area = match self.config.popup_dim_background {
+                    crate::config::PopupDimBackground::Off => None,
+                    crate::config::PopupDimBackground::All => Some(composed.area),
+                    crate::config::PopupDimBackground::Panes => Some(layout.pane_surface),
+                };
+                if let Some(dim_area) = dim_area {
+                    crate::ui::dim_buffer(&mut composed, dim_area);
+                }
                 let block = ratatui::widgets::Block::default()
                     .borders(ratatui::widgets::Borders::ALL)
                     .border_style(ratatui::style::Style::default().fg(self.config.palette.accent))
