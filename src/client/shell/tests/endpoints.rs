@@ -762,6 +762,71 @@ fn the_collapsed_strip_tints_the_machine_initial_instead_of_replacing_it() {
 }
 
 #[test]
+fn an_optimistic_mark_reaches_the_cache_the_multi_machine_sidebar_draws_from() {
+    use crate::api::schema::AgentStatus;
+    use crate::config::AgentSidebarToken;
+
+    let mut config = Config::default();
+    config.ui.agent_panel_sort = crate::config::AgentPanelSortConfig::Priority;
+    config.ui.sidebar.agents.rows =
+        vec![vec![AgentSidebarToken::Machine, AgentSidebarToken::Agent]];
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    // A saved endpoint makes the sidebar render from the endpoint caches
+    // instead of the active projection.
+    let profile = remote_profile();
+    let endpoint_id = ClientEndpointId::Ssh(profile.id.clone());
+    state.set_endpoint_catalog(&[profile]);
+    state.set_endpoint_status(&endpoint_id, ClientEndpointStatus::Online);
+    assert!(state.endpoints.len() > 1);
+
+    let mut local = snapshot();
+    local.agents = vec![agent("local agent", AgentStatus::Idle, 1)];
+    local.focused_pane_id = Some("pane_1".into());
+    state.set_snapshot(Box::new(local));
+    state.set_pane_surface(surface());
+    let mut remote = snapshot();
+    remote.boot_id = "remote-boot".into();
+    remote.agents = vec![agent("remote agent", AgentStatus::Blocked, 1)];
+    state.set_endpoint_snapshot(&endpoint_id, Box::new(remote));
+
+    let frame_text = |state: &mut ClientShellState| {
+        let frame = state.compose(100, 28).expect("combined endpoint frame");
+        frame
+            .cells
+            .chunks(frame.width as usize)
+            .map(|row| {
+                row.iter()
+                    .map(|cell| cell.symbol.as_str())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let text = frame_text(&mut state);
+    assert!(
+        text.find("Build · remote agent").expect("remote agent")
+            < text.find("Local · local agent").expect("local agent"),
+        "blocked outranks idle before the mark: {text}"
+    );
+
+    let mut outcome = ClientShellInput::default();
+    state.record_binding(
+        crate::input::KeybindMatch::Action(crate::input::KeybindAction::ToggleAgentMark),
+        &mut outcome,
+    );
+    assert!(outcome.repaint);
+
+    // No server snapshot has arrived; the reorder can only come from the
+    // optimistic write reaching the cached projection this sidebar reads.
+    let text = frame_text(&mut state);
+    assert!(
+        text.find("Local · local agent").expect("local agent")
+            < text.find("Build · remote agent").expect("remote agent"),
+        "the optimistic mark must reach the cache the sidebar renders: {text}"
+    );
+}
+
+#[test]
 fn unselected_endpoint_completion_projects_done_client_side() {
     use crate::api::schema::AgentStatus;
 

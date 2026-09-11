@@ -450,7 +450,20 @@ impl ClientShellState {
             outcome,
         );
         if sent {
+            self.pending_agent_marks.insert(pane_id.clone(), marked);
             outcome.repaint |= self.write_agent_mark(&pane_id, marked);
+        }
+    }
+
+    /// Put the in-flight values back after a snapshot replaced the projection,
+    /// so a toggle raised afterwards still inverts what was last requested.
+    pub(super) fn reapply_pending_agent_marks(&mut self) {
+        if self.pending_agent_marks.is_empty() {
+            return;
+        }
+        for (pane_id, marked) in std::mem::take(&mut self.pending_agent_marks) {
+            self.write_agent_mark(&pane_id, marked);
+            self.pending_agent_marks.insert(pane_id, marked);
         }
     }
 
@@ -464,20 +477,20 @@ impl ClientShellState {
         })
     }
 
+    /// Writes the active projection and the active endpoint's cached snapshot.
+    /// The multi-machine sidebar renders straight from that cache, so updating
+    /// only the projection would leave its marker and ordering stale.
     fn write_agent_mark(&mut self, pane_id: &str, marked: bool) -> bool {
-        self.snapshot
-            .as_deref_mut()
-            .and_then(|snapshot| {
-                snapshot
-                    .agents
-                    .iter_mut()
-                    .find(|agent| agent.pane_id == pane_id)
-            })
-            .is_some_and(|agent| {
-                let changed = agent.marked != marked;
-                agent.marked = marked;
-                changed
-            })
+        let active_endpoint_id = self.active_endpoint_id.clone();
+        let mut changed = write_snapshot_agent_mark(self.snapshot.as_deref_mut(), pane_id, marked);
+        if let Some(endpoint) = self
+            .endpoints
+            .iter_mut()
+            .find(|endpoint| endpoint.endpoint_id == active_endpoint_id)
+        {
+            changed |= write_snapshot_agent_mark(endpoint.snapshot.as_deref_mut(), pane_id, marked);
+        }
+        changed
     }
 
     /// Whether another `pane.mark.set` for this pane is still in flight. A
@@ -715,13 +728,23 @@ impl ClientShellState {
                 requested,
                 previous,
             } => {
+                let outstanding = self.mark_request_outstanding(&pane_id);
+                if !outstanding {
+                    self.pending_agent_marks.remove(&pane_id);
+                }
                 return match result {
                     Ok(_) => {
                         self.confirm_pending_mark_baseline(&pane_id, requested);
                         (false, Vec::new())
                     }
-                    Err(_) if self.mark_request_outstanding(&pane_id) => (false, Vec::new()),
-                    Err(_) => (self.write_agent_mark(&pane_id, previous), Vec::new()),
+                    // An error always repaints, matching every other kind: the
+                    // rejection notice was already queued above and an idle UI
+                    // would otherwise never redraw to show it.
+                    Err(_) if outstanding => (true, Vec::new()),
+                    Err(_) => {
+                        self.write_agent_mark(&pane_id, previous);
+                        (true, Vec::new())
+                    }
                 };
             }
             PendingEndpointKind::ProductAnnouncementDismiss { version, id } => {
@@ -1318,4 +1341,23 @@ impl ClientShellState {
             _ => None,
         }
     }
+}
+
+fn write_snapshot_agent_mark(
+    snapshot: Option<&mut crate::protocol::ClientShellSnapshot>,
+    pane_id: &str,
+    marked: bool,
+) -> bool {
+    snapshot
+        .and_then(|snapshot| {
+            snapshot
+                .agents
+                .iter_mut()
+                .find(|agent| agent.pane_id == pane_id)
+        })
+        .is_some_and(|agent| {
+            let changed = agent.marked != marked;
+            agent.marked = marked;
+            changed
+        })
 }

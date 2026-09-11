@@ -997,6 +997,11 @@ pub(crate) struct ClientShellState {
     pub(super) popup_pending_deadline: Option<std::time::Instant>,
     pub(super) next_request_id: u64,
     pub(super) pending_requests: HashMap<String, PendingEndpointRequest>,
+    /// Last mark value requested per pane while a `pane.mark.set` is in flight.
+    /// Every snapshot rebuilds the projection wholesale, so without this a
+    /// snapshot landing between two toggles would resurface the server value
+    /// and make the next toggle repeat a request instead of undoing it.
+    pub(super) pending_agent_marks: HashMap<String, bool>,
     pub(super) pending_integration_installs: usize,
     pub(super) pending_notifications: Vec<ClientPendingNotification>,
     pub(super) visible_notification: Option<ClientVisibleNotification>,
@@ -1153,6 +1158,7 @@ impl ClientShellState {
             popup_pending_deadline: None,
             next_request_id: 1,
             pending_requests: HashMap::new(),
+            pending_agent_marks: HashMap::new(),
             pending_integration_installs: 0,
             pending_notifications: Vec::new(),
             visible_notification: None,
@@ -1596,6 +1602,7 @@ impl ClientShellState {
             }
         }
         self.snapshot = Some(snapshot);
+        self.reapply_pending_agent_marks();
         let pending_surface = self.pending_pane_surface.take();
         if let Some(surface) = pending_surface {
             let matching = self.snapshot.as_ref().is_some_and(|snapshot| {
