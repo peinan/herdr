@@ -230,6 +230,14 @@ pub enum Method {
     PaneClose(PaneTarget),
     #[serde(rename = "popup.close")]
     PopupClose(EmptyParams),
+    #[serde(rename = "popup.scroll")]
+    PopupScroll(PopupScrollParams),
+    #[serde(rename = "popup.selection.read")]
+    PopupSelectionRead(PopupSelectionReadParams),
+    #[serde(rename = "popup.copy_motion")]
+    PopupCopyMotion(PopupCopyMotionParams),
+    #[serde(rename = "popup.copy_search")]
+    PopupCopySearch(PopupCopySearchParams),
     #[serde(rename = "events.subscribe")]
     EventsSubscribe(EventsSubscribeParams),
     #[serde(rename = "events.wait")]

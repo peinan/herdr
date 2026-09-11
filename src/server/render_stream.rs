@@ -16,6 +16,10 @@ pub(crate) enum ClientRenderState {
     /// Semantic clients compare full frame data and skip identical frames.
     Semantic {
         last_surface: Option<Box<PaneSurfaceFrame>>,
+        /// Popup metrics that went out beside `last_surface`, for clients on the
+        /// v2 surface codec. Part of the dedup key so a popup scroll that leaves
+        /// the rendered frame identical still produces a frame to pair with.
+        last_popup_metrics: Option<crate::protocol::endpoint::PopupSurfaceMetrics>,
         surface_revision: u64,
     },
     /// Terminal-ANSI clients keep a terminal diff encoder and sequence number.
@@ -31,6 +35,7 @@ impl ClientRenderState {
         match render_encoding {
             RenderEncoding::SemanticFrame => Self::Semantic {
                 last_surface: None,
+                last_popup_metrics: None,
                 surface_revision: 0,
             },
             RenderEncoding::TerminalAnsi => Self::TerminalAnsi {
@@ -43,7 +48,14 @@ impl ClientRenderState {
 
     pub(crate) fn reset_baseline(&mut self) {
         match self {
-            Self::Semantic { last_surface, .. } => *last_surface = None,
+            Self::Semantic {
+                last_surface,
+                last_popup_metrics,
+                ..
+            } => {
+                *last_surface = None;
+                *last_popup_metrics = None;
+            }
             Self::TerminalAnsi {
                 blit_encoder,
                 repaint_pending,
@@ -111,18 +123,34 @@ impl ClientRenderState {
         }
     }
 
+    /// Prepares a full surface, pairing it with the popup metrics a v2 client
+    /// needs for that exact frame.
+    ///
+    /// `popup_metrics` is `None` for clients on the v1 surface codec, which keeps
+    /// their dedup and their bytes exactly as they were. For a v2 client the
+    /// metrics join the dedup key: a popup scroll that happens to leave the
+    /// rendered popup identical still has to produce a frame, because otherwise
+    /// the client would keep mapping viewport rows through a stale offset.
     pub(crate) fn prepare_pane_surface(
         &mut self,
         mut surface: PaneSurfaceFrame,
+        popup_metrics: Option<crate::protocol::endpoint::PopupSurfaceMetrics>,
     ) -> Option<PreparedRender> {
         let Self::Semantic {
             last_surface,
+            last_popup_metrics,
             surface_revision,
         } = self
         else {
             return None;
         };
+        let popup_metrics_unchanged = match (last_popup_metrics.as_ref(), popup_metrics.as_ref()) {
+            (Some(last), Some(next)) => last.describes_same_state(next),
+            (None, None) => true,
+            _ => false,
+        };
         if surface.graphics.assets.is_empty()
+            && popup_metrics_unchanged
             && last_surface.as_deref().is_some_and(|last| {
                 last.projection_revision == surface.projection_revision
                     && last.frame == surface.frame
@@ -136,11 +164,17 @@ impl ClientRenderState {
             return None;
         }
         surface.surface_revision = surface_revision.saturating_add(1);
+        let committed_popup_metrics =
+            popup_metrics.map(|metrics| crate::protocol::endpoint::PopupSurfaceMetrics {
+                surface_revision: surface.surface_revision,
+                ..metrics
+            });
         let mut committed_surface = surface.clone();
         committed_surface.graphics.assets.clear();
         Some(PreparedRender::Semantic {
             message: ServerMessage::PaneSurface(surface),
             committed_surface: Box::new(committed_surface),
+            popup_metrics: committed_popup_metrics,
         })
     }
 
@@ -151,6 +185,7 @@ impl ClientRenderState {
         let Self::Semantic {
             last_surface,
             surface_revision,
+            ..
         } = self
         else {
             return None;
@@ -174,19 +209,24 @@ impl ClientRenderState {
             (
                 Self::Semantic {
                     last_surface,
+                    last_popup_metrics,
                     surface_revision,
                 },
                 PreparedRender::Semantic {
-                    committed_surface, ..
+                    committed_surface,
+                    popup_metrics,
+                    ..
                 },
             ) => {
                 *surface_revision = committed_surface.surface_revision;
                 *last_surface = Some(committed_surface);
+                *last_popup_metrics = popup_metrics;
             }
             (
                 Self::Semantic {
                     last_surface,
                     surface_revision,
+                    ..
                 },
                 PreparedRender::SemanticPatch {
                     message: ServerMessage::PaneSurfacePatch(patch),
@@ -258,6 +298,8 @@ pub(crate) enum PreparedRender {
     Semantic {
         message: ServerMessage,
         committed_surface: Box<PaneSurfaceFrame>,
+        /// Popup metrics stamped with this frame's revision, for v2 clients.
+        popup_metrics: Option<crate::protocol::endpoint::PopupSurfaceMetrics>,
     },
     SemanticPatch {
         message: ServerMessage,
@@ -493,26 +535,100 @@ mod tests {
     fn popup_only_surface_changes_are_not_deduplicated() {
         let mut state = ClientRenderState::new(RenderEncoding::SemanticFrame);
         let prepared = state
-            .prepare_pane_surface(popup_surface("first"))
+            .prepare_pane_surface(popup_surface("first"), None)
             .expect("initial surface");
         state.commit_sent_frame(prepared);
 
         assert!(state
-            .prepare_pane_surface(popup_surface("second"))
+            .prepare_pane_surface(popup_surface("second"), None)
             .is_some());
+    }
+
+    #[test]
+    fn a_popup_scroll_alone_still_produces_a_frame_for_v2_clients() {
+        fn metrics(offset_from_bottom: u64) -> crate::protocol::endpoint::PopupSurfaceMetrics {
+            crate::protocol::endpoint::PopupSurfaceMetrics {
+                surface_revision: 0,
+                terminal_id: "popup-terminal".into(),
+                content_revision: 4,
+                scroll: Some(crate::protocol::PaneSurfaceScrollMetrics {
+                    offset_from_bottom,
+                    max_offset_from_bottom: 9,
+                    viewport_rows: 3,
+                }),
+            }
+        }
+
+        let mut state = ClientRenderState::new(RenderEncoding::SemanticFrame);
+        let prepared = state
+            .prepare_pane_surface(popup_surface("same"), Some(metrics(0)))
+            .expect("initial surface");
+        assert!(matches!(
+            &prepared,
+            PreparedRender::Semantic {
+                popup_metrics: Some(stamped),
+                ..
+            } if stamped.surface_revision == 1
+        ));
+        state.commit_sent_frame(prepared);
+
+        // Identical popup pixels, but the viewport now starts on a different
+        // absolute row. Without a frame the client would keep mapping selections
+        // through the old offset.
+        let prepared = state
+            .prepare_pane_surface(popup_surface("same"), Some(metrics(3)))
+            .expect("a scroll-only popup change must still produce a frame");
+        assert!(matches!(
+            &prepared,
+            PreparedRender::Semantic {
+                popup_metrics: Some(stamped),
+                ..
+            } if stamped.surface_revision == 2 && stamped.scroll.unwrap().offset_from_bottom == 3
+        ));
+        state.commit_sent_frame(prepared);
+
+        assert!(
+            state
+                .prepare_pane_surface(popup_surface("same"), Some(metrics(3)))
+                .is_none(),
+            "unchanged popup state must still deduplicate"
+        );
+    }
+
+    #[test]
+    fn a_v1_client_keeps_its_dedup_and_gets_no_popup_metrics() {
+        let mut state = ClientRenderState::new(RenderEncoding::SemanticFrame);
+        let prepared = state
+            .prepare_pane_surface(popup_surface("same"), None)
+            .expect("initial surface");
+        assert!(matches!(
+            &prepared,
+            PreparedRender::Semantic {
+                popup_metrics: None,
+                ..
+            }
+        ));
+        state.commit_sent_frame(prepared);
+
+        assert!(
+            state
+                .prepare_pane_surface(popup_surface("same"), None)
+                .is_none(),
+            "a v1 client must not gain frames it did not get before"
+        );
     }
 
     #[test]
     fn forced_full_surface_keeps_the_connection_revision_monotonic() {
         let mut state = ClientRenderState::new(RenderEncoding::SemanticFrame);
         let prepared = state
-            .prepare_pane_surface(popup_surface("first"))
+            .prepare_pane_surface(popup_surface("first"), None)
             .expect("initial surface");
         state.commit_sent_frame(prepared);
         state.request_repaint();
 
         let prepared = state
-            .prepare_pane_surface(popup_surface("replacement"))
+            .prepare_pane_surface(popup_surface("replacement"), None)
             .expect("forced replacement surface");
         assert!(matches!(
             prepared.message(),

@@ -311,6 +311,43 @@ pub struct PaneCopySearchParams {
     pub previous: Option<PaneTextRange>,
 }
 
+/// Copy-mode target for the single terminal popup. The popup belongs to no
+/// workspace, so it is addressed by terminal id instead of pane id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct PopupScrollParams {
+    pub terminal_id: String,
+    pub offset_from_bottom: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct PopupSelectionReadParams {
+    pub terminal_id: String,
+    pub anchor: PaneTextPoint,
+    pub cursor: PaneTextPoint,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_revision: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct PopupCopyMotionParams {
+    pub terminal_id: String,
+    pub cursor: PaneTextPoint,
+    pub motion: PaneCopyMotion,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_revision: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct PopupCopySearchParams {
+    pub terminal_id: String,
+    pub query: String,
+    pub direction: PaneCopySearchDirection,
+    pub cursor: PaneTextPoint,
+    pub content_revision: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous: Option<PaneTextRange>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, Default)]
 pub struct PaneListParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]

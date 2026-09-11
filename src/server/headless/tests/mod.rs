@@ -610,6 +610,7 @@ async fn client_shell_attach_seeds_workspace() {
             endpoint_keybindings: false,
             mouse_capture: false,
             surface_active: true,
+            surface_v2: true,
             writer,
         })
     );
@@ -640,6 +641,7 @@ async fn client_shell_endpoint_request_uses_the_selected_connection() {
             endpoint_keybindings: false,
             mouse_capture: false,
             surface_active: true,
+            surface_v2: true,
             writer,
         })
     );
@@ -776,6 +778,7 @@ async fn client_shell_receives_metadata_then_shell_free_pane_surface() {
             endpoint_keybindings: false,
             mouse_capture: false,
             surface_active: true,
+            surface_v2: true,
             writer,
         })
     );
@@ -943,6 +946,7 @@ fn connect_test_shell(
             endpoint_keybindings: false,
             mouse_capture: false,
             surface_active: true,
+            surface_v2: true,
             writer,
         })
     );
@@ -1320,6 +1324,7 @@ async fn client_shell_config_diagnostics_follow_keybinding_ownership() {
             endpoint_keybindings: false,
             mouse_capture: false,
             surface_active: true,
+            surface_v2: true,
             writer: local_writer,
         })
     );
@@ -1344,6 +1349,7 @@ async fn client_shell_config_diagnostics_follow_keybinding_ownership() {
             endpoint_keybindings: true,
             mouse_capture: false,
             surface_active: true,
+            surface_v2: true,
             writer: endpoint_writer,
         })
     );
@@ -2246,6 +2252,7 @@ async fn public_api_focus_replaces_every_client_shell_projection() {
             endpoint_keybindings: false,
             mouse_capture: false,
             surface_active: true,
+            surface_v2: true,
             writer,
         })
     );
@@ -2470,6 +2477,74 @@ async fn client_shell_hidden_pane_rejects_presses_but_accepts_releases() {
 }
 
 #[tokio::test]
+async fn popup_surface_metrics_reach_only_v2_clients() {
+    type Receivers = (
+        std::sync::mpsc::Receiver<Vec<u8>>,
+        std::sync::mpsc::Receiver<Vec<u8>>,
+    );
+
+    fn connect(server: &mut HeadlessServer, client_id: u64, surface_v2: bool) -> Receivers {
+        let (writer, control_rx, render_rx) = test_client_writer();
+        assert!(
+            server.handle_server_event(ServerEvent::ClientShellConnected {
+                client_id,
+                surface_cols: 80,
+                surface_rows: 23,
+                cell_width_px: 10,
+                cell_height_px: 20,
+                pixel_mouse: false,
+                direct_graphics: false,
+                endpoint_keybindings: false,
+                mouse_capture: false,
+                surface_active: true,
+                surface_v2,
+                writer,
+            })
+        );
+        let _snapshot = control_rx.recv().expect("shell snapshot");
+        (control_rx, render_rx)
+    }
+
+    fn popup_metrics(
+        control_rx: &std::sync::mpsc::Receiver<Vec<u8>>,
+    ) -> Option<crate::protocol::endpoint::PopupSurfaceMetrics> {
+        while let Ok(message) = control_rx.try_recv() {
+            let ServerMessage::EndpointControl { kind, data } = read_server_message(message) else {
+                continue;
+            };
+            if kind == crate::protocol::endpoint::POPUP_SURFACE_METRICS_KIND {
+                return Some(serde_json::from_str(&data).expect("popup metrics json"));
+            }
+        }
+        None
+    }
+
+    let mut server = test_headless_server();
+    let _pane_input = install_focused_test_runtime(&mut server, b"base-pane");
+    let (popup_runtime, _popup_input) =
+        crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
+            40,
+            12,
+            0,
+            b"POPUP_METRICS_LIVE",
+            4,
+        );
+    let (_, popup_terminal_id) = server.app.install_test_popup_runtime(popup_runtime);
+
+    let (v1_control, _v1_render) = connect(&mut server, 12, false);
+    let (v2_control, _v2_render) = connect(&mut server, 13, true);
+    server.render_and_stream();
+
+    let metrics = popup_metrics(&v2_control).expect("v2 client receives popup metrics");
+    assert_eq!(metrics.terminal_id, popup_terminal_id.as_str());
+    assert!(metrics.scroll.is_some());
+    assert!(
+        popup_metrics(&v1_control).is_none(),
+        "a generation-1 client must not receive the v2 popup metrics control"
+    );
+}
+
+#[tokio::test]
 async fn client_shell_streams_and_targets_popup_terminal_content() {
     let mut server = test_headless_server();
     let mut pane_input = install_focused_test_runtime(&mut server, b"base-pane");
@@ -2496,6 +2571,7 @@ async fn client_shell_streams_and_targets_popup_terminal_content() {
             endpoint_keybindings: false,
             mouse_capture: false,
             surface_active: true,
+            surface_v2: true,
             writer,
         })
     );

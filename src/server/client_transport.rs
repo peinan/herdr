@@ -395,6 +395,9 @@ pub(crate) enum ServerEvent {
         endpoint_keybindings: bool,
         mouse_capture: bool,
         surface_active: bool,
+        /// Whether the client negotiated the v2 surface codec and so accepts the
+        /// popup metrics control.
+        surface_v2: bool,
         writer: ClientWriter,
     },
     /// A client sent an input message.
@@ -760,6 +763,7 @@ pub(crate) fn handle_client_handshake(
                     hello.endpoint_keybindings,
                     hello.mouse_capture,
                     hello.surface_active,
+                    hello.supports_surface_v2(),
                 )),
             )
         }
@@ -800,12 +804,13 @@ pub(crate) fn handle_client_handshake(
     } else {
         RenderEncoding::TerminalAnsi
     };
-    let welcome = if shell_options.is_some() {
-        let welcome = EndpointServerWelcome::compatible(
+    let welcome = if let Some(options) = shell_options.as_ref() {
+        let welcome = EndpointServerWelcome::compatible_with_surface_codec(
             crate::server::client_commands::supported_client_shell_method_names()
                 .iter()
                 .map(|method| (*method).to_owned())
                 .collect(),
+            options.5,
         );
         ServerMessage::EndpointControl {
             kind: ENDPOINT_WELCOME_KIND.into(),
@@ -854,6 +859,7 @@ pub(crate) fn handle_client_handshake(
         endpoint_keybindings,
         mouse_capture,
         surface_active,
+        surface_v2,
     )) = shell_options
     {
         ServerEvent::ClientShellConnected {
@@ -867,6 +873,7 @@ pub(crate) fn handle_client_handshake(
             endpoint_keybindings,
             mouse_capture,
             surface_active,
+            surface_v2,
             writer,
         }
     } else {
@@ -1829,6 +1836,7 @@ mod tests {
                 endpoint_keybindings,
                 mouse_capture,
                 surface_active,
+                surface_v2,
                 writer,
             } => {
                 assert_eq!(client_id, 43);
@@ -1839,6 +1847,8 @@ mod tests {
                 assert!(endpoint_keybindings);
                 assert!(mouse_capture);
                 assert!(surface_active);
+                // This hello offers only the generation-1 surface codec.
+                assert!(!surface_v2);
                 drop(writer);
             }
             other => panic!("expected ClientShellConnected, got {other:?}"),

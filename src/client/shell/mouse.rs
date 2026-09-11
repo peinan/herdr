@@ -78,11 +78,19 @@ impl ClientShellState {
         self.pane_scroll_targets
             .insert(pane_id.clone(), offset_from_bottom);
         self.pane_scroll_in_flight.insert(pane_id.clone(), serial);
-        if !self.push_endpoint_method_with_kind(
+        let method = if self.is_popup_target(&pane_id) {
+            crate::api::schema::Method::PopupScroll(crate::api::schema::PopupScrollParams {
+                terminal_id: pane_id.clone(),
+                offset_from_bottom: offset_from_bottom as u64,
+            })
+        } else {
             crate::api::schema::Method::PaneScroll(crate::api::schema::PaneScrollParams {
                 pane_id: pane_id.clone(),
                 offset_from_bottom: offset_from_bottom as u64,
-            }),
+            })
+        };
+        if !self.push_endpoint_method_with_kind(
+            method,
             PendingEndpointKind::PaneScroll {
                 pane_id: pane_id.clone(),
                 serial,
@@ -105,11 +113,21 @@ impl ClientShellState {
             return false;
         }
         self.pane_scroll_in_flight.remove(&pane_id);
-        let repaint = match result {
+        let scrolled = match &result {
             Ok(crate::api::schema::ResponseResult::PaneInfo { pane })
                 if pane.pane_id == pane_id =>
             {
-                if let Some(scroll) = pane.scroll {
+                Some(pane.scroll)
+            }
+            Ok(crate::api::schema::ResponseResult::PopupScroll {
+                terminal_id,
+                scroll,
+            }) if *terminal_id == pane_id => Some(Some(*scroll)),
+            _ => None,
+        };
+        let repaint = match scrolled {
+            Some(scroll) => {
+                if let Some(scroll) = scroll {
                     if self.pane_scroll_targets.contains_key(&pane_id) {
                         self.pane_scroll_targets.insert(
                             pane_id.clone(),
@@ -119,16 +137,13 @@ impl ClientShellState {
                 }
                 false
             }
-            Ok(_) => {
+            None => {
                 self.pane_scroll_queued.remove(&pane_id);
                 self.pane_scroll_targets.remove(&pane_id);
-                self.endpoint_error =
-                    Some("endpoint returned an unexpected pane-scroll result".to_owned());
-                true
-            }
-            Err(_) => {
-                self.pane_scroll_queued.remove(&pane_id);
-                self.pane_scroll_targets.remove(&pane_id);
+                if result.is_ok() {
+                    self.endpoint_error =
+                        Some("endpoint returned an unexpected pane-scroll result".to_owned());
+                }
                 true
             }
         };
@@ -170,6 +185,62 @@ impl ClientShellState {
     ) {
         if let Some(selection) = self.selection.as_mut() {
             selection.drag(column, row, hit.inner_rect, metrics);
+        }
+    }
+
+    /// Starts a mouse selection at a point inside `hit`, promoting a repeated
+    /// click at the same cell into a word selection.
+    fn begin_pane_selection(
+        &mut self,
+        hit: &PaneHit,
+        mouse: MouseEvent,
+        previous_pane_click: Option<ClientPaneClick>,
+        outcome: &mut ClientShellInput,
+    ) {
+        let click = ClientPaneClick {
+            pane_id: hit.pane_id.clone(),
+            viewport_row: mouse.row.saturating_sub(hit.inner_rect.y),
+            col: mouse.column.saturating_sub(hit.inner_rect.x),
+            at: std::time::Instant::now(),
+        };
+        if mouse.modifiers.is_empty()
+            && previous_pane_click
+                .as_ref()
+                .is_some_and(|previous| previous.is_double_click_for(&click))
+        {
+            self.request_word_selection(hit, click.viewport_row, click.col, outcome);
+            return;
+        }
+        if mouse.modifiers.is_empty() {
+            self.last_pane_click = Some(click);
+        }
+        self.selection = Some(crate::selection::Selection::anchor(
+            hit.pane_id.clone(),
+            mouse.row.saturating_sub(hit.inner_rect.y),
+            mouse.column.saturating_sub(hit.inner_rect.x),
+            hit.scroll,
+        ));
+    }
+
+    /// Completes an in-progress mouse selection on button release.
+    fn finish_pane_selection(&mut self, outcome: &mut ClientShellInput) {
+        self.stop_selection_autoscroll();
+        let copied = self
+            .selection
+            .as_mut()
+            .is_some_and(crate::selection::Selection::finish);
+        if copied && self.config.copy_on_select {
+            self.request_selection_copy(outcome, false);
+            self.selection = None;
+        } else if self
+            .selection
+            .as_ref()
+            .is_some_and(crate::selection::Selection::is_just_click)
+        {
+            self.selection = None;
+        }
+        if copied {
+            self.last_pane_click = None;
         }
     }
 
@@ -334,13 +405,7 @@ impl ClientShellState {
             self.stop_selection_autoscroll();
             return outcome;
         }
-        let Some(hit) = self
-            .hits
-            .panes
-            .iter()
-            .find(|hit| hit.pane_id == autoscroll.pane_id)
-            .cloned()
-        else {
+        let Some(hit) = self.target_hit(&autoscroll.pane_id) else {
             self.stop_selection_autoscroll();
             return outcome;
         };
@@ -840,14 +905,23 @@ impl ClientShellState {
             return;
         }
         if let Some(hit) = self.hits.popup.clone() {
+            // The popup selects text the way a pane does, but only once its scroll
+            // metrics are known: without them a drag over scrollback would anchor
+            // to the wrong absolute rows.
+            let selectable = !hit.mouse_reporting && hit.scroll.is_some();
             if super::contains(hit.inner_rect, point) {
                 match mouse.kind {
+                    MouseEventKind::Down(MouseButton::Left) if selectable => {
+                        let previous_pane_click = self.last_pane_click.take();
+                        self.begin_pane_selection(&hit, mouse, previous_pane_click, outcome);
+                        outcome.repaint = true;
+                    }
                     MouseEventKind::Down(button) => {
                         self.push_pane_mouse_event(&hit, mouse, mouse.modifiers, outcome);
                         if hit.mouse_reporting {
                             self.pane_mouse_gesture = Some(ClientPaneMouseGesture {
                                 last_position: self.pane_mouse_position(&hit, mouse),
-                                hit,
+                                hit: hit.clone(),
                                 button,
                                 stripped_modifiers: crossterm::event::KeyModifiers::empty(),
                                 last_event: mouse,
@@ -864,6 +938,26 @@ impl ClientShellState {
                         self.push_pane_mouse_event(&hit, mouse, mouse.modifiers, outcome);
                     }
                     MouseEventKind::Up(_) | MouseEventKind::Drag(_) | MouseEventKind::Moved => {}
+                }
+            }
+            // Dragging and releasing outside the popup still belong to a selection
+            // that started inside it, so they are handled past the hit test.
+            if selectable {
+                match mouse.kind {
+                    MouseEventKind::Drag(MouseButton::Left)
+                        if self
+                            .selection
+                            .as_ref()
+                            .is_some_and(|selection| selection.pane_id == hit.pane_id) =>
+                    {
+                        self.update_selection_drag(&hit, mouse.column, mouse.row, outcome);
+                        outcome.repaint = true;
+                    }
+                    MouseEventKind::Up(MouseButton::Left) if self.selection.is_some() => {
+                        self.finish_pane_selection(outcome);
+                        outcome.repaint = true;
+                    }
+                    _ => {}
                 }
             }
             return;
@@ -1659,24 +1753,7 @@ impl ClientShellState {
             }
         }
         if mouse.kind == MouseEventKind::Up(MouseButton::Left) && self.selection.is_some() {
-            self.stop_selection_autoscroll();
-            let copied = self
-                .selection
-                .as_mut()
-                .is_some_and(crate::selection::Selection::finish);
-            if copied && self.config.copy_on_select {
-                self.request_selection_copy(outcome, false);
-                self.selection = None;
-            } else if self
-                .selection
-                .as_ref()
-                .is_some_and(crate::selection::Selection::is_just_click)
-            {
-                self.selection = None;
-            }
-            if copied {
-                self.last_pane_click = None;
-            }
+            self.finish_pane_selection(outcome);
             outcome.repaint = true;
             return;
         }
@@ -2145,34 +2222,7 @@ impl ClientShellState {
                             last_event: mouse,
                         });
                     } else if super::contains(hit.inner_rect, point) {
-                        let click = ClientPaneClick {
-                            pane_id: hit.pane_id.clone(),
-                            viewport_row: mouse.row.saturating_sub(hit.inner_rect.y),
-                            col: mouse.column.saturating_sub(hit.inner_rect.x),
-                            at: std::time::Instant::now(),
-                        };
-                        if mouse.modifiers.is_empty()
-                            && previous_pane_click
-                                .as_ref()
-                                .is_some_and(|previous| previous.is_double_click_for(&click))
-                        {
-                            self.request_word_selection(
-                                &hit,
-                                click.viewport_row,
-                                click.col,
-                                outcome,
-                            );
-                        } else {
-                            if mouse.modifiers.is_empty() {
-                                self.last_pane_click = Some(click);
-                            }
-                            self.selection = Some(crate::selection::Selection::anchor(
-                                hit.pane_id.clone(),
-                                mouse.row.saturating_sub(hit.inner_rect.y),
-                                mouse.column.saturating_sub(hit.inner_rect.x),
-                                hit.scroll,
-                            ));
-                        }
+                        self.begin_pane_selection(&hit, mouse, previous_pane_click, outcome);
                     }
                     self.push_endpoint_method(
                         crate::api::schema::Method::PaneFocus(crate::api::schema::PaneTarget {

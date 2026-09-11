@@ -888,9 +888,22 @@ pub(super) struct ClientCopySearchResult {
     pub(super) current_global: Option<u64>,
 }
 
+/// Terminal facts about the open popup that the surface frame itself cannot
+/// carry. Present only while a popup is open on a server that speaks the v2
+/// surface codec; without it popup copy mode stays unavailable.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct ClientPopupMetrics {
+    pub(super) terminal_id: String,
+    pub(super) scroll: Option<crate::protocol::PaneSurfaceScrollMetrics>,
+    pub(super) content_revision: u64,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct ClientCopyModeState {
+    /// Pane id, or the popup terminal id when `popup` is set.
     pub(super) pane_id: String,
+    /// True when `pane_id` addresses the popup terminal instead of a pane.
+    pub(super) popup: bool,
     pub(super) content_revision: u64,
     pub(super) geometry: (u16, u16),
     pub(super) cursor: crate::api::schema::PaneTextPoint,
@@ -919,6 +932,12 @@ pub(crate) struct ClientShellState {
     pub(super) graphics: crate::kitty_graphics::surface::ClientState,
     pub(super) graphics_cell_size: crate::kitty_graphics::HostCellSize,
     pub(super) popup_terminal_id: Option<String>,
+    /// Popup metrics for the surface frame currently on screen. `None` disables
+    /// popup copy mode and popup selection rather than letting them run on
+    /// metrics from another frame.
+    pub(super) popup_metrics: Option<ClientPopupMetrics>,
+    /// The latest metrics report, held until the frame it is stamped for arrives.
+    pending_popup_metrics: Option<crate::protocol::endpoint::PopupSurfaceMetrics>,
     pub(super) sidebar_collapsed: bool,
     pub(super) sidebar_collapsed_manual: bool,
     pub(super) sidebar_width: u16,
@@ -1077,6 +1096,8 @@ impl ClientShellState {
                 height_px: 1,
             },
             popup_terminal_id: None,
+            popup_metrics: None,
+            pending_popup_metrics: None,
             sidebar_collapsed,
             sidebar_collapsed_manual: preferences.sidebar_collapsed.is_some(),
             sidebar_width,
@@ -1261,12 +1282,67 @@ impl ClientShellState {
         }
     }
 
+    /// Stores the popup terminal facts that ride beside the surface on the v2
+    /// surface codec.
+    ///
+    /// They describe the popup terminal rather than one frame, so a report for a
+    /// popup this client no longer shows is simply dropped.
+    /// Stages a popup metrics report until its surface frame arrives.
+    ///
+    /// Applying it now would be wrong: a viewport row becomes an absolute
+    /// scrollback row through `max_offset_from_bottom - offset_from_bottom`, so
+    /// metrics from a newer frame than the one on screen resolve a selection to
+    /// the wrong rows. A scroll-only move leaves `content_revision` untouched, so
+    /// the endpoint's staleness guard would not catch it either — the copy would
+    /// just be silently wrong. `commit_popup_surface_metrics` pairs the report
+    /// with the frame it was stamped for instead.
+    pub(crate) fn apply_popup_surface_metrics(
+        &mut self,
+        metrics: &crate::protocol::endpoint::PopupSurfaceMetrics,
+    ) {
+        self.pending_popup_metrics = Some(metrics.clone());
+    }
+
+    /// Commits the staged metrics against the surface frame now being applied.
+    ///
+    /// The server stamps every report with the revision of the one frame it
+    /// belongs to and only sends a report alongside that frame, so a match means
+    /// the metrics and the pixels come from the same server tick. Anything else —
+    /// no popup, no report, a report for a different frame or a different popup —
+    /// leaves the metrics unset, which disables popup copy mode and popup
+    /// selection until a matching pair arrives.
+    fn commit_popup_surface_metrics(&mut self, surface: &PaneSurfaceFrame) {
+        let committed = surface.popup.as_deref().and_then(|popup| {
+            let staged = self.pending_popup_metrics.as_ref()?;
+            (staged.surface_revision == surface.surface_revision
+                && staged.terminal_id == popup.terminal_id)
+                .then(|| ClientPopupMetrics {
+                    terminal_id: staged.terminal_id.clone(),
+                    scroll: staged.scroll,
+                    content_revision: staged.content_revision,
+                })
+        });
+        if committed.is_some() {
+            self.pending_popup_metrics = None;
+        }
+        self.popup_metrics = committed;
+    }
+
+    /// The committed popup metrics, but only when they describe `terminal_id`.
+    pub(super) fn popup_metrics_for(&self, terminal_id: &str) -> Option<&ClientPopupMetrics> {
+        self.popup_metrics
+            .as_ref()
+            .filter(|metrics| metrics.terminal_id == terminal_id)
+    }
+
     pub(super) fn reset_endpoint_projection(&mut self) {
         self.hits = ShellHitMap::default();
         self.pane_surface = None;
         self.pending_pane_surface = None;
         self.input_leases = ClientInputLeases::default();
         self.popup_terminal_id = None;
+        self.popup_metrics = None;
+        self.pending_popup_metrics = None;
         self.chrome_drag = None;
         self.workspace_press = None;
         self.tab_press = None;
@@ -1750,18 +1826,44 @@ impl ClientShellState {
                 self.pane_scroll_targets.remove(&pane.pane_id);
             }
         }
+        // Pair the staged report with this exact frame before anything reads the
+        // metrics; a mismatch leaves them unset rather than stale.
+        self.commit_popup_surface_metrics(&surface);
+        let popup_metrics = self.popup_metrics.clone();
         let mut invalidated_copy_pane = None;
         if let Some(copy_mode) = self.copy_mode.as_mut() {
-            if let Some(pane) = surface
-                .panes
-                .iter()
-                .find(|pane| pane.pane_id == copy_mode.pane_id)
-            {
-                let geometry = (pane.inner_rect.width, pane.inner_rect.height);
-                if copy_mode.content_revision != pane.content_revision
-                    || copy_mode.geometry != geometry
+            // The popup carries its terminal facts beside the surface because it
+            // is not one of the tab's panes; both resync the same way.
+            let target = if copy_mode.popup {
+                surface
+                    .popup
+                    .as_deref()
+                    .filter(|popup| popup.terminal_id == copy_mode.pane_id)
+                    .zip(popup_metrics.filter(|metrics| metrics.terminal_id == copy_mode.pane_id))
+                    .map(|(popup, metrics)| {
+                        (
+                            (popup.frame.width, popup.frame.height),
+                            metrics.content_revision,
+                            metrics.scroll,
+                        )
+                    })
+            } else {
+                surface
+                    .panes
+                    .iter()
+                    .find(|pane| pane.pane_id == copy_mode.pane_id)
+                    .map(|pane| {
+                        (
+                            (pane.inner_rect.width, pane.inner_rect.height),
+                            pane.content_revision,
+                            pane.scroll,
+                        )
+                    })
+            };
+            if let Some((geometry, content_revision, scroll)) = target {
+                if copy_mode.content_revision != content_revision || copy_mode.geometry != geometry
                 {
-                    copy_mode.content_revision = pane.content_revision;
+                    copy_mode.content_revision = content_revision;
                     copy_mode.geometry = geometry;
                     copy_mode.selection = None;
                     copy_mode.search_matches.clear();
@@ -1772,10 +1874,10 @@ impl ClientShellState {
                     copy_mode.copy_after_search = false;
                     invalidated_copy_pane = Some(copy_mode.pane_id.clone());
                 }
-                if let Some(scroll) = pane.scroll {
+                if let Some(scroll) = scroll {
                     let actual_offset =
                         usize::try_from(scroll.offset_from_bottom).unwrap_or(usize::MAX);
-                    if !self.pane_scroll_targets.contains_key(&pane.pane_id) {
+                    if !self.pane_scroll_targets.contains_key(&copy_mode.pane_id) {
                         copy_mode.offset_from_bottom = actual_offset;
                     }
                     copy_mode.max_offset_from_bottom =

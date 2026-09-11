@@ -107,6 +107,7 @@ fn modal_paste_target_requires_a_focused_editable_client_field() {
     state.overlay = None;
     state.copy_mode = Some(ClientCopyModeState {
         pane_id: "pane_1".into(),
+        popup: false,
         content_revision: 0,
         geometry: (80, 24),
         cursor: crate::api::schema::PaneTextPoint { row: 0, col: 0 },
@@ -211,10 +212,18 @@ fn client_composes_popup_terminal_content_inside_client_owned_chrome() {
 fn popup_owns_keys_text_paste_and_mouse_before_shell_controls() {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
     state.set_snapshot(Box::new(snapshot()));
+    // Metrics are available, so nothing below is falling back for lack of them:
+    // a popup app that asked for mouse reporting keeps every mouse event.
+    state.apply_popup_surface_metrics(&popup_surface_metrics(1, 0, 0, 3));
     state.set_pane_surface(surface_with_popup());
     state.compose(106, 20).expect("popup frame");
+    assert!(state
+        .hits
+        .popup
+        .as_ref()
+        .is_some_and(|popup| popup.scroll.is_some() && popup.mouse_reporting));
 
-    for bytes in [b"x".as_slice(), b"\x02".as_slice(), b"\x1b".as_slice()] {
+    for bytes in [b"x".as_slice(), b"\x1b".as_slice()] {
         let input = state.handle_input_bytes(bytes);
         assert!(matches!(
             &input.requests[..],
@@ -223,6 +232,34 @@ fn popup_owns_keys_text_paste_and_mouse_before_shell_controls() {
         ));
         assert_eq!(state.mode, ClientShellMode::Terminal);
     }
+
+    // The prefix is the one key the shell keeps, so prefix actions such as copy
+    // mode stay reachable while the popup holds input.
+    let prefix = state.handle_input_bytes(b"\x02");
+    assert!(prefix.requests.is_empty());
+    assert_eq!(state.mode, ClientShellMode::Prefix);
+    // Pressing it twice sends the literal prefix to the popup, not to a pane. A
+    // shell whose prefix is the readline chord the popup needs (ctrl+a, say) is
+    // unusable without this escape hatch.
+    let literal = state.handle_input_bytes(b"\x02");
+    assert!(
+        matches!(
+            &literal.requests[..],
+            [ClientMessage::ClientShellPopupInput { terminal_id, events }]
+                if terminal_id == "terminal-popup"
+                    && matches!(
+                        &events[..],
+                        [ClientPaneInputEvent::Key { code, modifiers, .. }]
+                            if *code == crate::protocol::ClientKeyCode::Char('b')
+                                && *modifiers
+                                    & crossterm::event::KeyModifiers::CONTROL.bits()
+                                    != 0
+                    )
+        ),
+        "the second prefix press must reach the popup as the prefix key itself, got {:?}",
+        literal.requests
+    );
+    assert_eq!(state.mode, ClientShellMode::Terminal);
 
     let text = state.handle_raw_events(vec![RawInputEvent::Text(crate::input::TextCommit::new(
         "ime",
@@ -260,6 +297,33 @@ fn popup_owns_keys_text_paste_and_mouse_before_shell_controls() {
     assert!(state.pane_mouse_gesture.is_some());
     state.set_pane_surface(surface());
     assert!(state.pane_mouse_gesture.is_none());
+}
+
+#[test]
+fn a_popup_shell_sub_mode_keeps_keys_text_and_paste_from_the_popup() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.apply_popup_surface_metrics(&popup_surface_metrics(1, 0, 0, 3));
+    state.set_pane_surface(surface_with_popup());
+    state.compose(106, 20).expect("popup frame");
+
+    let mut outcome = ClientShellInput::default();
+    assert!(state.enter_copy_mode(&mut outcome));
+    assert_eq!(state.mode, ClientShellMode::Copy);
+
+    // Copy-mode navigation is interpreted by the shell, never forwarded.
+    let key = state.handle_input_bytes(b"k");
+    assert!(key
+        .requests
+        .iter()
+        .all(|request| !matches!(request, ClientMessage::ClientShellPopupInput { .. })));
+
+    let text = state.handle_raw_events(vec![RawInputEvent::Text(crate::input::TextCommit::new(
+        "ime",
+    ))]);
+    assert!(text.requests.is_empty());
+    let paste = state.handle_raw_events(vec![RawInputEvent::Paste("paste".into())]);
+    assert!(paste.requests.is_empty());
 }
 
 #[test]

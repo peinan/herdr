@@ -3877,6 +3877,117 @@
           ],
           "type": "object"
         },
+        "PopupCopyMotionParams": {
+          "properties": {
+            "content_revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "cursor": {
+              "$ref": "#/schemas/request/$defs/PaneTextPoint"
+            },
+            "motion": {
+              "$ref": "#/schemas/request/$defs/PaneCopyMotion"
+            },
+            "terminal_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "terminal_id",
+            "cursor",
+            "motion"
+          ],
+          "type": "object"
+        },
+        "PopupCopySearchParams": {
+          "properties": {
+            "content_revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "cursor": {
+              "$ref": "#/schemas/request/$defs/PaneTextPoint"
+            },
+            "direction": {
+              "$ref": "#/schemas/request/$defs/PaneCopySearchDirection"
+            },
+            "previous": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/request/$defs/PaneTextRange"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "query": {
+              "type": "string"
+            },
+            "terminal_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "terminal_id",
+            "query",
+            "direction",
+            "cursor",
+            "content_revision"
+          ],
+          "type": "object"
+        },
+        "PopupScrollParams": {
+          "description": "Copy-mode target for the single terminal popup. The popup belongs to no\nworkspace, so it is addressed by terminal id instead of pane id.",
+          "properties": {
+            "offset_from_bottom": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "terminal_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "terminal_id",
+            "offset_from_bottom"
+          ],
+          "type": "object"
+        },
+        "PopupSelectionReadParams": {
+          "properties": {
+            "anchor": {
+              "$ref": "#/schemas/request/$defs/PaneTextPoint"
+            },
+            "content_revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "cursor": {
+              "$ref": "#/schemas/request/$defs/PaneTextPoint"
+            },
+            "terminal_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "terminal_id",
+            "anchor",
+            "cursor"
+          ],
+          "type": "object"
+        },
         "PopupSize": {
           "oneOf": [
             {
@@ -6099,6 +6210,70 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/EmptyParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "popup.scroll",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/PopupScrollParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "popup.selection.read",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/PopupSelectionReadParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "popup.copy_motion",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/PopupCopyMotionParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "popup.copy_search",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/PopupCopySearchParams"
             }
           },
           "required": [
@@ -9911,6 +10086,123 @@
               "required": [
                 "type",
                 "pane_id",
+                "content_revision",
+                "matches",
+                "total"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "scroll": {
+                  "$ref": "#/schemas/success_response/$defs/PaneScrollInfo"
+                },
+                "terminal_id": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "popup_scroll",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "terminal_id",
+                "scroll"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "terminal_id": {
+                  "type": "string"
+                },
+                "text": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "popup_selection",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "terminal_id",
+                "text"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "content_revision": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "cursor": {
+                  "$ref": "#/schemas/success_response/$defs/PaneTextPoint"
+                },
+                "terminal_id": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "popup_copy_motion",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "terminal_id",
+                "cursor",
+                "content_revision"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "content_revision": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "current": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "current_global": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "matches": {
+                  "items": {
+                    "$ref": "#/schemas/success_response/$defs/PaneTextRange"
+                  },
+                  "type": "array"
+                },
+                "terminal_id": {
+                  "type": "string"
+                },
+                "total": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": {
+                  "const": "popup_copy_search",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "terminal_id",
                 "content_revision",
                 "matches",
                 "total"

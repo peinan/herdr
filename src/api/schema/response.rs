@@ -9,7 +9,7 @@ use super::integrations::{
 use super::panes::{
     LayoutDescription, PaneEdgesResult, PaneFocusDirectionResult, PaneInfo, PaneLayoutSnapshot,
     PaneMoveResult, PaneNeighborResult, PaneProcessInfo, PaneReadResult, PaneResizeResult,
-    PaneSwapResult, PaneTextPoint, PaneTextRange, PaneZoomResult,
+    PaneScrollInfo, PaneSwapResult, PaneTextPoint, PaneTextRange, PaneZoomResult,
 };
 use super::plugins::{
     InstalledPluginInfo, PluginActionInfo, PluginCommandLogInfo, PluginInvocationContext,
@@ -173,6 +173,29 @@ pub enum ResponseResult {
     },
     PaneCopySearch {
         pane_id: String,
+        content_revision: u64,
+        matches: Vec<PaneTextRange>,
+        total: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        current: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        current_global: Option<u64>,
+    },
+    PopupScroll {
+        terminal_id: String,
+        scroll: PaneScrollInfo,
+    },
+    PopupSelection {
+        terminal_id: String,
+        text: String,
+    },
+    PopupCopyMotion {
+        terminal_id: String,
+        cursor: PaneTextPoint,
+        content_revision: u64,
+    },
+    PopupCopySearch {
+        terminal_id: String,
         content_revision: u64,
         matches: Vec<PaneTextRange>,
         total: u64,

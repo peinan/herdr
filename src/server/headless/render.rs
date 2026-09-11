@@ -1,6 +1,49 @@
 use super::*;
 
 impl HeadlessServer {
+    /// Popup terminal facts for this render pass, if a popup is open.
+    ///
+    /// `ClientShellPopupSurface` is frozen at endpoint generation 1, so the
+    /// popup's scroll position and content revision travel on the named control
+    /// lane that the v2 surface codec adds. The surface revision is stamped later,
+    /// when the frame these belong to is prepared.
+    fn popup_surface_metrics(&self) -> Option<crate::protocol::endpoint::PopupSurfaceMetrics> {
+        let popup = self.app.state.popup_pane.as_ref()?;
+        let runtime = self.app.terminal_runtimes.get(&popup.terminal_id)?;
+        Some(crate::protocol::endpoint::PopupSurfaceMetrics {
+            surface_revision: 0,
+            terminal_id: popup.terminal_id.to_string(),
+            content_revision: runtime.content_seq(),
+            scroll: runtime
+                .scroll_metrics()
+                .map(|metrics| protocol::PaneSurfaceScrollMetrics {
+                    offset_from_bottom: metrics.offset_from_bottom as u64,
+                    max_offset_from_bottom: metrics.max_offset_from_bottom as u64,
+                    viewport_rows: metrics.viewport_rows as u64,
+                }),
+        })
+    }
+
+    /// Frames the popup metrics control that must reach a v2 client before the
+    /// surface frame it is stamped for.
+    fn frame_popup_surface_metrics(
+        metrics: &crate::protocol::endpoint::PopupSurfaceMetrics,
+    ) -> Option<Vec<u8>> {
+        let data = match serde_json::to_string(metrics) {
+            Ok(data) => data,
+            Err(err) => {
+                warn!(err = %err, "failed to encode popup surface metrics");
+                return None;
+            }
+        };
+        Self::frame_server_message(&ServerMessage::EndpointControl {
+            kind: crate::protocol::endpoint::POPUP_SURFACE_METRICS_KIND.into(),
+            data,
+        })
+        .inspect_err(|err| warn!(err = %err, "failed to frame popup surface metrics"))
+        .ok()
+    }
+
     fn shell_focused_runtime(
         &self,
         client_id: u64,
@@ -405,6 +448,9 @@ impl HeadlessServer {
             return;
         }
 
+        // Popup terminal facts the frozen popup surface cannot carry. Read once per
+        // pass; each v2 client gets them stamped with its own frame's revision.
+        let popup_metrics = self.popup_surface_metrics();
         let mut broken_clients: Vec<u64> = Vec::new();
         for (client_id, (cols, rows), cell_size, _is_foreground, mode) in render_targets {
             let area = Rect::new(0, 0, cols, rows);
@@ -563,9 +609,13 @@ impl HeadlessServer {
             let mut next_shell_graphics_delivery = None;
             let prepared = if let Some((panes, splits, popup, graphics, delivery)) = surface_parts {
                 next_shell_graphics_delivery = Some(delivery);
-                client
-                    .render_state
-                    .prepare_pane_surface(protocol::PaneSurfaceFrame {
+                let frame_popup_metrics = popup
+                    .is_some()
+                    .then(|| popup_metrics.clone())
+                    .flatten()
+                    .filter(|_| client.shell_surface_v2);
+                client.render_state.prepare_pane_surface(
+                    protocol::PaneSurfaceFrame {
                         boot_id: self.client_shell_boot_id.clone(),
                         projection_revision: shell_projection_revision,
                         surface_revision: 0,
@@ -574,7 +624,9 @@ impl HeadlessServer {
                         splits,
                         popup,
                         graphics,
-                    })
+                    },
+                    frame_popup_metrics,
+                )
             } else {
                 client.render_state.prepare_frame(frame)
             };
@@ -627,6 +679,22 @@ impl HeadlessServer {
                     continue;
                 }
             };
+            // The control lane is reliable and drains ahead of the droppable render
+            // lane, so sending here puts the metrics in front of the frame they are
+            // stamped for. The stamp is what makes the pairing exact; ordering only
+            // keeps the client from waiting a frame for it.
+            if let crate::server::render_stream::PreparedRender::Semantic {
+                popup_metrics: Some(metrics),
+                ..
+            } = &prepared
+            {
+                if let Some(control) = Self::frame_popup_surface_metrics(metrics) {
+                    if writer.control.send(control).is_err() {
+                        broken_clients.push(client_id);
+                        continue;
+                    }
+                }
+            }
             let shell_graphics_pending = next_shell_graphics_delivery
                 .as_ref()
                 .is_some_and(crate::kitty_graphics::surface::DeliveryCache::has_pending);

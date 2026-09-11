@@ -184,11 +184,15 @@ impl ClientShellState {
                         continue;
                     }
                     if let Some(target) = self.popup_input_target() {
-                        super::push_target_event(
-                            target,
-                            ClientPaneInputEvent::TextCommit(text),
-                            &mut outcome,
-                        );
+                        // The popup owns committed text only in the shell's base context;
+                        // a shell sub-mode is interpreting the keyboard itself.
+                        if self.mode == ClientShellMode::Terminal {
+                            super::push_target_event(
+                                target,
+                                ClientPaneInputEvent::TextCommit(text),
+                                &mut outcome,
+                            );
+                        }
                     } else if !self.popup_pending {
                         if self.insert_overlay_text(&text) {
                             outcome.repaint = true;
@@ -217,11 +221,15 @@ impl ClientShellState {
                         continue;
                     }
                     if let Some(target) = self.popup_input_target() {
-                        super::push_target_event(
-                            target,
-                            ClientPaneInputEvent::Paste(text),
-                            &mut outcome,
-                        );
+                        // The popup owns a paste only in the shell's base context;
+                        // a shell sub-mode is interpreting the keyboard itself.
+                        if self.mode == ClientShellMode::Terminal {
+                            super::push_target_event(
+                                target,
+                                ClientPaneInputEvent::Paste(text),
+                                &mut outcome,
+                            );
+                        }
                     } else if !self.popup_pending {
                         if self.insert_overlay_text(&text) {
                             outcome.repaint = true;
@@ -507,13 +515,14 @@ impl ClientShellState {
             }
             return None;
         }
-        if let Some(target) = self.popup_input_target() {
-            return Some(target);
+        let popup_target = self.popup_input_target();
+        if popup_target.is_some() && !self.popup_shell_key(key) {
+            return popup_target;
         }
         if self.popup_pending {
             return None;
         }
-        if self.overlay.is_some() {
+        if popup_target.is_none() && self.overlay.is_some() {
             self.route_overlay_key(key, outcome);
             return None;
         }
@@ -565,7 +574,7 @@ impl ClientShellState {
             ClientShellMode::Prefix => {
                 self.prefix_repeat_deadline = None;
                 let return_mode = if self.copy_mode.as_ref().is_some_and(|copy_mode| {
-                    self.focused_pane_id().as_deref() == Some(copy_mode.pane_id.as_str())
+                    self.copy_mode_target_id().as_deref() == Some(copy_mode.pane_id.as_str())
                 }) {
                     ClientShellMode::Copy
                 } else {
@@ -574,7 +583,7 @@ impl ClientShellState {
                 if crate::config::terminal_key_matches_combo(key, self.config.keybinds.prefix) {
                     self.mode = return_mode;
                     outcome.repaint = true;
-                    return self.focused_pane_id().map(ClientInputTarget::Pane);
+                    return self.key_input_target();
                 }
                 if key.code == KeyCode::Esc {
                     self.mode = return_mode;
@@ -631,7 +640,7 @@ impl ClientShellState {
 
     pub(super) fn copy_or_terminal_mode(&self) -> ClientShellMode {
         if self.copy_mode.as_ref().is_some_and(|copy_mode| {
-            self.focused_pane_id().as_deref() == Some(copy_mode.pane_id.as_str())
+            self.copy_mode_target_id().as_deref() == Some(copy_mode.pane_id.as_str())
         }) {
             ClientShellMode::Copy
         } else {
@@ -1006,6 +1015,27 @@ impl ClientShellState {
         self.popup_terminal_id
             .as_ref()
             .map(|terminal_id| ClientInputTarget::Popup(terminal_id.clone()))
+    }
+
+    /// Where a literal key press goes: the popup while one holds input,
+    /// otherwise the focused pane.
+    fn key_input_target(&self) -> Option<ClientInputTarget> {
+        self.popup_input_target()
+            .or_else(|| self.focused_pane_id().map(ClientInputTarget::Pane))
+    }
+
+    /// Whether the shell keeps this key instead of forwarding it to the popup
+    /// terminal.
+    ///
+    /// The popup would otherwise swallow the prefix, leaving copy mode and every
+    /// other prefix action unreachable while it is open. Only the prefix itself
+    /// is taken from the terminal base context; once a shell sub-mode is armed
+    /// the shell owns the keyboard, exactly as it does without a popup.
+    fn popup_shell_key(&self, key: &crate::input::TerminalKey) -> bool {
+        if self.mode != ClientShellMode::Terminal {
+            return true;
+        }
+        crate::config::terminal_key_matches_combo(key, self.config.keybinds.prefix)
     }
 
     fn push_pane_key(
