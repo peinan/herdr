@@ -904,7 +904,9 @@ impl ClientShellState {
         if self.popup_pending {
             return;
         }
-        if let Some(hit) = self.hits.popup.clone() {
+        // An open modal is drawn and handled below; the popup must not swallow
+        // clicks aimed at it.
+        if let Some(hit) = self.hits.popup.clone().filter(|_| self.overlay.is_none()) {
             // The popup selects text the way a pane does, but only once its scroll
             // metrics are known: without them a drag over scrollback would anchor
             // to the wrong absolute rows.

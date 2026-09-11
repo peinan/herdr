@@ -677,11 +677,14 @@ impl ClientShellState {
                 col,
                 generation,
             } => {
-                if self.pending_word_selection != Some(generation)
-                    || self.snapshot.as_deref().is_none_or(|snapshot| {
-                        !snapshot.panes.iter().any(|pane| pane.pane_id == pane_id)
-                    })
-                {
+                // The popup terminal is never in `snapshot.panes`, so it needs its
+                // own liveness test. Matching the current popup id also keeps a
+                // reply for a popup that has since been replaced from landing.
+                let target_is_live = self.is_popup_target(&pane_id)
+                    || self.snapshot.as_deref().is_some_and(|snapshot| {
+                        snapshot.panes.iter().any(|pane| pane.pane_id == pane_id)
+                    });
+                if self.pending_word_selection != Some(generation) || !target_is_live {
                     return (false, Vec::new());
                 }
                 self.pending_word_selection = None;

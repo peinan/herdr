@@ -1288,3 +1288,58 @@ fn retained_surface_patch_rejects_stale_base_without_mutating_surface() {
     assert!(matches!(outcome, ClientPaneSurfacePatchOutcome::Rejected));
     assert_eq!(state.pane_surface, before);
 }
+
+/// Prefix actions reach the shell while a popup is open, so a client modal can
+/// now be opened over one. It has to receive its own keys — otherwise it can be
+/// neither used nor dismissed, because every key goes to the popup's process.
+#[test]
+fn a_modal_over_the_popup_owns_the_keyboard_and_closes_on_esc() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.apply_popup_surface_metrics(&popup_surface_metrics(1, 0, 0, 3));
+    state.set_pane_surface(surface_with_popup());
+    state.compose(106, 20).expect("popup frame");
+
+    let mut open = ClientShellInput::default();
+    state.record_binding(
+        crate::input::KeybindMatch::Action(crate::input::KeybindAction::Help),
+        &mut open,
+    );
+    assert!(matches!(state.overlay, Some(ClientShellOverlay::Help(_))));
+
+    // Ordinary keys drive the modal's search box, not the popup terminal.
+    let typed = state.handle_input_bytes(b"/");
+    assert!(
+        typed
+            .requests
+            .iter()
+            .all(|request| !matches!(request, ClientMessage::ClientShellPopupInput { .. })),
+        "modal keys must not reach the popup, got {:?}",
+        typed.requests
+    );
+    let text = state.handle_raw_events(vec![RawInputEvent::Text(crate::input::TextCommit::new(
+        "pane",
+    ))]);
+    assert!(
+        text.requests.is_empty(),
+        "modal text must not reach the popup, got {:?}",
+        text.requests
+    );
+    let paste = state.handle_raw_events(vec![RawInputEvent::Paste("pasted".into())]);
+    assert!(paste.requests.is_empty());
+
+    // Esc closes the search box, then the modal itself.
+    state.handle_input_bytes(b"\x1b");
+    assert!(matches!(state.overlay, Some(ClientShellOverlay::Help(_))));
+    let closed = state.handle_input_bytes(b"\x1b");
+    assert!(closed.repaint);
+    assert!(state.overlay.is_none(), "esc must close the modal");
+
+    // With the modal gone the popup gets its keys back.
+    let after = state.handle_input_bytes(b"x");
+    assert!(matches!(
+        &after.requests[..],
+        [ClientMessage::ClientShellPopupInput { terminal_id, .. }]
+            if terminal_id == "terminal-popup"
+    ));
+}

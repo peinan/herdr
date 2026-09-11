@@ -1542,11 +1542,17 @@ impl ClientShellState {
             .as_ref()
             .map(|copy_mode| copy_mode.pane_id.clone())
         {
-            let pane_exists = snapshot
-                .panes
-                .iter()
-                .any(|pane| pane.pane_id == copy_pane_id);
-            let pane_focused = snapshot.focused_pane_id.as_deref() == Some(copy_pane_id.as_str());
+            // Popup copy mode is anchored to a terminal that is never one of the
+            // snapshot's panes, and the popup holds input for as long as it is
+            // open, so it counts as both live and focused.
+            let popup_copy = self.is_popup_target(&copy_pane_id);
+            let pane_exists = popup_copy
+                || snapshot
+                    .panes
+                    .iter()
+                    .any(|pane| pane.pane_id == copy_pane_id);
+            let pane_focused =
+                popup_copy || snapshot.focused_pane_id.as_deref() == Some(copy_pane_id.as_str());
             if !pane_exists {
                 self.copy_mode = None;
                 self.reset_copy_pipeline();
@@ -1591,8 +1597,14 @@ impl ClientShellState {
                 .and_then(|id| self.navigation_target(&self.active_endpoint_id, id));
             self.reveal_mobile_workspace = self.mobile_layout_active();
         }
-        let pane_exists =
-            |pane_id: &String| snapshot.panes.iter().any(|pane| &pane.pane_id == pane_id);
+        // The popup terminal is never one of the snapshot's panes, so a plain
+        // membership test would drop its pending scroll state on every snapshot —
+        // and snapshots arrive on any agent status change.
+        let popup_terminal_id = self.popup_terminal_id.clone();
+        let pane_exists = |pane_id: &String| {
+            snapshot.panes.iter().any(|pane| &pane.pane_id == pane_id)
+                || popup_terminal_id.as_deref() == Some(pane_id.as_str())
+        };
         self.pane_scroll_in_flight
             .retain(|pane_id, _| pane_exists(pane_id));
         self.pane_scroll_queued
@@ -1829,6 +1841,25 @@ impl ClientShellState {
         // Pair the staged report with this exact frame before anything reads the
         // metrics; a mismatch leaves them unset rather than stale.
         self.commit_popup_surface_metrics(&surface);
+        // The popup is not in `surface.panes`, so its reached scroll target needs
+        // the same clearing the loop above does for panes. Leaving it behind pins
+        // the copy-mode offset and suppresses the cursor and highlights for good.
+        if let Some(terminal_id) = surface
+            .popup
+            .as_deref()
+            .map(|popup| popup.terminal_id.clone())
+        {
+            if let (Some(target), Some(scroll)) = (
+                self.pane_scroll_targets.get(&terminal_id).copied(),
+                self.popup_metrics_for(&terminal_id).and_then(|m| m.scroll),
+            ) {
+                let target = target
+                    .min(usize::try_from(scroll.max_offset_from_bottom).unwrap_or(usize::MAX));
+                if usize::try_from(scroll.offset_from_bottom).unwrap_or(usize::MAX) == target {
+                    self.pane_scroll_targets.remove(&terminal_id);
+                }
+            }
+        }
         let popup_metrics = self.popup_metrics.clone();
         let mut invalidated_copy_pane = None;
         if let Some(copy_mode) = self.copy_mode.as_mut() {

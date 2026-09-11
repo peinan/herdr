@@ -1694,3 +1694,142 @@ fn popup_drag_autoscroll_scrolls_the_popup_terminal() {
         tick.actions.len()
     );
 }
+
+/// Snapshots arrive on any agent status change, and the popup terminal is never
+/// one of their panes. A plain membership test therefore pruned the popup's
+/// pending scroll state on every snapshot, which pinned copy mode's offset.
+#[test]
+fn a_popup_scroll_target_survives_an_agent_status_snapshot() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.apply_popup_surface_metrics(&popup_surface_metrics(1, 2, 7, 3));
+    state.set_pane_surface(surface_with_popup());
+    state.compose(106, 20).expect("popup frame");
+
+    let mut outcome = ClientShellInput::default();
+    assert!(state.enter_copy_mode(&mut outcome));
+    state.push_pane_scroll_offset("terminal-popup".into(), 5, &mut outcome);
+    assert!(state.pane_scroll_targets.contains_key("terminal-popup"));
+    assert!(state.pane_scroll_in_flight.contains_key("terminal-popup"));
+
+    // An unrelated agent finishes; the server re-projects and the client gets a
+    // fresh snapshot. Nothing about the popup changed.
+    let mut next = snapshot();
+    next.revision = 2;
+    if let Some(agent) = next.agents.first_mut() {
+        agent.agent_status = crate::api::schema::AgentStatus::Done;
+    }
+    state.set_snapshot(Box::new(next));
+
+    assert!(
+        state.pane_scroll_targets.contains_key("terminal-popup"),
+        "a snapshot must not drop the popup's pending scroll target"
+    );
+    assert!(state.pane_scroll_in_flight.contains_key("terminal-popup"));
+    assert_eq!(state.mode, ClientShellMode::Copy);
+    assert!(state
+        .copy_mode
+        .as_ref()
+        .is_some_and(|copy_mode| copy_mode.popup));
+}
+
+/// The popup's reached scroll target is not in `surface.panes`, so it needs the
+/// same clearing panes get. Left behind it pins the copy-mode offset and
+/// suppresses the copy cursor and highlights permanently.
+#[test]
+fn a_reached_popup_scroll_target_is_cleared() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.apply_popup_surface_metrics(&popup_surface_metrics(1, 2, 7, 3));
+    state.set_pane_surface(selectable_popup_surface_at_revision(1));
+
+    let mut outcome = ClientShellInput::default();
+    state.push_pane_scroll_offset("terminal-popup".into(), 5, &mut outcome);
+    assert!(state.pane_scroll_targets.contains_key("terminal-popup"));
+
+    // The server reports the popup sitting at the requested offset.
+    state.apply_popup_surface_metrics(&popup_surface_metrics(2, 5, 7, 3));
+    state.set_pane_surface(selectable_popup_surface_at_revision(2));
+
+    assert!(
+        !state.pane_scroll_targets.contains_key("terminal-popup"),
+        "a reached popup scroll target must be cleared"
+    );
+}
+
+/// With `copy_on_select` off a popup selection is retained just like a pane's,
+/// so ctrl+c has to reach the shell instead of interrupting the popup process.
+#[test]
+fn the_copy_shortcut_reaches_the_shell_over_a_retained_popup_selection() {
+    let mut config = Config::default();
+    config.ui.copy_on_select = false;
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    state.set_snapshot(Box::new(snapshot()));
+    state.apply_popup_surface_metrics(&popup_surface_metrics(1, 0, 0, 3));
+    state.set_pane_surface(surface_with_selectable_popup());
+    state.compose(106, 20).expect("popup frame");
+    let popup = state.hits.popup.as_ref().expect("popup hit").clone();
+
+    drag_popup_row(&mut state, &popup, 0);
+    assert!(state
+        .selection
+        .as_ref()
+        .is_some_and(crate::selection::Selection::is_visible));
+
+    let copy = state.handle_input_bytes(b"\x03");
+    assert!(
+        copy.requests.is_empty(),
+        "ctrl+c must not reach the popup process, got {:?}",
+        copy.requests
+    );
+    let [ClientShellAction::Endpoint { request, .. }] = &copy.actions[..] else {
+        panic!("ctrl+c should extract the retained popup selection");
+    };
+    assert!(matches!(
+        &request.method,
+        crate::api::schema::Method::PopupSelectionRead(params)
+            if params.terminal_id == "terminal-popup"
+    ));
+}
+
+/// A double click in the popup sends `popup.selection.read`, but the completion
+/// path dropped any reply whose target was absent from `snapshot.panes` — which
+/// the popup terminal always is.
+#[test]
+fn popup_word_selection_completes() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.apply_popup_surface_metrics(&popup_surface_metrics(1, 0, 0, 3));
+    state.set_pane_surface(surface_with_selectable_popup());
+    state.compose(106, 20).expect("popup frame");
+    let popup = state.hits.popup.as_ref().expect("popup hit").clone();
+
+    let mut request = ClientShellInput::default();
+    state.request_word_selection(&popup, 0, 1, &mut request);
+    let [ClientShellAction::Endpoint { request, .. }] = &request.actions[..] else {
+        panic!("a popup word selection should reach the endpoint");
+    };
+    let request_id = request.id.clone();
+    assert!(matches!(
+        &request.method,
+        crate::api::schema::Method::PopupSelectionRead(params)
+            if params.terminal_id == "terminal-popup"
+    ));
+
+    let (repaint, _) = state.handle_endpoint_result(
+        "boot-1",
+        &request_id,
+        Ok(crate::api::schema::ResponseResult::PopupSelection {
+            terminal_id: "terminal-popup".into(),
+            text: "popup-live".into(),
+        }),
+    );
+    assert!(repaint);
+    assert!(
+        state
+            .selection
+            .as_ref()
+            .is_some_and(crate::selection::Selection::is_visible),
+        "the word selection reply must land instead of being discarded"
+    );
+}
