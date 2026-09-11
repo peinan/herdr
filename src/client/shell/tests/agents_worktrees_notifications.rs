@@ -657,6 +657,71 @@ fn a_second_mark_keypress_undoes_the_first_before_the_server_answers() {
 }
 
 #[test]
+fn a_refused_mark_request_puts_the_projection_back() {
+    let config = priority_sort_config();
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    // pane_1 is focused and unmarked.
+    state.set_snapshot(Box::new(marked_agent_snapshot("none")));
+    state.set_pane_surface(surface());
+
+    let mut outcome = ClientShellInput::default();
+    state.record_binding(
+        crate::input::KeybindMatch::Action(crate::input::KeybindAction::ToggleAgentMark),
+        &mut outcome,
+    );
+    let [ClientShellAction::Endpoint { request, .. }] = &outcome.actions[..] else {
+        panic!("the mark keybinding should use the endpoint API");
+    };
+    let request_id = request.id.clone();
+    let marked_locally = |state: &mut ClientShellState| {
+        state.compose(106, 30).expect("agent sidebar frame");
+        state
+            .snapshot
+            .as_deref()
+            .and_then(|snapshot| {
+                snapshot
+                    .agents
+                    .iter()
+                    .find(|agent| agent.pane_id == "pane_1")
+            })
+            .is_some_and(|agent| agent.marked)
+    };
+    assert!(marked_locally(&mut state), "the mark shows optimistically");
+
+    let (repaint, actions) = state.handle_endpoint_result(
+        "boot-1",
+        &request_id,
+        Err(crate::client::shell::state::ClientShellEndpointError {
+            code: Some("pane_not_found".into()),
+            message: "pane not found".into(),
+        }),
+    );
+
+    assert!(repaint);
+    assert!(actions.is_empty());
+    assert!(
+        !marked_locally(&mut state),
+        "a refused mark must not leave the marker showing"
+    );
+
+    // The next toggle now works from the restored value rather than re-sending
+    // the value the server already refused.
+    let mut retry = ClientShellInput::default();
+    state.record_binding(
+        crate::input::KeybindMatch::Action(crate::input::KeybindAction::ToggleAgentMark),
+        &mut retry,
+    );
+    let [ClientShellAction::Endpoint { request, .. }] = &retry.actions[..] else {
+        panic!("the mark keybinding should use the endpoint API");
+    };
+    assert!(matches!(
+        &request.method,
+        crate::api::schema::Method::PaneMarkSet(params)
+            if params.pane_id == "pane_1" && params.marked
+    ));
+}
+
+#[test]
 fn agent_sidebar_honors_priority_symbols_tokens_and_stable_hits() {
     let mut projected = snapshot();
     let mut second_pane = projected.panes[0].clone();

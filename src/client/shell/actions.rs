@@ -419,32 +419,69 @@ impl ClientShellState {
     /// Request a mark change and reflect it in the local projection right away.
     /// Without that, a second toggle raised before the server answers would read
     /// the same stale value and repeat the first request instead of undoing it.
+    /// The pending request carries the previous value so a refusal can put the
+    /// projection back rather than leaving a mark the server never took.
     pub(super) fn set_agent_mark(
         &mut self,
         pane_id: String,
         marked: bool,
         outcome: &mut ClientShellInput,
     ) {
+        let Some(previous) = self.agent_mark(&pane_id) else {
+            return;
+        };
         let sent = self.push_endpoint_method_with_kind(
             crate::api::schema::Method::PaneMarkSet(crate::api::schema::PaneMarkSetParams {
                 pane_id: pane_id.clone(),
                 marked,
             }),
-            PendingEndpointKind::Generic,
+            PendingEndpointKind::MarkSet {
+                pane_id: pane_id.clone(),
+                previous,
+            },
             outcome,
         );
-        if !sent {
-            return;
+        if sent {
+            outcome.repaint |= self.write_agent_mark(&pane_id, marked);
         }
-        if let Some(agent) = self.snapshot.as_deref_mut().and_then(|snapshot| {
+    }
+
+    fn agent_mark(&self, pane_id: &str) -> Option<bool> {
+        self.snapshot.as_deref().and_then(|snapshot| {
             snapshot
                 .agents
-                .iter_mut()
+                .iter()
                 .find(|agent| agent.pane_id == pane_id)
-        }) {
-            agent.marked = marked;
-            outcome.repaint = true;
-        }
+                .map(|agent| agent.marked)
+        })
+    }
+
+    fn write_agent_mark(&mut self, pane_id: &str, marked: bool) -> bool {
+        self.snapshot
+            .as_deref_mut()
+            .and_then(|snapshot| {
+                snapshot
+                    .agents
+                    .iter_mut()
+                    .find(|agent| agent.pane_id == pane_id)
+            })
+            .is_some_and(|agent| {
+                let changed = agent.marked != marked;
+                agent.marked = marked;
+                changed
+            })
+    }
+
+    /// Whether another `pane.mark.set` for this pane is still in flight. A
+    /// newer request owns the projection, so an older failure must not undo it.
+    fn mark_request_outstanding(&self, pane_id: &str) -> bool {
+        self.pending_requests.values().any(|pending| {
+            matches!(
+                &pending.kind,
+                PendingEndpointKind::MarkSet { pane_id: pending_pane_id, .. }
+                    if pending_pane_id == pane_id
+            )
+        })
     }
 
     pub(super) fn push_endpoint_method_with_kind(
@@ -632,6 +669,13 @@ impl ClientShellState {
         }
         match pending.kind {
             PendingEndpointKind::Generic => {}
+            PendingEndpointKind::MarkSet { pane_id, previous } => {
+                return match result {
+                    Ok(_) => (false, Vec::new()),
+                    Err(_) if self.mark_request_outstanding(&pane_id) => (false, Vec::new()),
+                    Err(_) => (self.write_agent_mark(&pane_id, previous), Vec::new()),
+                };
+            }
             PendingEndpointKind::ProductAnnouncementDismiss { version, id } => {
                 return match result {
                     Ok(_) => (false, Vec::new()),

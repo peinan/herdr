@@ -692,6 +692,12 @@ impl ClientShellOverlay {
 #[derive(Debug)]
 pub(super) enum PendingEndpointKind {
     Generic,
+    /// A `pane.mark.set` whose value was already written into the local
+    /// projection, carrying the value to restore if the server refuses it.
+    MarkSet {
+        pane_id: String,
+        previous: bool,
+    },
     ProductAnnouncementDismiss {
         version: String,
         id: String,
