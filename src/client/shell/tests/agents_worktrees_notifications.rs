@@ -431,7 +431,8 @@ fn pane_cycle_last_and_agent_actions_resolve_to_stable_pane_ids() {
     ));
 }
 
-/// Two idle agents, so only the mark can decide the order.
+/// Two idle agents whose `state_change_seq` puts `pane_1` first, so a marked
+/// `pane_2` can only lead when the mark itself outranks the rest of the key.
 fn marked_agent_snapshot(marked_pane: &str) -> crate::protocol::ClientShellSnapshot {
     let mut projected = snapshot();
     let mut second_pane = projected.panes[0].clone();
@@ -452,7 +453,7 @@ fn marked_agent_snapshot(marked_pane: &str) -> crate::protocol::ClientShellSnaps
             terminal_title: None,
             terminal_title_stripped: None,
             agent_status: AgentStatus::Idle,
-            state_change_seq: index as u64 + 1,
+            state_change_seq: 2 - index as u64,
             state_labels: Vec::new(),
             tokens: Vec::new(),
             focused: index == 0,
@@ -473,9 +474,23 @@ fn priority_sort_config() -> Config {
 fn priority_sort_lifts_the_marked_agent_and_draws_its_gutter() {
     let config = priority_sort_config();
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
-    // pane_2 sorts last by state_change_seq until it is marked.
-    state.set_snapshot(Box::new(marked_agent_snapshot("pane_2")));
+
+    // Baseline: with nothing marked, state_change_seq puts pane_1 first. Without
+    // this the marked assertion below would pass even if the mark were ignored.
+    state.set_snapshot(Box::new(marked_agent_snapshot("none")));
     state.set_pane_surface(surface());
+    state.compose(106, 30).expect("agent sidebar frame");
+    assert_eq!(
+        state
+            .hits
+            .agents
+            .iter()
+            .map(|(_, pane_id)| pane_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["pane_1", "pane_2"]
+    );
+
+    state.set_snapshot(Box::new(marked_agent_snapshot("pane_2")));
 
     let frame = state.compose(106, 30).expect("agent sidebar frame");
     assert_eq!(
@@ -587,6 +602,45 @@ fn the_mark_keybinding_flips_the_focused_agent() {
         crate::api::schema::Method::PaneMarkSet(params)
             if params.pane_id == "pane_1" && params.marked
     ));
+}
+
+#[test]
+fn a_second_mark_keypress_undoes_the_first_before_the_server_answers() {
+    let config = priority_sort_config();
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    // pane_1 is focused and unmarked.
+    state.set_snapshot(Box::new(marked_agent_snapshot("none")));
+    state.set_pane_surface(surface());
+
+    let mut marked = ClientShellInput::default();
+    state.record_binding(
+        crate::input::KeybindMatch::Action(crate::input::KeybindAction::ToggleAgentMark),
+        &mut marked,
+    );
+    // No new server snapshot arrives between the two presses.
+    let mut cleared = ClientShellInput::default();
+    state.record_binding(
+        crate::input::KeybindMatch::Action(crate::input::KeybindAction::ToggleAgentMark),
+        &mut cleared,
+    );
+
+    let requested = |outcome: &ClientShellInput| {
+        let [ClientShellAction::Endpoint { request, .. }] = &outcome.actions[..] else {
+            panic!("the mark keybinding should use the endpoint API");
+        };
+        match &request.method {
+            crate::api::schema::Method::PaneMarkSet(params) => {
+                (params.pane_id.clone(), params.marked)
+            }
+            other => panic!("unexpected method: {other:?}"),
+        }
+    };
+    assert_eq!(requested(&marked), ("pane_1".to_owned(), true));
+    assert_eq!(
+        requested(&cleared),
+        ("pane_1".to_owned(), false),
+        "the second press must undo the first, not repeat it"
+    );
 }
 
 #[test]

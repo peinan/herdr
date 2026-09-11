@@ -403,16 +403,11 @@ impl ClientShellState {
         action: ClientContextMenuAction,
         outcome: &mut ClientShellInput,
     ) {
-        use crate::api::schema::{Method, PaneMarkSetParams};
-
         if action == ClientContextMenuAction::ToggleMark {
-            self.push_endpoint_method(
-                Method::PaneMarkSet(PaneMarkSetParams {
-                    pane_id,
-                    marked: !marked,
-                }),
-                outcome,
-            );
+            // The menu offered one fixed outcome ("Mark agent" or "Clear mark"),
+            // so send that absolute value rather than inverting whatever the
+            // state happens to be when the item is picked.
+            self.set_agent_mark(pane_id, !marked, outcome);
         }
     }
 

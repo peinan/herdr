@@ -405,18 +405,46 @@ impl ClientShellState {
         let Some(focused_pane_id) = snapshot.focused_pane_id.as_deref() else {
             return;
         };
-        let Some(agent) = snapshot
+        let Some((pane_id, marked)) = snapshot
             .agents
             .iter()
             .find(|agent| agent.pane_id == focused_pane_id)
+            .map(|agent| (agent.pane_id.clone(), agent.marked))
         else {
             return;
         };
-        let params = crate::api::schema::PaneMarkSetParams {
-            pane_id: agent.pane_id.clone(),
-            marked: !agent.marked,
-        };
-        self.push_endpoint_method(crate::api::schema::Method::PaneMarkSet(params), outcome);
+        self.set_agent_mark(pane_id, !marked, outcome);
+    }
+
+    /// Request a mark change and reflect it in the local projection right away.
+    /// Without that, a second toggle raised before the server answers would read
+    /// the same stale value and repeat the first request instead of undoing it.
+    pub(super) fn set_agent_mark(
+        &mut self,
+        pane_id: String,
+        marked: bool,
+        outcome: &mut ClientShellInput,
+    ) {
+        let sent = self.push_endpoint_method_with_kind(
+            crate::api::schema::Method::PaneMarkSet(crate::api::schema::PaneMarkSetParams {
+                pane_id: pane_id.clone(),
+                marked,
+            }),
+            PendingEndpointKind::Generic,
+            outcome,
+        );
+        if !sent {
+            return;
+        }
+        if let Some(agent) = self.snapshot.as_deref_mut().and_then(|snapshot| {
+            snapshot
+                .agents
+                .iter_mut()
+                .find(|agent| agent.pane_id == pane_id)
+        }) {
+            agent.marked = marked;
+            outcome.repaint = true;
+        }
     }
 
     pub(super) fn push_endpoint_method_with_kind(
