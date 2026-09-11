@@ -450,20 +450,48 @@ impl ClientShellState {
             outcome,
         );
         if sent {
-            self.pending_agent_marks.insert(pane_id.clone(), marked);
+            let server = self
+                .pending_agent_marks
+                .get(&pane_id)
+                .and_then(|pending| pending.server);
+            self.pending_agent_marks.insert(
+                pane_id.clone(),
+                PendingAgentMark {
+                    requested: marked,
+                    server,
+                },
+            );
             outcome.repaint |= self.write_agent_mark(&pane_id, marked);
         }
     }
 
     /// Put the in-flight values back after a snapshot replaced the projection,
-    /// so a toggle raised afterwards still inverts what was last requested.
+    /// so a toggle raised afterwards still inverts what was last requested,
+    /// remembering the server value being covered up so it is not lost.
     pub(super) fn reapply_pending_agent_marks(&mut self) {
         if self.pending_agent_marks.is_empty() {
             return;
         }
-        for (pane_id, marked) in std::mem::take(&mut self.pending_agent_marks) {
-            self.write_agent_mark(&pane_id, marked);
-            self.pending_agent_marks.insert(pane_id, marked);
+        for (pane_id, mut pending) in std::mem::take(&mut self.pending_agent_marks) {
+            pending.server = self.agent_mark(&pane_id).or(pending.server);
+            self.write_agent_mark(&pane_id, pending.requested);
+            self.pending_agent_marks.insert(pane_id, pending);
+        }
+    }
+
+    /// Give the projection back to the server once nothing is in flight for
+    /// this pane. Any snapshot seen meanwhile is newer than the value this
+    /// client requested, so it wins over both the optimistic write and the
+    /// rollback baseline.
+    fn settle_agent_mark(&mut self, pane_id: &str, fallback: Option<bool>) -> bool {
+        let settled = self
+            .pending_agent_marks
+            .remove(pane_id)
+            .and_then(|pending| pending.server)
+            .or(fallback);
+        match settled {
+            Some(marked) => self.write_agent_mark(pane_id, marked),
+            None => false,
         }
     }
 
@@ -729,20 +757,23 @@ impl ClientShellState {
                 previous,
             } => {
                 let outstanding = self.mark_request_outstanding(&pane_id);
-                if !outstanding {
-                    self.pending_agent_marks.remove(&pane_id);
-                }
                 return match result {
                     Ok(_) => {
                         self.confirm_pending_mark_baseline(&pane_id, requested);
-                        (false, Vec::new())
+                        if outstanding {
+                            return (false, Vec::new());
+                        }
+                        // Nothing else is in flight, so hand the pane back to
+                        // the server: a snapshot seen while we held the
+                        // optimistic value is newer than what we asked for.
+                        (self.settle_agent_mark(&pane_id, None), Vec::new())
                     }
                     // An error always repaints, matching every other kind: the
                     // rejection notice was already queued above and an idle UI
                     // would otherwise never redraw to show it.
                     Err(_) if outstanding => (true, Vec::new()),
                     Err(_) => {
-                        self.write_agent_mark(&pane_id, previous);
+                        self.settle_agent_mark(&pane_id, Some(previous));
                         (true, Vec::new())
                     }
                 };

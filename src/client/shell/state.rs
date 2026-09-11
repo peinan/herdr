@@ -763,6 +763,17 @@ pub(super) struct PendingEndpointRequest {
     pub(super) kind: PendingEndpointKind,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(super) struct PendingAgentMark {
+    /// What the newest in-flight request asked the server for.
+    pub(super) requested: bool,
+    /// The newest value a snapshot carried while a request was in flight, which
+    /// is what the optimistic write covered up. Restoring it once the last
+    /// request settles is the only way another client's change survives: an
+    /// unchanged server issues no further snapshot to correct us.
+    pub(super) server: Option<bool>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) enum ClientEndpointNoticeKind {
     Unsupported,
@@ -997,11 +1008,11 @@ pub(crate) struct ClientShellState {
     pub(super) popup_pending_deadline: Option<std::time::Instant>,
     pub(super) next_request_id: u64,
     pub(super) pending_requests: HashMap<String, PendingEndpointRequest>,
-    /// Last mark value requested per pane while a `pane.mark.set` is in flight.
+    /// Marks this client has asked for but not yet had answered, per pane.
     /// Every snapshot rebuilds the projection wholesale, so without this a
     /// snapshot landing between two toggles would resurface the server value
     /// and make the next toggle repeat a request instead of undoing it.
-    pub(super) pending_agent_marks: HashMap<String, bool>,
+    pub(super) pending_agent_marks: HashMap<String, PendingAgentMark>,
     pub(super) pending_integration_installs: usize,
     pub(super) pending_notifications: Vec<ClientPendingNotification>,
     pub(super) visible_notification: Option<ClientVisibleNotification>,

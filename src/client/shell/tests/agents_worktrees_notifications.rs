@@ -960,6 +960,66 @@ fn two_marks_failing_in_order_restore_the_server_value() {
 }
 
 #[test]
+fn another_clients_unmark_survives_our_in_flight_mark() {
+    let config = priority_sort_config();
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    // pane_1 is focused and unmarked.
+    state.set_snapshot(Box::new(marked_agent_snapshot("none")));
+    state.set_pane_surface(surface());
+
+    let mut outcome = ClientShellInput::default();
+    state.record_binding(
+        crate::input::KeybindMatch::Action(crate::input::KeybindAction::ToggleAgentMark),
+        &mut outcome,
+    );
+    let [ClientShellAction::Endpoint { request, .. }] = &outcome.actions[..] else {
+        panic!("expected an endpoint request");
+    };
+    let request_id = request.id.clone();
+
+    // Our mark applied, then another client cleared it, and that newer
+    // snapshot reaches us before our own acknowledgement does.
+    let mut newer = marked_agent_snapshot("none");
+    newer.revision = 2;
+    state.set_snapshot(Box::new(newer));
+
+    state.handle_endpoint_result(
+        "boot-1",
+        &request_id,
+        Ok(crate::api::schema::ResponseResult::Ok {}),
+    );
+
+    let marked = state
+        .snapshot
+        .as_deref()
+        .and_then(|snapshot| {
+            snapshot
+                .agents
+                .iter()
+                .find(|agent| agent.pane_id == "pane_1")
+        })
+        .is_some_and(|agent| agent.marked);
+    assert!(
+        !marked,
+        "the newer server value must survive; an unchanged server sends no further snapshot to correct us"
+    );
+
+    // And the next toggle works from that value rather than our stale request.
+    let mut next = ClientShellInput::default();
+    state.record_binding(
+        crate::input::KeybindMatch::Action(crate::input::KeybindAction::ToggleAgentMark),
+        &mut next,
+    );
+    let [ClientShellAction::Endpoint { request, .. }] = &next.actions[..] else {
+        panic!("expected an endpoint request");
+    };
+    assert!(matches!(
+        &request.method,
+        crate::api::schema::Method::PaneMarkSet(params) if params.marked
+    ));
+}
+
+#[test]
 fn agent_sidebar_honors_priority_symbols_tokens_and_stable_hits() {
     let mut projected = snapshot();
     let mut second_pane = projected.panes[0].clone();
