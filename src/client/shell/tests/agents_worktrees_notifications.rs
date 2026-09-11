@@ -906,6 +906,60 @@ fn a_refused_mark_repaints_even_when_nothing_is_rolled_back() {
 }
 
 #[test]
+fn two_marks_failing_in_order_restore_the_server_value() {
+    let config = priority_sort_config();
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    // The server holds unmarked for pane_1 throughout; neither request lands.
+    state.set_snapshot(Box::new(marked_agent_snapshot("none")));
+    state.set_pane_surface(surface());
+
+    let toggle = |state: &mut ClientShellState| {
+        let mut outcome = ClientShellInput::default();
+        state.record_binding(
+            crate::input::KeybindMatch::Action(crate::input::KeybindAction::ToggleAgentMark),
+            &mut outcome,
+        );
+        let [ClientShellAction::Endpoint { request, .. }] = &outcome.actions[..] else {
+            panic!("expected an endpoint request");
+        };
+        request.id.clone()
+    };
+    let first = toggle(&mut state);
+    let second = toggle(&mut state);
+
+    let refuse = |state: &mut ClientShellState, id: &str| {
+        state.handle_endpoint_result(
+            "boot-1",
+            id,
+            Err(crate::client::shell::state::ClientShellEndpointError {
+                code: Some("pane_not_found".into()),
+                message: "pane not found".into(),
+            }),
+        );
+    };
+    // Failing in order: the first rollback is suppressed because the second
+    // request still owns the projection, so the second must restore the value
+    // the server actually holds rather than the first request's optimistic one.
+    refuse(&mut state, &first);
+    refuse(&mut state, &second);
+
+    let marked = state
+        .snapshot
+        .as_deref()
+        .and_then(|snapshot| {
+            snapshot
+                .agents
+                .iter()
+                .find(|agent| agent.pane_id == "pane_1")
+        })
+        .is_some_and(|agent| agent.marked);
+    assert!(
+        !marked,
+        "both requests failed, so the projection must be back to the server value"
+    );
+}
+
+#[test]
 fn agent_sidebar_honors_priority_symbols_tokens_and_stable_hits() {
     let mut projected = snapshot();
     let mut second_pane = projected.panes[0].clone();
