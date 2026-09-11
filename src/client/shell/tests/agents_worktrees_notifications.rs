@@ -782,6 +782,130 @@ fn overlapping_mark_requests_restore_the_server_value_not_the_optimistic_one() {
 }
 
 #[test]
+fn the_default_single_endpoint_collapsed_sidebar_marks_the_index_cells() {
+    let config = priority_sort_config();
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    // One endpoint, which is the default shape and uses sidebar.rs rather than
+    // the multi-machine strip.
+    assert_eq!(state.endpoints.len(), 1);
+    state.set_snapshot(Box::new(marked_agent_snapshot("pane_2")));
+    state.set_pane_surface(surface());
+    state.sidebar_collapsed = true;
+
+    let frame = state.compose(106, 30).expect("collapsed sidebar frame");
+    let buffer = frame.to_ratatui_buffer().expect("frame should reconstruct");
+    let cell_for = |pane: &str| {
+        let rect = state
+            .hits
+            .agents
+            .iter()
+            .find(|(_, pane_id)| pane_id == pane)
+            .expect("agent row")
+            .0;
+        let cell = &buffer[(rect.x, rect.y)];
+        (cell.symbol().to_owned(), cell.fg, cell.modifier)
+    };
+
+    let (marked_symbol, marked_fg, marked_modifier) = cell_for("pane_2");
+    let (plain_symbol, plain_fg, plain_modifier) = cell_for("pane_1");
+
+    // The index digits still address the row; only the styling carries the mark.
+    assert!(marked_symbol.chars().all(|c| c.is_ascii_digit()));
+    assert!(plain_symbol.chars().all(|c| c.is_ascii_digit()));
+    assert_eq!(marked_fg, state.config.agent_mark_color);
+    assert!(marked_modifier.contains(Modifier::BOLD));
+    assert_ne!(plain_fg, state.config.agent_mark_color);
+    assert!(!plain_modifier.contains(Modifier::BOLD));
+}
+
+#[test]
+fn a_snapshot_between_toggles_keeps_the_pending_mark() {
+    let config = priority_sort_config();
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    // pane_1 is focused and unmarked.
+    state.set_snapshot(Box::new(marked_agent_snapshot("none")));
+    state.set_pane_surface(surface());
+
+    let requested = |outcome: &ClientShellInput| {
+        let [ClientShellAction::Endpoint { request, .. }] = &outcome.actions[..] else {
+            panic!("the mark keybinding should use the endpoint API");
+        };
+        match &request.method {
+            crate::api::schema::Method::PaneMarkSet(params) => params.marked,
+            other => panic!("unexpected method: {other:?}"),
+        }
+    };
+    let toggle = |state: &mut ClientShellState| {
+        let mut outcome = ClientShellInput::default();
+        state.record_binding(
+            crate::input::KeybindMatch::Action(crate::input::KeybindAction::ToggleAgentMark),
+            &mut outcome,
+        );
+        outcome
+    };
+
+    assert!(requested(&toggle(&mut state)));
+    assert!(!requested(&toggle(&mut state)));
+
+    // The server applied only the first request, so its snapshot still says
+    // marked. Replacing the projection with it must not lose the second
+    // request's value.
+    let mut server_view = marked_agent_snapshot("pane_1");
+    server_view.revision = 2;
+    state.set_snapshot(Box::new(server_view));
+
+    assert!(
+        requested(&toggle(&mut state)),
+        "a snapshot mid-flight must not make the next toggle repeat the last request"
+    );
+}
+
+#[test]
+fn a_refused_mark_repaints_even_when_nothing_is_rolled_back() {
+    let config = priority_sort_config();
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    state.set_snapshot(Box::new(marked_agent_snapshot("none")));
+    state.set_pane_surface(surface());
+
+    let mut first = ClientShellInput::default();
+    state.record_binding(
+        crate::input::KeybindMatch::Action(crate::input::KeybindAction::ToggleAgentMark),
+        &mut first,
+    );
+    let mut second = ClientShellInput::default();
+    state.record_binding(
+        crate::input::KeybindMatch::Action(crate::input::KeybindAction::ToggleAgentMark),
+        &mut second,
+    );
+    let request_id = |outcome: &ClientShellInput| {
+        let [ClientShellAction::Endpoint { request, .. }] = &outcome.actions[..] else {
+            panic!("expected an endpoint request");
+        };
+        request.id.clone()
+    };
+    let (first_id, second_id) = (request_id(&first), request_id(&second));
+
+    let refuse = |state: &mut ClientShellState, id: &str| {
+        state
+            .handle_endpoint_result(
+                "boot-1",
+                id,
+                Err(crate::client::shell::state::ClientShellEndpointError {
+                    code: Some("pane_not_found".into()),
+                    message: "pane not found".into(),
+                }),
+            )
+            .0
+    };
+
+    // The first failure rolls nothing back because a newer request owns the
+    // projection, and the second finds the value already restored. Both still
+    // have to repaint or their rejection notice is never drawn.
+    assert!(refuse(&mut state, &first_id));
+    assert!(refuse(&mut state, &second_id));
+}
+
+#[test]
 fn agent_sidebar_honors_priority_symbols_tokens_and_stable_hits() {
     let mut projected = snapshot();
     let mut second_pane = projected.panes[0].clone();
