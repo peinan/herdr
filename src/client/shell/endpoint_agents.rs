@@ -32,8 +32,14 @@ pub(super) fn render_collapsed(
         // tint ignores `agent_mark_indicator`, which configures the expanded
         // gutter glyph rather than this strip, and it skips the stale DIM so a
         // mark the user set stays legible on a row whose machine went away.
+        // Bold as well as tinted: the status icon beside it is already colored
+        // per status, so color alone would be ambiguous whenever the configured
+        // mark color lands near one of those five. Weight keeps the mark
+        // readable for any configured color.
         let lead_style = if row.agent.marked {
-            Style::default().fg(config.agent_mark_color)
+            Style::default()
+                .fg(config.agent_mark_color)
+                .add_modifier(Modifier::BOLD)
         } else {
             status_style
         };

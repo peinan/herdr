@@ -704,7 +704,8 @@ fn the_collapsed_strip_tints_the_machine_initial_instead_of_replacing_it() {
     state.set_endpoint_snapshot(&endpoint_id, Box::new(remote.clone()));
     state.sidebar_collapsed = true;
 
-    let initial_cell = |state: &mut ClientShellState| {
+    // (initial symbol, initial style, status symbol, status style)
+    let strip = |state: &mut ClientShellState| {
         let frame = state.compose(100, 28).expect("collapsed endpoint frame");
         let rect = state
             .hits
@@ -714,22 +715,50 @@ fn the_collapsed_strip_tints_the_machine_initial_instead_of_replacing_it() {
             .expect("collapsed remote agent row")
             .0;
         let buffer = frame.to_ratatui_buffer().expect("frame should reconstruct");
-        let cell = &buffer[(rect.x, rect.y)];
-        (cell.symbol().to_owned(), cell.fg)
+        let initial = &buffer[(rect.x, rect.y)];
+        let status = &buffer[(rect.x + 1, rect.y)];
+        (
+            initial.symbol().to_owned(),
+            initial.fg,
+            initial.modifier,
+            status.symbol().to_owned(),
+            status.fg,
+        )
     };
 
-    let (symbol, unmarked_fg) = initial_cell(&mut state);
-    assert_eq!(symbol, "B", "the Build machine keeps its initial");
+    let (initial, unmarked_fg, unmarked_modifier, status, unmarked_status_fg) = strip(&mut state);
+    assert_eq!(initial, "B", "the Build machine keeps its initial");
     assert_ne!(unmarked_fg, state.config.agent_mark_color);
+    assert!(!unmarked_modifier.contains(Modifier::BOLD));
 
     let mut marked_agent = agent("remote agent", AgentStatus::Idle, 1);
     marked_agent.marked = true;
     remote.agents = vec![marked_agent];
-    state.set_endpoint_snapshot(&endpoint_id, Box::new(remote));
+    state.set_endpoint_snapshot(&endpoint_id, Box::new(remote.clone()));
 
-    let (symbol, marked_fg) = initial_cell(&mut state);
-    assert_eq!(symbol, "B", "marking must not cost the machine initial");
+    let (marked_initial, marked_fg, marked_modifier, marked_status, marked_status_fg) =
+        strip(&mut state);
+    assert_eq!(
+        marked_initial, "B",
+        "marking must not cost the machine initial"
+    );
     assert_eq!(marked_fg, state.config.agent_mark_color);
+    assert!(
+        marked_modifier.contains(Modifier::BOLD),
+        "weight keeps the mark readable when the color is near a status color"
+    );
+    // The status cell is untouched, so the mark never costs status information.
+    assert_eq!(marked_status, status);
+    assert_eq!(marked_status_fg, unmarked_status_fg);
+
+    // A stale machine dims its status icon, but the mark is a flag the user set
+    // and has to stay legible exactly then.
+    state.set_endpoint_status(&endpoint_id, ClientEndpointStatus::Connecting);
+    let (stale_initial, stale_fg, stale_modifier, _, stale_status_fg) = strip(&mut state);
+    assert_eq!(stale_initial, "B");
+    assert_eq!(stale_fg, state.config.agent_mark_color);
+    assert!(!stale_modifier.contains(Modifier::DIM));
+    assert_eq!(stale_status_fg, state.config.palette.overlay0);
 }
 
 #[test]
