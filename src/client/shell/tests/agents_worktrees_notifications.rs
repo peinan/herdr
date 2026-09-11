@@ -617,6 +617,19 @@ fn a_second_mark_keypress_undoes_the_first_before_the_server_answers() {
         crate::input::KeybindMatch::Action(crate::input::KeybindAction::ToggleAgentMark),
         &mut marked,
     );
+    assert!(marked.repaint);
+
+    // The marker shows immediately rather than waiting for the round trip.
+    let frame = state.compose(106, 30).expect("agent sidebar frame");
+    let row = state.hits.agents[0].0;
+    assert_eq!(state.hits.agents[0].1, "pane_1");
+    assert_eq!(
+        frame.cells[row.y as usize * frame.width as usize + row.x as usize]
+            .symbol
+            .as_str(),
+        "\u{258c}"
+    );
+
     // No new server snapshot arrives between the two presses.
     let mut cleared = ClientShellInput::default();
     state.record_binding(
