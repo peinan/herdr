@@ -2478,16 +2478,33 @@ async fn client_shell_hidden_pane_rejects_presses_but_accepts_releases() {
 
 #[tokio::test]
 async fn popup_surface_metrics_reach_only_v2_clients() {
-    type Receivers = (
-        std::sync::mpsc::Receiver<Vec<u8>>,
-        std::sync::mpsc::Receiver<Vec<u8>>,
-    );
+    /// Renders one popup-bearing frame for a single client and returns the popup
+    /// metrics control it received, if any.
+    ///
+    /// One client per server keeps this independent of which client would be
+    /// foreground or own the tab geometry.
+    fn popup_metrics_for_client(
+        surface_v2: bool,
+    ) -> (
+        Option<crate::protocol::endpoint::PopupSurfaceMetrics>,
+        String,
+    ) {
+        let mut server = test_headless_server();
+        let _pane_input = install_focused_test_runtime(&mut server, b"base-pane");
+        let (popup_runtime, _popup_input) =
+            crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
+                40,
+                12,
+                0,
+                b"POPUP_METRICS_LIVE",
+                4,
+            );
+        let (_, popup_terminal_id) = server.app.install_test_popup_runtime(popup_runtime);
 
-    fn connect(server: &mut HeadlessServer, client_id: u64, surface_v2: bool) -> Receivers {
         let (writer, control_rx, render_rx) = test_client_writer();
         assert!(
             server.handle_server_event(ServerEvent::ClientShellConnected {
-                client_id,
+                client_id: 12,
                 surface_cols: 80,
                 surface_rows: 23,
                 cell_width_px: 10,
@@ -2502,44 +2519,43 @@ async fn popup_surface_metrics_reach_only_v2_clients() {
             })
         );
         let _snapshot = control_rx.recv().expect("shell snapshot");
-        (control_rx, render_rx)
-    }
 
-    fn popup_metrics(
-        control_rx: &std::sync::mpsc::Receiver<Vec<u8>>,
-    ) -> Option<crate::protocol::endpoint::PopupSurfaceMetrics> {
+        server.render_and_stream();
+        let ServerMessage::PaneSurface(surface) =
+            read_server_message(render_rx.recv().expect("popup surface"))
+        else {
+            panic!("expected pane surface");
+        };
+        let popup = surface.popup.as_deref().expect("popup terminal surface");
+        assert_eq!(popup.terminal_id, popup_terminal_id.as_str());
+
+        let mut metrics = None;
         while let Ok(message) = control_rx.try_recv() {
             let ServerMessage::EndpointControl { kind, data } = read_server_message(message) else {
                 continue;
             };
             if kind == crate::protocol::endpoint::POPUP_SURFACE_METRICS_KIND {
-                return Some(serde_json::from_str(&data).expect("popup metrics json"));
+                metrics = Some(
+                    serde_json::from_str::<crate::protocol::endpoint::PopupSurfaceMetrics>(&data)
+                        .expect("popup metrics json"),
+                );
             }
         }
-        None
+        (metrics, surface.surface_revision.to_string())
     }
 
-    let mut server = test_headless_server();
-    let _pane_input = install_focused_test_runtime(&mut server, b"base-pane");
-    let (popup_runtime, _popup_input) =
-        crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
-            40,
-            12,
-            0,
-            b"POPUP_METRICS_LIVE",
-            4,
-        );
-    let (_, popup_terminal_id) = server.app.install_test_popup_runtime(popup_runtime);
-
-    let (v1_control, _v1_render) = connect(&mut server, 12, false);
-    let (v2_control, _v2_render) = connect(&mut server, 13, true);
-    server.render_and_stream();
-
-    let metrics = popup_metrics(&v2_control).expect("v2 client receives popup metrics");
-    assert_eq!(metrics.terminal_id, popup_terminal_id.as_str());
+    let (v2_metrics, v2_revision) = popup_metrics_for_client(true);
+    let metrics = v2_metrics.expect("a v2 client receives popup metrics");
     assert!(metrics.scroll.is_some());
+    assert_eq!(
+        metrics.surface_revision.to_string(),
+        v2_revision,
+        "the metrics must be stamped for the frame they were sent with"
+    );
+
+    let (v1_metrics, _) = popup_metrics_for_client(false);
     assert!(
-        popup_metrics(&v1_control).is_none(),
+        v1_metrics.is_none(),
         "a generation-1 client must not receive the v2 popup metrics control"
     );
 }

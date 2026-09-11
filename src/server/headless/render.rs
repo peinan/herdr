@@ -609,11 +609,11 @@ impl HeadlessServer {
             let mut next_shell_graphics_delivery = None;
             let prepared = if let Some((panes, splits, popup, graphics, delivery)) = surface_parts {
                 next_shell_graphics_delivery = Some(delivery);
-                let frame_popup_metrics = popup
-                    .is_some()
+                // Clone only for a client that will actually be sent them, so a v1
+                // client costs nothing extra on a popup-bearing frame.
+                let frame_popup_metrics = (popup.is_some() && client.shell_surface_v2)
                     .then(|| popup_metrics.clone())
-                    .flatten()
-                    .filter(|_| client.shell_surface_v2);
+                    .flatten();
                 client.render_state.prepare_pane_surface(
                     protocol::PaneSurfaceFrame {
                         boot_id: self.client_shell_boot_id.clone(),
