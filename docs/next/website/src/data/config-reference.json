@@ -1223,7 +1223,7 @@
         {
           "key": "ui.agent_mark_color",
           "type": "string",
-          "default": "\"yellow\"",
+          "default": "\"magenta\"",
           "description": "Color for the marked-agent glyph. Accepts hex (#89b4fa), named colors, or rgb(r,g,b)."
         },
         {

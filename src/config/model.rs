@@ -1044,7 +1044,7 @@ pub struct UiConfig {
     /// follow-up. Empty hides the marker. Default: "▌".
     pub agent_mark_indicator: String,
     /// Color for the marked-agent glyph. Accepts hex (#89b4fa), named colors
-    /// (cyan, blue), or RGB (rgb(137,180,250)). Default: "yellow".
+    /// (cyan, blue), or RGB (rgb(137,180,250)). Default: "magenta".
     pub agent_mark_color: String,
     /// Expanded sidebar row composition.
     pub sidebar: SidebarConfig,
@@ -1390,7 +1390,7 @@ impl Default for UiConfig {
             _legacy_agent_panel_scope: None,
             status_indicators: StatusIndicatorStyle::Dots,
             agent_mark_indicator: "▌".into(),
-            agent_mark_color: "yellow".into(),
+            agent_mark_color: "magenta".into(),
             sidebar: SidebarConfig::default(),
             accent: "cyan".into(),
             toast: ToastConfig::default(),
@@ -1610,7 +1610,7 @@ resume_agents_on_restore = false
     fn agent_mark_appearance_parses_and_defaults() {
         let default_config = Config::default();
         assert_eq!(default_config.ui.agent_mark_indicator, "\u{258c}");
-        assert_eq!(default_config.ui.agent_mark_color, "yellow");
+        assert_eq!(default_config.ui.agent_mark_color, "magenta");
         assert_eq!(
             default_config.keys.toggle_mark,
             BindingConfig::one("prefix+m")

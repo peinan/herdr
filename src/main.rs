@@ -417,7 +417,7 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # this glyph in the row gutter and sort to the top under agent_panel_sort = "priority".
 # The glyph must be one cell wide; set it to "" to hide the marker.
 # agent_mark_indicator = "▌"
-# agent_mark_color = "yellow"
+# agent_mark_color = "magenta"
 
 # Expanded agent rows. Built-ins are state_icon, state_text, machine, workspace, tab,
 # pane, agent, terminal_title, and terminal_title_stripped.
