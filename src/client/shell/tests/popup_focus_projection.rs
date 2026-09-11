@@ -1371,3 +1371,43 @@ fn a_modal_over_the_popup_still_takes_the_paste_shortcut() {
         "a modal over the popup must still accept the paste shortcut"
     );
 }
+
+/// herdr is mouse-first, so a modal opened over the popup has to receive clicks
+/// too — the popup guard further down the mouse path swallowed them.
+#[test]
+fn a_modal_over_the_popup_receives_mouse_events() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.apply_popup_surface_metrics(&popup_surface_metrics(1, 0, 0, 3));
+    state.set_pane_surface(surface_with_popup());
+    state.compose(106, 20).expect("popup frame");
+
+    let mut open = ClientShellInput::default();
+    state.record_binding(
+        crate::input::KeybindMatch::Action(crate::input::KeybindAction::Help),
+        &mut open,
+    );
+    state.compose(106, 30).expect("help overlay");
+    assert!(matches!(state.overlay, Some(ClientShellOverlay::Help(_))));
+
+    // Scrolling the modal must move the modal, not reach the popup terminal.
+    let scrolled =
+        state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 40,
+            row: 10,
+            modifiers: KeyModifiers::empty(),
+        })]);
+    assert!(
+        scrolled
+            .requests
+            .iter()
+            .all(|request| !matches!(request, ClientMessage::ClientShellPopupInput { .. })),
+        "modal mouse events must not reach the popup, got {:?}",
+        scrolled.requests
+    );
+    assert!(matches!(
+        state.overlay,
+        Some(ClientShellOverlay::Help(ClientHelpOverlay { scroll, .. })) if scroll > 0
+    ));
+}

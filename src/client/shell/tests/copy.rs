@@ -1883,3 +1883,85 @@ fn a_new_popup_selection_invalidates_a_pending_word_selection() {
         "a stale word-selection reply must not replace the drag selection"
     );
 }
+
+/// A mouse selection in the popup has no `copy_mode` to be restored from, so
+/// the snapshot cleanup has to exempt the popup on its own account.
+#[test]
+fn a_popup_mouse_selection_survives_an_agent_status_snapshot() {
+    let mut config = Config::default();
+    config.ui.copy_on_select = false;
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    state.set_snapshot(Box::new(snapshot()));
+    state.apply_popup_surface_metrics(&popup_surface_metrics(1, 0, 0, 3));
+    state.set_pane_surface(surface_with_selectable_popup());
+    state.compose(106, 20).expect("popup frame");
+    let popup = state.hits.popup.as_ref().expect("popup hit").clone();
+
+    drag_popup_row(&mut state, &popup, 0);
+    let dragged = state
+        .selection
+        .as_ref()
+        .map(|selection| selection.ordered_cells())
+        .expect("the drag selection");
+    assert!(state.copy_mode.is_none(), "a mouse drag opens no copy mode");
+
+    let mut next = snapshot();
+    next.revision = 2;
+    if let Some(agent) = next.agents.first_mut() {
+        agent.agent_status = crate::api::schema::AgentStatus::Done;
+    }
+    state.set_snapshot(Box::new(next));
+
+    assert_eq!(
+        state
+            .selection
+            .as_ref()
+            .map(|selection| selection.ordered_cells()),
+        Some(dragged),
+        "an unrelated snapshot must not wipe the popup's mouse selection"
+    );
+}
+
+/// Typing into the popup ends a retained selection the way it does over a pane.
+/// Otherwise the stale range stays visible and the copy shortcut copies it.
+#[test]
+fn typing_into_the_popup_ends_a_retained_selection() {
+    let mut config = Config::default();
+    config.ui.copy_on_select = false;
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    state.set_snapshot(Box::new(snapshot()));
+    state.apply_popup_surface_metrics(&popup_surface_metrics(1, 0, 0, 3));
+    state.set_pane_surface(surface_with_selectable_popup());
+    state.compose(106, 20).expect("popup frame");
+    let popup = state.hits.popup.as_ref().expect("popup hit").clone();
+
+    drag_popup_row(&mut state, &popup, 0);
+    assert!(state
+        .selection
+        .as_ref()
+        .is_some_and(crate::selection::Selection::is_visible));
+
+    // An ordinary key reaches the popup and clears the selection on the way.
+    let typed = state.handle_input_bytes(b"x");
+    assert!(matches!(
+        &typed.requests[..],
+        [ClientMessage::ClientShellPopupInput { terminal_id, .. }]
+            if terminal_id == "terminal-popup"
+    ));
+    assert!(
+        state.selection.is_none(),
+        "the popup key must end the retained selection"
+    );
+
+    // So the copy shortcut no longer has a stale range to copy.
+    let copy = state.handle_input_bytes(b"\x03");
+    assert!(
+        copy.actions.is_empty(),
+        "nothing is selected, so ctrl+c must not extract anything"
+    );
+    assert!(matches!(
+        &copy.requests[..],
+        [ClientMessage::ClientShellPopupInput { terminal_id, .. }]
+            if terminal_id == "terminal-popup"
+    ));
+}

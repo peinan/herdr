@@ -967,7 +967,9 @@ impl ClientShellState {
             }
             return;
         }
-        if self.popup_terminal_id.is_some() {
+        // A modal opened over the popup is handled further down, so only swallow
+        // the event when the popup itself is the frontmost surface.
+        if self.popup_terminal_id.is_some() && self.overlay.is_none() {
             return;
         }
         if !self.replaying_url_click

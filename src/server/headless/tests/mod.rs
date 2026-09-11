@@ -2560,6 +2560,77 @@ async fn popup_surface_metrics_reach_only_v2_clients() {
     );
 }
 
+/// Pins that the metrics travel with the frame and report the revision the
+/// render saw.
+///
+/// The mid-render race itself — a popup writing while its pixels are collected,
+/// which the odd-marking in `render_popup_surface` exists to reject — is not
+/// covered: nothing can inject a write between the bracketing reads from here.
+#[tokio::test]
+async fn popup_metrics_travel_with_the_frame_and_report_its_revision() {
+    let mut server = test_headless_server();
+    let _pane_input = install_focused_test_runtime(&mut server, b"base-pane");
+    let (popup_runtime, _popup_input) =
+        crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
+            40,
+            12,
+            0,
+            b"POPUP_COHERENT",
+            4,
+        );
+    let (_, popup_terminal_id) = server.app.install_test_popup_runtime(popup_runtime);
+
+    let (writer, control_rx, render_rx) = test_client_writer();
+    assert!(
+        server.handle_server_event(ServerEvent::ClientShellConnected {
+            client_id: 12,
+            surface_cols: 80,
+            surface_rows: 23,
+            cell_width_px: 10,
+            cell_height_px: 20,
+            pixel_mouse: false,
+            direct_graphics: false,
+            endpoint_keybindings: false,
+            mouse_capture: false,
+            surface_active: true,
+            surface_v2: true,
+            writer,
+        })
+    );
+    let _snapshot = control_rx.recv().expect("shell snapshot");
+
+    server.render_and_stream();
+    let _surface = render_rx.recv().expect("popup surface");
+    let mut metrics = None;
+    while let Ok(message) = control_rx.try_recv() {
+        if let ServerMessage::EndpointControl { kind, data } = read_server_message(message) {
+            if kind == crate::protocol::endpoint::POPUP_SURFACE_METRICS_KIND {
+                metrics =
+                    serde_json::from_str::<crate::protocol::endpoint::PopupSurfaceMetrics>(&data)
+                        .ok();
+            }
+        }
+    }
+    let metrics = metrics.expect("popup metrics");
+    assert_eq!(metrics.terminal_id, popup_terminal_id.as_str());
+    assert!(
+        metrics.content_revision.is_multiple_of(2),
+        "a quiet popup must report a usable, even revision"
+    );
+
+    // The runtime's own revision has to agree with what the frame reported.
+    let live = server
+        .app
+        .terminal_runtimes
+        .get(&popup_terminal_id)
+        .expect("popup runtime")
+        .content_seq();
+    assert_eq!(
+        metrics.content_revision, live,
+        "the reported revision must be the one the render saw"
+    );
+}
+
 #[tokio::test]
 async fn client_shell_streams_and_targets_popup_terminal_content() {
     let mut server = test_headless_server();

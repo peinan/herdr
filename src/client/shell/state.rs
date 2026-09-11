@@ -1523,12 +1523,17 @@ impl ClientShellState {
         {
             self.reveal_focused_tab = true;
         }
+        // A popup selection is anchored to a terminal that is neither the focused
+        // pane nor one of the snapshot's panes, so both tests below would wipe it
+        // on every snapshot — and snapshots arrive on any agent status change.
+        // A mouse selection has no `copy_mode` to restore it from.
         if self.selection.as_ref().is_some_and(|selection| {
-            snapshot.focused_pane_id.as_deref() != Some(selection.pane_id.as_str())
-                || !snapshot
-                    .panes
-                    .iter()
-                    .any(|pane| pane.pane_id == selection.pane_id)
+            !self.is_popup_target(&selection.pane_id)
+                && (snapshot.focused_pane_id.as_deref() != Some(selection.pane_id.as_str())
+                    || !snapshot
+                        .panes
+                        .iter()
+                        .any(|pane| pane.pane_id == selection.pane_id))
         }) {
             self.selection = None;
             self.selection_autoscroll = None;

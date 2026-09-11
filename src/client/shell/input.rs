@@ -528,6 +528,20 @@ impl ClientShellState {
         }
         if let Some(target) = self.popup_input_target() {
             if !self.popup_shell_key(key) {
+                // Typing into the popup ends a retained selection, exactly as it
+                // does over a pane. Without this the stale range stays visible and
+                // the copy shortcut above would later copy it.
+                if !matches!(key.code, KeyCode::Modifier(_)) {
+                    self.pending_word_selection = None;
+                    if self.mode != ClientShellMode::Copy
+                        && self.copy_or_terminal_mode() != ClientShellMode::Copy
+                        && self.selection.take().is_some()
+                    {
+                        self.stop_selection_autoscroll();
+                        self.selection_highlight_clear_deadline = None;
+                        outcome.repaint = true;
+                    }
+                }
                 return Some(target);
             }
         }
