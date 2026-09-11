@@ -38,6 +38,16 @@ impl App {
         let Some((_, runtime)) = self.popup_copy_target(&params.terminal_id) else {
             return popup_not_found(id, &params.terminal_id);
         };
+        // Probe before applying. When the scrollbar is unavailable the setter
+        // silently jumps the viewport to the bottom, which would move the popup
+        // for the user while this call reports failure.
+        if runtime.scroll_metrics().is_none() {
+            return encode_error(
+                id,
+                "popup_scroll_unavailable",
+                "popup scroll metrics are unavailable",
+            );
+        }
         runtime.set_scroll_offset_from_bottom(
             usize::try_from(params.offset_from_bottom).unwrap_or(usize::MAX),
         );

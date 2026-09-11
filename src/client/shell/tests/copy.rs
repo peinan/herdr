@@ -1833,3 +1833,53 @@ fn popup_word_selection_completes() {
         "the word selection reply must land instead of being discarded"
     );
 }
+
+/// A popup word-selection reply lands now, so an in-flight one must not arrive
+/// after the user has started a fresh drag and replace it with the word range.
+#[test]
+fn a_new_popup_selection_invalidates_a_pending_word_selection() {
+    // The selection has to survive the release for a late reply to clobber it.
+    let mut config = Config::default();
+    config.ui.copy_on_select = false;
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    state.set_snapshot(Box::new(snapshot()));
+    state.apply_popup_surface_metrics(&popup_surface_metrics(1, 0, 0, 3));
+    state.set_pane_surface(surface_with_selectable_popup());
+    state.compose(106, 20).expect("popup frame");
+    let popup = state.hits.popup.as_ref().expect("popup hit").clone();
+
+    let mut request = ClientShellInput::default();
+    state.request_word_selection(&popup, 0, 1, &mut request);
+    let [ClientShellAction::Endpoint { request, .. }] = &request.actions[..] else {
+        panic!("a popup word selection should reach the endpoint");
+    };
+    let stale_id = request.id.clone();
+    assert!(state.pending_word_selection.is_some());
+
+    // The user gives up on the double click and drags a new selection instead.
+    // With copy-on-select off it stays retained on the screen.
+    drag_popup_row(&mut state, &popup, 0);
+    let dragged = state
+        .selection
+        .as_ref()
+        .map(|selection| selection.ordered_cells())
+        .expect("the drag selection");
+
+    let (_, actions) = state.handle_endpoint_result(
+        "boot-1",
+        &stale_id,
+        Ok(crate::api::schema::ResponseResult::PopupSelection {
+            terminal_id: "terminal-popup".into(),
+            text: "popup-live".into(),
+        }),
+    );
+    assert!(actions.is_empty());
+    assert_eq!(
+        state
+            .selection
+            .as_ref()
+            .map(|selection| selection.ordered_cells()),
+        Some(dragged),
+        "a stale word-selection reply must not replace the drag selection"
+    );
+}

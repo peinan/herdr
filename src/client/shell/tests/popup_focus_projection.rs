@@ -1343,3 +1343,31 @@ fn a_modal_over_the_popup_owns_the_keyboard_and_closes_on_esc() {
             if terminal_id == "terminal-popup"
     ));
 }
+
+/// The popup suppresses the modal paste shortcut, but a modal opened over one
+/// owns the keyboard and still needs it for its own text field.
+#[test]
+fn a_modal_over_the_popup_still_takes_the_paste_shortcut() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.apply_popup_surface_metrics(&popup_surface_metrics(1, 0, 0, 3));
+    state.set_pane_surface(surface_with_popup());
+    state.compose(106, 20).expect("popup frame");
+
+    // With only the popup up the shortcut stays with the popup terminal.
+    assert!(!state.modal_paste_target_active());
+
+    state.overlay = Some(ClientShellOverlay::Rename(ClientRenameOverlay {
+        title: "Rename workspace",
+        input: String::new(),
+        replace_on_type: false,
+        target: ClientRenameTarget::NewTab {
+            workspace_id: "w1".into(),
+            default_name: String::new(),
+        },
+    }));
+    assert!(
+        state.modal_paste_target_active(),
+        "a modal over the popup must still accept the paste shortcut"
+    );
+}

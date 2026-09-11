@@ -437,8 +437,10 @@ impl ClientShellState {
     }
 
     pub(super) fn modal_paste_target_active(&self) -> bool {
+        // A modal opened over a popup owns the keyboard, so the popup only
+        // suppresses the paste shortcut when no modal is up.
         if self.popup_pending
-            || self.popup_input_target().is_some()
+            || (self.overlay.is_none() && self.popup_input_target().is_some())
             || (self.overlay.is_none()
                 && self.mode == ClientShellMode::Navigate
                 && self.workspace_preview_action_blocked())

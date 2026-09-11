@@ -914,6 +914,9 @@ impl ClientShellState {
             if super::contains(hit.inner_rect, point) {
                 match mouse.kind {
                     MouseEventKind::Down(MouseButton::Left) if selectable => {
+                        // A popup word-selection reply now lands, so an in-flight
+                        // one would overwrite this drag. Panes drop it here too.
+                        self.pending_word_selection = None;
                         let previous_pane_click = self.last_pane_click.take();
                         self.begin_pane_selection(&hit, mouse, previous_pane_click, outcome);
                         outcome.repaint = true;
