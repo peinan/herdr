@@ -26,23 +26,25 @@ pub(super) fn render_collapsed(
             } else {
                 Modifier::empty()
             });
-        // The collapsed strip is two cells wide, so a marked agent spends the
-        // machine-initial cell on the marker and keeps the status icon.
-        let marker = super::agent_sidebar::mark_gutter(config, row.agent.marked);
-        let lead = marker
-            .map(str::to_string)
-            .unwrap_or_else(|| row.machine_label.chars().next().unwrap_or('?').to_string());
-        put_text(
-            buffer,
-            rect.x,
-            rect.y,
-            rect.width,
-            &lead,
-            match marker {
-                Some(_) => Style::default().fg(config.agent_mark_color),
-                None => status_style,
-            },
-        );
+        // The collapsed strip is only two cells wide, so a mark tints the
+        // machine initial instead of replacing it: dropping the initial would
+        // cost machine identity exactly where federated ordering needs it. The
+        // tint ignores `agent_mark_indicator`, which configures the expanded
+        // gutter glyph rather than this strip, and it skips the stale DIM so a
+        // mark the user set stays legible on a row whose machine went away.
+        let lead_style = if row.agent.marked {
+            Style::default().fg(config.agent_mark_color)
+        } else {
+            status_style
+        };
+        let mut initial = [0u8; 4];
+        let initial = row
+            .machine_label
+            .chars()
+            .next()
+            .unwrap_or('?')
+            .encode_utf8(&mut initial);
+        put_text(buffer, rect.x, rect.y, rect.width, initial, lead_style);
         put_text(
             buffer,
             rect.x + 1,

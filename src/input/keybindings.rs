@@ -112,6 +112,12 @@ pub(crate) fn resolve_non_indexed_action(
 
 /// Like [`resolve_non_indexed_action`], but also returns the matched
 /// [`ActionKeybinds`] so callers can read per-binding options such as repeat.
+///
+/// The table below is scanned in order and the first action whose bindings
+/// match wins. Two actions configured on the same key are not reported as a
+/// conflict: the later one simply never fires, which reads to the user as that
+/// action's key doing nothing. Keep that in mind when picking a default for a
+/// newly added action.
 fn resolve_non_indexed_binding<'a>(
     keybinds: &'a Keybinds,
     key: &TerminalKey,

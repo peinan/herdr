@@ -20,7 +20,7 @@ pub(super) struct AgentRow {
 
 /// Gutter glyph drawn ahead of a marked agent row. Falls back to the plain
 /// indent when the configured indicator is empty or wider than the gutter.
-pub(super) fn mark_gutter(config: &ClientShellConfig, marked: bool) -> Option<&str> {
+fn mark_gutter(config: &ClientShellConfig, marked: bool) -> Option<&str> {
     if !marked {
         return None;
     }

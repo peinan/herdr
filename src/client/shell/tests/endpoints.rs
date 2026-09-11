@@ -683,6 +683,56 @@ fn aggregate_priority_lifts_a_marked_agent_above_a_busier_machine() {
 }
 
 #[test]
+fn the_collapsed_strip_tints_the_machine_initial_instead_of_replacing_it() {
+    use crate::api::schema::AgentStatus;
+
+    let mut config = Config::default();
+    config.ui.agent_panel_sort = crate::config::AgentPanelSortConfig::Priority;
+    // The expanded gutter glyph is switched off to prove the collapsed tint is
+    // driven by the mark itself, not by `agent_mark_indicator`.
+    config.ui.agent_mark_indicator = String::new();
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    let profile = remote_profile();
+    let endpoint_id = ClientEndpointId::Ssh(profile.id.clone());
+    state.set_endpoint_catalog(&[profile]);
+    state.set_endpoint_status(&endpoint_id, ClientEndpointStatus::Online);
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface());
+    let mut remote = snapshot();
+    remote.boot_id = "remote-boot".into();
+    remote.agents = vec![agent("remote agent", AgentStatus::Idle, 1)];
+    state.set_endpoint_snapshot(&endpoint_id, Box::new(remote.clone()));
+    state.sidebar_collapsed = true;
+
+    let initial_cell = |state: &mut ClientShellState| {
+        let frame = state.compose(100, 28).expect("collapsed endpoint frame");
+        let rect = state
+            .hits
+            .endpoint_agents
+            .iter()
+            .find(|(_, id, _)| id == &endpoint_id)
+            .expect("collapsed remote agent row")
+            .0;
+        let buffer = frame.to_ratatui_buffer().expect("frame should reconstruct");
+        let cell = &buffer[(rect.x, rect.y)];
+        (cell.symbol().to_owned(), cell.fg)
+    };
+
+    let (symbol, unmarked_fg) = initial_cell(&mut state);
+    assert_eq!(symbol, "B", "the Build machine keeps its initial");
+    assert_ne!(unmarked_fg, state.config.agent_mark_color);
+
+    let mut marked_agent = agent("remote agent", AgentStatus::Idle, 1);
+    marked_agent.marked = true;
+    remote.agents = vec![marked_agent];
+    state.set_endpoint_snapshot(&endpoint_id, Box::new(remote));
+
+    let (symbol, marked_fg) = initial_cell(&mut state);
+    assert_eq!(symbol, "B", "marking must not cost the machine initial");
+    assert_eq!(marked_fg, state.config.agent_mark_color);
+}
+
+#[test]
 fn unselected_endpoint_completion_projects_done_client_side() {
     use crate::api::schema::AgentStatus;
 
