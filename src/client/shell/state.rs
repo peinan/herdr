@@ -694,8 +694,11 @@ pub(super) enum PendingEndpointKind {
     Generic,
     /// A `pane.mark.set` whose value was already written into the local
     /// projection, carrying the value to restore if the server refuses it.
+    /// `previous` tracks the last server-confirmed mark rather than the
+    /// projection, so overlapping requests never restore an optimistic value.
     MarkSet {
         pane_id: String,
+        requested: bool,
         previous: bool,
     },
     ProductAnnouncementDismiss {

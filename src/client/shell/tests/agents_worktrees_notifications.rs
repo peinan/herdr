@@ -721,6 +721,66 @@ fn a_refused_mark_request_puts_the_projection_back() {
     ));
 }
 
+/// Two presses land before either answer, so the second request must not treat
+/// the first press's optimistic value as the state to restore.
+#[test]
+fn overlapping_mark_requests_restore_the_server_value_not_the_optimistic_one() {
+    for first_succeeds in [false, true] {
+        let config = priority_sort_config();
+        let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+        // pane_1 is focused and unmarked on the server.
+        state.set_snapshot(Box::new(marked_agent_snapshot("none")));
+        state.set_pane_surface(surface());
+
+        let press = |state: &mut ClientShellState| {
+            let mut outcome = ClientShellInput::default();
+            state.record_binding(
+                crate::input::KeybindMatch::Action(crate::input::KeybindAction::ToggleAgentMark),
+                &mut outcome,
+            );
+            let [ClientShellAction::Endpoint { request, .. }] = &outcome.actions[..] else {
+                panic!("the mark keybinding should use the endpoint API");
+            };
+            request.id.clone()
+        };
+        let first = press(&mut state);
+        let second = press(&mut state);
+
+        let refused = || {
+            Err(crate::client::shell::state::ClientShellEndpointError {
+                code: Some("pane_not_found".into()),
+                message: "pane not found".into(),
+            })
+        };
+        let first_result = if first_succeeds {
+            Ok(crate::api::schema::ResponseResult::Ok {})
+        } else {
+            refused()
+        };
+        state.handle_endpoint_result("boot-1", &first, first_result);
+        state.handle_endpoint_result("boot-1", &second, refused());
+
+        state.compose(106, 30).expect("agent sidebar frame");
+        let marked = state
+            .snapshot
+            .as_deref()
+            .and_then(|snapshot| {
+                snapshot
+                    .agents
+                    .iter()
+                    .find(|agent| agent.pane_id == "pane_1")
+            })
+            .is_some_and(|agent| agent.marked);
+        // The first press asked for `true` and the second for `false`, so the
+        // server holds `true` only when the first request was accepted.
+        assert_eq!(
+            marked, first_succeeds,
+            "the projection must settle on the server value \
+             (first request accepted: {first_succeeds})"
+        );
+    }
+}
+
 #[test]
 fn agent_sidebar_honors_priority_symbols_tokens_and_stable_hits() {
     let mut projected = snapshot();

@@ -427,8 +427,15 @@ impl ClientShellState {
         marked: bool,
         outcome: &mut ClientShellInput,
     ) {
-        let Some(previous) = self.agent_mark(&pane_id) else {
-            return;
+        // An overlapping request already wrote the projection, so its baseline
+        // is the last server-confirmed value; reading the projection back here
+        // would capture the optimistic one and restore it on failure.
+        let previous = match self.pending_mark_baseline(&pane_id) {
+            Some(previous) => previous,
+            None => match self.agent_mark(&pane_id) {
+                Some(previous) => previous,
+                None => return,
+            },
         };
         let sent = self.push_endpoint_method_with_kind(
             crate::api::schema::Method::PaneMarkSet(crate::api::schema::PaneMarkSetParams {
@@ -437,6 +444,7 @@ impl ClientShellState {
             }),
             PendingEndpointKind::MarkSet {
                 pane_id: pane_id.clone(),
+                requested: marked,
                 previous,
             },
             outcome,
@@ -482,6 +490,39 @@ impl ClientShellState {
                     if pending_pane_id == pane_id
             )
         })
+    }
+
+    /// The last server-confirmed mark for this pane as recorded by an
+    /// in-flight `pane.mark.set`. All requests for one pane share the same
+    /// baseline, so any of them answers.
+    fn pending_mark_baseline(&self, pane_id: &str) -> Option<bool> {
+        self.pending_requests
+            .values()
+            .find_map(|pending| match &pending.kind {
+                PendingEndpointKind::MarkSet {
+                    pane_id: pending_pane_id,
+                    previous,
+                    ..
+                } if pending_pane_id == pane_id => Some(*previous),
+                _ => None,
+            })
+    }
+
+    /// Move the shared baseline forward once the server confirms a value, so a
+    /// later failure restores what the server actually holds.
+    fn confirm_pending_mark_baseline(&mut self, pane_id: &str, confirmed: bool) {
+        for pending in self.pending_requests.values_mut() {
+            if let PendingEndpointKind::MarkSet {
+                pane_id: pending_pane_id,
+                previous,
+                ..
+            } = &mut pending.kind
+            {
+                if pending_pane_id == pane_id {
+                    *previous = confirmed;
+                }
+            }
+        }
     }
 
     pub(super) fn push_endpoint_method_with_kind(
@@ -669,9 +710,16 @@ impl ClientShellState {
         }
         match pending.kind {
             PendingEndpointKind::Generic => {}
-            PendingEndpointKind::MarkSet { pane_id, previous } => {
+            PendingEndpointKind::MarkSet {
+                pane_id,
+                requested,
+                previous,
+            } => {
                 return match result {
-                    Ok(_) => (false, Vec::new()),
+                    Ok(_) => {
+                        self.confirm_pending_mark_baseline(&pane_id, requested);
+                        (false, Vec::new())
+                    }
                     Err(_) if self.mark_request_outstanding(&pane_id) => (false, Vec::new()),
                     Err(_) => (self.write_agent_mark(&pane_id, previous), Vec::new()),
                 };
