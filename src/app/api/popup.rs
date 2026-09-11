@@ -185,6 +185,7 @@ mod tests {
     /// so none of them may corrupt state or strand it.
     #[tokio::test]
     async fn workspace_actions_stay_sound_while_a_popup_is_open() {
+        use super::super::test_support::{exiting_test_command, shutdown_test_runtimes};
         use crate::api::schema::{
             EmptyParams, PaneSplitParams, PaneZoomMode, PaneZoomParams, SplitDirection,
             TabCreateParams, TabTarget, WorkspaceCloseParams, WorkspaceCreateParams,
@@ -206,6 +207,10 @@ mod tests {
         };
 
         let (mut app, terminal_id) = app_with_popup_scrollback();
+        // The splits, tabs and workspaces below spawn for real. Without a
+        // command that exits immediately those panes outlive the test, which
+        // hangs the run on ConPTY.
+        app.state.default_shell = exiting_test_command().into();
         let mut request_id = 0;
         let mut invoke = |app: &mut App, method: Method| {
             request_id += 1;
@@ -305,6 +310,8 @@ mod tests {
         });
         let error: ErrorResponse = serde_json::from_str(&response).unwrap();
         assert_eq!(error.error.code, "popup_not_open");
+
+        shutdown_test_runtimes(&mut app);
     }
 
     #[tokio::test]
