@@ -1074,6 +1074,8 @@ pub struct ClientShellAgent {
     pub state_labels: Vec<(String, String)>,
     pub tokens: Vec<(String, String)>,
     pub focused: bool,
+    #[serde(default)]
+    pub marked: bool,
 }
 
 /// Origin-relative geometry for one pane in a rendered pane surface.

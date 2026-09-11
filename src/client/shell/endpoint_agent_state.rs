@@ -135,6 +135,7 @@ mod tests {
             state_labels: Vec::new(),
             tokens: Vec::new(),
             focused: true,
+            marked: false,
         }
     }
 

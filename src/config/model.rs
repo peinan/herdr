@@ -357,6 +357,8 @@ pub struct KeysConfig {
     pub workspace_picker: BindingConfig,
     /// Open the session navigator. Default: "prefix+g"
     pub goto: BindingConfig,
+    /// Mark or unmark the focused agent for follow-up. Default: "prefix+m"
+    pub toggle_mark: BindingConfig,
     /// Move workspace selection up in navigate mode. Default: "up".
     pub navigate_workspace_up: BindingConfig,
     /// Move workspace selection down in navigate mode. Default: "down".
@@ -490,6 +492,8 @@ pub(crate) struct KeysConfigOverlay {
     workspace_picker: Option<BindingConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     goto: Option<BindingConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    toggle_mark: Option<BindingConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     navigate_workspace_up: Option<BindingConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -627,6 +631,7 @@ impl<'de> Deserialize<'de> for KeysConfig {
         apply_field!(close_workspace);
         apply_field!(workspace_picker);
         apply_field!(goto);
+        apply_field!(toggle_mark);
         apply_field!(navigate_workspace_up);
         apply_field!(navigate_workspace_down);
         apply_field!(navigate_pane_left);
@@ -732,6 +737,7 @@ impl KeysConfig {
         copy_effective_action_field!(close_workspace, keybinds.close_workspace);
         copy_effective_action_field!(workspace_picker, keybinds.workspace_picker);
         copy_effective_action_field!(goto, keybinds.goto);
+        copy_effective_action_field!(toggle_mark, keybinds.toggle_mark);
         copy_effective_action_field!(navigate_workspace_up, keybinds.navigate.workspace_up);
         copy_effective_action_field!(navigate_workspace_down, keybinds.navigate.workspace_down);
         copy_effective_action_field!(navigate_pane_left, keybinds.navigate.pane_left);
@@ -1034,6 +1040,12 @@ pub struct UiConfig {
     _legacy_agent_panel_scope: Option<LegacyAgentPanelScopeConfig>,
     /// Agent status indicator style. Saved values are "dots" or "symbols". Default: "dots".
     pub status_indicators: StatusIndicatorStyle,
+    /// Glyph drawn in the agent row gutter when the agent is marked for
+    /// follow-up. Empty hides the marker. Default: "▌".
+    pub agent_mark_indicator: String,
+    /// Color for the marked-agent glyph. Accepts hex (#89b4fa), named colors
+    /// (cyan, blue), or RGB (rgb(137,180,250)). Default: "yellow".
+    pub agent_mark_color: String,
     /// Expanded sidebar row composition.
     pub sidebar: SidebarConfig,
     /// Accent color for highlights, borders, and navigation UI.
@@ -1267,6 +1279,7 @@ impl Default for KeysConfig {
             close_workspace: BindingConfig::one("prefix+shift+d"),
             workspace_picker: BindingConfig::one("prefix+w"),
             goto: BindingConfig::one("prefix+g"),
+            toggle_mark: BindingConfig::one("prefix+m"),
             navigate_workspace_up: BindingConfig::one("up"),
             navigate_workspace_down: BindingConfig::one("down"),
             navigate_pane_left: BindingConfig::one("h"),
@@ -1376,6 +1389,8 @@ impl Default for UiConfig {
             agent_panel_sort: AgentPanelSortConfig::Spaces,
             _legacy_agent_panel_scope: None,
             status_indicators: StatusIndicatorStyle::Dots,
+            agent_mark_indicator: "▌".into(),
+            agent_mark_color: "yellow".into(),
             sidebar: SidebarConfig::default(),
             accent: "cyan".into(),
             toast: ToastConfig::default(),
@@ -1589,6 +1604,33 @@ resume_agents_on_restore = false
 "#;
         let config: Config = toml::from_str(toml).unwrap();
         assert!(!config.session.resume_agents_on_restore);
+    }
+
+    #[test]
+    fn agent_mark_appearance_parses_and_defaults() {
+        let default_config = Config::default();
+        assert_eq!(default_config.ui.agent_mark_indicator, "\u{258c}");
+        assert_eq!(default_config.ui.agent_mark_color, "yellow");
+        assert_eq!(
+            default_config.keys.toggle_mark,
+            BindingConfig::one("prefix+m")
+        );
+
+        let toml = r##"
+[ui]
+agent_mark_indicator = "*"
+agent_mark_color = "#f38ba8"
+
+[keys]
+toggle_mark = "prefix+shift+m"
+"##;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert_eq!(config.ui.agent_mark_indicator, "*");
+        assert_eq!(config.ui.agent_mark_color, "#f38ba8");
+        assert_eq!(
+            config.keys.toggle_mark,
+            BindingConfig::one("prefix+shift+m")
+        );
     }
 
     #[test]

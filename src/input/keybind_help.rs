@@ -190,6 +190,7 @@ pub(crate) fn keybind_help_groups(
                     "cycle pane previous",
                 ),
                 entry(binding_label(&keybinds.last_pane), "last pane"),
+                entry(binding_label(&keybinds.toggle_mark), "mark agent"),
             ],
         ),
     ];

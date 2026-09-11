@@ -131,6 +131,15 @@ pub(super) fn snapshot(
         .map(|agent| {
             let pane_id = agent.pane_id;
             let focused = focused_pane_id.as_deref() == Some(pane_id.as_str());
+            let marked = app
+                .parse_pane_id(&pane_id)
+                .and_then(|(workspace_index, pane_id)| {
+                    app.state
+                        .workspaces
+                        .get(workspace_index)?
+                        .pane_state(pane_id)
+                })
+                .is_some_and(|pane| pane.marked);
             let mut state_labels = agent.state_labels.into_iter().collect::<Vec<_>>();
             state_labels.sort_by(|left, right| left.0.cmp(&right.0));
             let mut tokens = agent.tokens.into_iter().collect::<Vec<_>>();
@@ -150,6 +159,7 @@ pub(super) fn snapshot(
                 state_labels,
                 tokens,
                 focused,
+                marked,
             }
         })
         .collect();

@@ -194,6 +194,7 @@ herdr pane focus --direction left|right|up|down [--pane ID|--current]
 herdr pane resize --direction left|right|up|down [--amount FLOAT] [--pane ID|--current]
 herdr pane zoom [<pane_id>|--pane ID|--current] [--toggle|--on|--off]
 herdr pane rename <pane_id> <label>|--clear
+herdr pane mark [<pane_id>|--pane ID|--current] --on|--off
 herdr pane split [<pane_id>|--pane ID|--current] --direction right|down [--ratio FLOAT] [--cwd PATH] [--env KEY=VALUE] [--focus] [--no-focus]
 herdr pane swap --direction left|right|up|down [--pane ID|--current]
 herdr pane swap --source-pane ID --target-pane ID
@@ -300,6 +301,7 @@ herdr agent send-keys <target> <key> [key ...]
 herdr agent prompt <target> <text> [--wait] [--until STATUS]... [--timeout MS]
 herdr agent rename <target> <name>|--clear
 herdr agent focus <target>
+herdr agent mark <target> [--on|--off|--toggle]
 herdr agent wait <target> [--until STATUS]... [--timeout MS]
 herdr agent attach <target> [--takeover]
 herdr agent start <name> --kind KIND --pane ID [--timeout MS] [-- <agent-args...>]
@@ -318,6 +320,8 @@ herdr agent explain --file PATH --agent LABEL [--json|--verbose]
 `idle` 和 `done` 都表示可以接受输入。CLI/API 使用服务器的已查看状态：`done` 表示尚未标记为已查看的 idle；显式 `pane focus` / `agent focus` 会标记目标，读取不会。每个 TUI 客户端独立记录它已显示的完成状态，因此其 Done 标记可能与 CLI 或其他客户端不同。`blocked` 表示 Herdr 识别到审批或提问界面。`unknown` 表示智能体存在但无法可靠分类,不代表工作成功。
 
 `agent send-keys` 发送 `enter`、`up`、`esc`、`ctrl+c` 等逻辑按键。Herdr 会在写入任何字节前验证所有按键。`agent read` 读取解析出的终端流,`agent rename` 为已检测到的智能体命名。
+
+`agent mark` 和 `pane mark` 为智能体标记待办，便于在回复了另一个智能体之后再找回来。在 `agent_panel_sort = "priority"` 下，已标记的智能体排在侧边栏最前，`agent get` 和 `agent list` 会以 `marked` 报告该标记。标记只保存在运行中的服务器上，重启后不会恢复。
 
 `agent explain` 请求运行中的服务器对屏幕检测所用的同一份底部缓冲区检测快照进行分类,因此实时输出反映服务器生效的清单缓存。因为它使用 `agent.explain` socket 方法,升级 Herdr 后,请先重启或交接到更新后的服务器,再使用实时 explain。用 `--file PATH --agent LABEL` 可以改为在本地解释一份保存的样本。默认输出显示智能体、最终状态、清单来源和版本、匹配的规则及其区域证据,以及任何回退、跳过或警告原因。加 `--verbose` 可以看到可见证据标志、缓存的远程版本、本地覆盖的遮蔽情况、远程更新状态,以及带匹配器和区域证据的完整已评估规则列表。提交问题报告或写测试时加 `--json`。
 

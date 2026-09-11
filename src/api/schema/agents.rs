@@ -107,6 +107,7 @@ pub enum AgentViewBuiltinField {
     PaneId,
     Agent,
     Seen,
+    Marked,
     StateChangeSeq,
 }
 
@@ -150,6 +151,7 @@ pub enum AgentViewBuiltinSortField {
     Status,
     Agent,
     Seen,
+    Marked,
     StateChangeSeq,
 }
 
@@ -212,6 +214,8 @@ pub struct AgentInfo {
     pub tab_id: String,
     pub pane_id: String,
     pub focused: bool,
+    #[serde(default, skip_serializing_if = "super::is_false")]
+    pub marked: bool,
     #[serde(default, skip_serializing_if = "super::is_false")]
     pub launch_pending: bool,
     #[serde(default, skip_serializing_if = "super::is_false")]

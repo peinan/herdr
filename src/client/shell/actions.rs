@@ -48,6 +48,10 @@ impl ClientShellState {
                     outcome.repaint = true;
                     return;
                 }
+                if action == crate::input::KeybindAction::ToggleAgentMark {
+                    self.toggle_focused_agent_mark(outcome);
+                    return;
+                }
                 if action == crate::input::KeybindAction::Help {
                     self.overlay = Some(ClientShellOverlay::Help(ClientHelpOverlay {
                         query: String::new(),
@@ -390,6 +394,29 @@ impl ClientShellState {
             deadline: std::time::Instant::now() + std::time::Duration::from_secs(duration_seconds),
         });
         true
+    }
+
+    /// Flip the follow-up mark on the focused pane. Panes that are not hosting
+    /// an agent have nowhere to show a mark, so they are left alone.
+    pub(super) fn toggle_focused_agent_mark(&mut self, outcome: &mut ClientShellInput) {
+        let Some(snapshot) = self.snapshot.as_deref() else {
+            return;
+        };
+        let Some(focused_pane_id) = snapshot.focused_pane_id.as_deref() else {
+            return;
+        };
+        let Some(agent) = snapshot
+            .agents
+            .iter()
+            .find(|agent| agent.pane_id == focused_pane_id)
+        else {
+            return;
+        };
+        let params = crate::api::schema::PaneMarkSetParams {
+            pane_id: agent.pane_id.clone(),
+            marked: !agent.marked,
+        };
+        self.push_endpoint_method(crate::api::schema::Method::PaneMarkSet(params), outcome);
     }
 
     pub(super) fn push_endpoint_method_with_kind(

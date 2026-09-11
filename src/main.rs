@@ -151,6 +151,7 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # open_notification_target = "prefix+o"
 # workspace_picker = "prefix+w"
 # goto = "prefix+g"
+# toggle_mark = "prefix+m"
 # new_workspace = "prefix+shift+n"
 # new_worktree = "prefix+shift+g"
 # open_worktree = ""    # optional, unset by default
@@ -411,6 +412,12 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # Agent status indicators: "dots" preserves the compact color marks; "symbols" uses
 # distinct static glyphs for blocked, working, done, idle, and unknown states.
 # status_indicators = "dots"
+
+# Marked agents (prefix+m, the sidebar right-click menu, or `herdr agent mark`) draw
+# this glyph in the row gutter and sort to the top under agent_panel_sort = "priority".
+# The glyph must be one cell wide; set it to "" to hide the marker.
+# agent_mark_indicator = "▌"
+# agent_mark_color = "yellow"
 
 # Expanded agent rows. Built-ins are state_icon, state_text, machine, workspace, tab,
 # pane, agent, terminal_title, and terminal_title_stripped.

@@ -6,8 +6,8 @@ use crate::api::schema::{
     PaneDirection, PaneEdgesParams, PaneEdgesResult, PaneFocusDirectionParams,
     PaneFocusDirectionReason, PaneFocusDirectionResult, PaneInfo, PaneInputSetParams,
     PaneLayoutPane, PaneLayoutParams, PaneLayoutRect, PaneLayoutSnapshot, PaneLayoutSplit,
-    PaneListParams, PaneMoveDestination, PaneMoveParams, PaneMoveReason, PaneMoveResult,
-    PaneNeighborParams, PaneNeighborResult, PaneProcessInfo, PaneProcessInfoParams,
+    PaneListParams, PaneMarkSetParams, PaneMoveDestination, PaneMoveParams, PaneMoveReason,
+    PaneMoveResult, PaneNeighborParams, PaneNeighborResult, PaneProcessInfo, PaneProcessInfoParams,
     PaneProcessInfoProcess, PaneReadParams, PaneReadResult, PaneReleaseAgentParams,
     PaneRenameParams, PaneReportAgentParams, PaneReportAgentSessionParams,
     PaneReportMetadataParams, PaneResizeParams, PaneResizeReason, PaneResizeResult,
@@ -1460,6 +1460,22 @@ impl App {
         encode_success(id, ResponseResult::Ok {})
     }
 
+    pub(super) fn handle_pane_mark_set(&mut self, id: String, params: PaneMarkSetParams) -> String {
+        let Some((ws_idx, pane_id)) = self.parse_pane_id(&params.pane_id) else {
+            return pane_not_found(id, &params.pane_id);
+        };
+        let Some(pane) = self
+            .state
+            .workspaces
+            .get_mut(ws_idx)
+            .and_then(|workspace| workspace.pane_state_mut(pane_id))
+        else {
+            return pane_not_found(id, &params.pane_id);
+        };
+        pane.marked = params.marked;
+        encode_success(id, ResponseResult::Ok {})
+    }
+
     pub(super) fn handle_pane_rename(&mut self, id: String, params: PaneRenameParams) -> String {
         let Some((ws_idx, pane_id)) = self.parse_pane_id(&params.pane_id) else {
             return pane_not_found(id, &params.pane_id);
@@ -2222,6 +2238,51 @@ mod tests {
         let pane_id = app.state.workspaces[0].tabs[0].root_pane;
         let public_pane_id = app.public_pane_id(0, pane_id).unwrap();
         (app, public_pane_id)
+    }
+
+    #[test]
+    fn pane_mark_set_toggles_only_the_target_pane() {
+        let (mut app, public_pane_id) = app_with_test_workspace();
+        let target = app.state.workspaces[0].tabs[0].root_pane;
+        let other = app.state.workspaces[0].test_split(ratatui::layout::Direction::Horizontal);
+        assert!(!app.state.workspaces[0].pane_state(target).unwrap().marked);
+
+        let response = app.handle_pane_mark_set(
+            "req".into(),
+            PaneMarkSetParams {
+                pane_id: public_pane_id.clone(),
+                marked: true,
+            },
+        );
+        let response: SuccessResponse = serde_json::from_str(&response).unwrap();
+        assert!(matches!(response.result, ResponseResult::Ok {}));
+        assert!(app.state.workspaces[0].pane_state(target).unwrap().marked);
+        assert!(!app.state.workspaces[0].pane_state(other).unwrap().marked);
+
+        app.handle_pane_mark_set(
+            "req".into(),
+            PaneMarkSetParams {
+                pane_id: public_pane_id,
+                marked: false,
+            },
+        );
+        assert!(!app.state.workspaces[0].pane_state(target).unwrap().marked);
+    }
+
+    #[test]
+    fn pane_mark_set_rejects_an_unknown_pane() {
+        let (mut app, _public_pane_id) = app_with_test_workspace();
+
+        let response = app.handle_pane_mark_set(
+            "req".into(),
+            PaneMarkSetParams {
+                pane_id: "pane_404".into(),
+                marked: true,
+            },
+        );
+
+        let response: ErrorResponse = serde_json::from_str(&response).unwrap();
+        assert_eq!(response.error.code, "pane_not_found");
     }
 
     #[test]

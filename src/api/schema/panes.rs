@@ -49,6 +49,12 @@ pub struct PaneInputSetParams {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct PaneMarkSetParams {
+    pub pane_id: String,
+    pub marked: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PaneLinkActivateParams {
     pub pane_id: String,
     pub viewport_row: u16,
@@ -530,6 +536,8 @@ pub struct PaneInfo {
     pub workspace_id: String,
     pub tab_id: String,
     pub focused: bool,
+    #[serde(default, skip_serializing_if = "super::is_false")]
+    pub marked: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

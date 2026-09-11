@@ -362,6 +362,7 @@ fn pane_cycle_last_and_agent_actions_resolve_to_stable_pane_ids() {
             state_labels: Vec::new(),
             tokens: Vec::new(),
             focused: true,
+            marked: false,
         },
         ClientShellAgent {
             pane_id: "pane_2".into(),
@@ -378,6 +379,7 @@ fn pane_cycle_last_and_agent_actions_resolve_to_stable_pane_ids() {
             state_labels: Vec::new(),
             tokens: Vec::new(),
             focused: false,
+            marked: false,
         },
     ];
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
@@ -429,6 +431,164 @@ fn pane_cycle_last_and_agent_actions_resolve_to_stable_pane_ids() {
     ));
 }
 
+/// Two idle agents, so only the mark can decide the order.
+fn marked_agent_snapshot(marked_pane: &str) -> crate::protocol::ClientShellSnapshot {
+    let mut projected = snapshot();
+    let mut second_pane = projected.panes[0].clone();
+    second_pane.pane_id = "pane_2".into();
+    second_pane.focused = false;
+    projected.panes.push(second_pane);
+    projected.agents = ["pane_1", "pane_2"]
+        .into_iter()
+        .enumerate()
+        .map(|(index, pane_id)| ClientShellAgent {
+            pane_id: pane_id.into(),
+            workspace_id: "ws_1".into(),
+            tab_id: "tab_1".into(),
+            name: Some(format!("agent {}", index + 1)),
+            display_agent: None,
+            agent: None,
+            title: None,
+            terminal_title: None,
+            terminal_title_stripped: None,
+            agent_status: AgentStatus::Idle,
+            state_change_seq: index as u64 + 1,
+            state_labels: Vec::new(),
+            tokens: Vec::new(),
+            focused: index == 0,
+            marked: pane_id == marked_pane,
+        })
+        .collect();
+    projected
+}
+
+fn priority_sort_config() -> Config {
+    let mut config = Config::default();
+    config.ui.agent_panel_sort = crate::config::AgentPanelSortConfig::Priority;
+    config.ui.sidebar.agents.rows = vec![vec![crate::config::AgentSidebarToken::Agent]];
+    config
+}
+
+#[test]
+fn priority_sort_lifts_the_marked_agent_and_draws_its_gutter() {
+    let config = priority_sort_config();
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    // pane_2 sorts last by state_change_seq until it is marked.
+    state.set_snapshot(Box::new(marked_agent_snapshot("pane_2")));
+    state.set_pane_surface(surface());
+
+    let frame = state.compose(106, 30).expect("agent sidebar frame");
+    assert_eq!(
+        state
+            .hits
+            .agents
+            .iter()
+            .map(|(_, pane_id)| pane_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["pane_2", "pane_1"]
+    );
+
+    let marked_row = state.hits.agents[0].0;
+    let gutter = frame.cells[marked_row.y as usize * frame.width as usize + marked_row.x as usize]
+        .symbol
+        .as_str();
+    assert_eq!(gutter, "\u{258c}", "marked rows lead with the mark glyph");
+
+    let plain_row = state.hits.agents[1].0;
+    let plain_gutter = frame.cells
+        [plain_row.y as usize * frame.width as usize + plain_row.x as usize]
+        .symbol
+        .as_str();
+    assert_eq!(plain_gutter, " ", "unmarked rows keep the plain indent");
+}
+
+#[test]
+fn an_empty_mark_indicator_keeps_the_row_gutter_blank() {
+    let mut config = priority_sort_config();
+    config.ui.agent_mark_indicator = String::new();
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    state.set_snapshot(Box::new(marked_agent_snapshot("pane_2")));
+    state.set_pane_surface(surface());
+
+    let frame = state.compose(106, 30).expect("agent sidebar frame");
+    let marked_row = state.hits.agents[0].0;
+    assert_eq!(
+        state.hits.agents[0].1, "pane_2",
+        "the mark still drives the order"
+    );
+    assert_eq!(
+        frame.cells[marked_row.y as usize * frame.width as usize + marked_row.x as usize]
+            .symbol
+            .as_str(),
+        " "
+    );
+}
+
+#[test]
+fn right_clicking_an_agent_row_toggles_its_mark() {
+    let config = priority_sort_config();
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    state.set_snapshot(Box::new(marked_agent_snapshot("pane_2")));
+    state.set_pane_surface(surface());
+    state.compose(106, 30).expect("agent sidebar frame");
+
+    // hits.agents[0] is the marked pane_2 row, so the menu must offer to clear.
+    let marked_row = state.hits.agents[0].0;
+    let open = state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Right),
+        column: marked_row.x,
+        row: marked_row.y,
+        modifiers: KeyModifiers::empty(),
+    })]);
+    assert!(open.repaint);
+    let frame = state.compose(106, 30).expect("context menu frame");
+    let text = frame
+        .cells
+        .chunks(frame.width as usize)
+        .map(|row| {
+            row.iter()
+                .map(|cell| cell.symbol.as_str())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("Clear mark"), "frame: {text}");
+
+    let mut activate = ClientShellInput::default();
+    state.activate_context_menu_item(0, &mut activate);
+    let [ClientShellAction::Endpoint { request, .. }] = &activate.actions[..] else {
+        panic!("the mark action should go through the endpoint API");
+    };
+    assert!(matches!(
+        &request.method,
+        crate::api::schema::Method::PaneMarkSet(params)
+            if params.pane_id == "pane_2" && !params.marked
+    ));
+}
+
+#[test]
+fn the_mark_keybinding_flips_the_focused_agent() {
+    let config = priority_sort_config();
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    // pane_1 is the focused agent and starts unmarked.
+    state.set_snapshot(Box::new(marked_agent_snapshot("pane_2")));
+    state.set_pane_surface(surface());
+
+    let mut outcome = ClientShellInput::default();
+    state.record_binding(
+        crate::input::KeybindMatch::Action(crate::input::KeybindAction::ToggleAgentMark),
+        &mut outcome,
+    );
+    let [ClientShellAction::Endpoint { request, .. }] = &outcome.actions[..] else {
+        panic!("the mark keybinding should use the endpoint API");
+    };
+    assert!(matches!(
+        &request.method,
+        crate::api::schema::Method::PaneMarkSet(params)
+            if params.pane_id == "pane_1" && params.marked
+    ));
+}
+
 #[test]
 fn agent_sidebar_honors_priority_symbols_tokens_and_stable_hits() {
     let mut projected = snapshot();
@@ -452,6 +612,7 @@ fn agent_sidebar_honors_priority_symbols_tokens_and_stable_hits() {
             state_labels: Vec::new(),
             tokens: vec![("summary".into(), "review complete".into())],
             focused: true,
+            marked: false,
         },
         ClientShellAgent {
             pane_id: "pane_2".into(),
@@ -468,6 +629,7 @@ fn agent_sidebar_honors_priority_symbols_tokens_and_stable_hits() {
             state_labels: vec![("blocked".into(), "needs input".into())],
             tokens: vec![("summary".into(), "waiting for Can".into())],
             focused: false,
+            marked: false,
         },
     ];
     let mut config = Config::default();
@@ -597,6 +759,7 @@ fn active_agent_view_controls_sidebar_order_and_focus_indices() {
             state_labels: Vec::new(),
             tokens: Vec::new(),
             focused: true,
+            marked: false,
         },
         ClientShellAgent {
             pane_id: "pane_2".into(),
@@ -613,6 +776,7 @@ fn active_agent_view_controls_sidebar_order_and_focus_indices() {
             state_labels: Vec::new(),
             tokens: Vec::new(),
             focused: false,
+            marked: false,
         },
         ClientShellAgent {
             pane_id: "pane_3".into(),
@@ -629,6 +793,7 @@ fn active_agent_view_controls_sidebar_order_and_focus_indices() {
             state_labels: Vec::new(),
             tokens: Vec::new(),
             focused: false,
+            marked: false,
         },
     ];
     projected.agent_view_label = Some("review".into());
@@ -703,6 +868,7 @@ fn agent_sort_toggle_is_client_local_and_persists_per_endpoint() {
         state_labels: Vec::new(),
         tokens: Vec::new(),
         focused: true,
+        marked: false,
     });
     let config =
         ClientShellConfig::from_config(&Config::default()).with_preferences_path(path.clone());
@@ -1161,6 +1327,7 @@ fn semantic_notifications_use_client_policy_and_stable_navigation_targets() {
         state_labels: Vec::new(),
         tokens: Vec::new(),
         focused: false,
+        marked: false,
     });
     state.set_snapshot(Box::new(projected));
     state.set_pane_surface(surface());

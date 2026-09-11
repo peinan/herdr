@@ -15,27 +15,41 @@ pub(super) fn render_collapsed(
         if row.agent.focused {
             buffer.set_style(rect, Style::default().bg(config.palette.active_row_bg));
         }
-        let initial = row.machine_label.chars().next().unwrap_or('?');
+        let status_style = Style::default()
+            .fg(if row.stale {
+                config.palette.overlay0
+            } else {
+                status_color(row.agent.status, &config.palette)
+            })
+            .add_modifier(if row.stale {
+                Modifier::DIM
+            } else {
+                Modifier::empty()
+            });
+        // The collapsed strip is two cells wide, so a marked agent spends the
+        // machine-initial cell on the marker and keeps the status icon.
+        let marker = super::agent_sidebar::mark_gutter(config, row.agent.marked);
+        let lead = marker
+            .map(str::to_string)
+            .unwrap_or_else(|| row.machine_label.chars().next().unwrap_or('?').to_string());
         put_text(
             buffer,
             rect.x,
             rect.y,
             rect.width,
-            &format!(
-                "{initial}{}",
-                status_icon(row.agent.status, config.status_indicators)
-            ),
-            Style::default()
-                .fg(if row.stale {
-                    config.palette.overlay0
-                } else {
-                    status_color(row.agent.status, &config.palette)
-                })
-                .add_modifier(if row.stale {
-                    Modifier::DIM
-                } else {
-                    Modifier::empty()
-                }),
+            &lead,
+            match marker {
+                Some(_) => Style::default().fg(config.agent_mark_color),
+                None => status_style,
+            },
+        );
+        put_text(
+            buffer,
+            rect.x + 1,
+            rect.y,
+            rect.width.saturating_sub(1),
+            status_icon(row.agent.status, config.status_indicators),
+            status_style,
         );
         hits.endpoint_agents
             .push((rect, row.endpoint_id, row.agent.pane_id));

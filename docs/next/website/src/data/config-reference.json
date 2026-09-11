@@ -548,6 +548,12 @@
           "description": "Open the session navigator."
         },
         {
+          "key": "keys.toggle_mark",
+          "type": "keybinding",
+          "default": "\"prefix+m\"",
+          "description": "Mark or unmark the focused agent for follow-up."
+        },
+        {
           "key": "keys.navigate_workspace_up",
           "type": "keybinding",
           "default": "\"up\"",
@@ -1207,6 +1213,18 @@
             "dots",
             "symbols"
           ]
+        },
+        {
+          "key": "ui.agent_mark_indicator",
+          "type": "string",
+          "default": "\"▌\"",
+          "description": "One-cell glyph drawn in the gutter of a marked agent row. Empty hides the marker."
+        },
+        {
+          "key": "ui.agent_mark_color",
+          "type": "string",
+          "default": "\"yellow\"",
+          "description": "Color for the marked-agent glyph. Accepts hex (#89b4fa), named colors, or rgb(r,g,b)."
         },
         {
           "key": "ui.sidebar.agents.row_gap",

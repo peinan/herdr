@@ -98,6 +98,8 @@ pub(crate) struct ClientShellConfig {
     pub(super) agents: crate::config::AgentsSidebarConfig,
     pub(super) agent_panel_sort: crate::config::AgentPanelSortConfig,
     pub(super) status_indicators: crate::config::StatusIndicatorStyle,
+    pub(super) agent_mark_indicator: String,
+    pub(super) agent_mark_color: ratatui::style::Color,
     pub(super) sound_enabled: bool,
     pub(super) toast_delivery: crate::config::ToastDelivery,
     pub(super) toast_delay_seconds: u64,
@@ -601,6 +603,7 @@ pub(super) enum ClientContextMenuAction {
     Zoom,
     ToggleRightClickPassthrough,
     ClosePane,
+    ToggleMark,
 }
 
 #[derive(Debug)]
@@ -622,6 +625,10 @@ pub(super) enum ClientContextMenuTarget {
         source_pane_id: Option<String>,
         has_manual_label: bool,
         right_click_passthrough: bool,
+    },
+    Agent {
+        pane_id: String,
+        marked: bool,
     },
 }
 

@@ -37,6 +37,7 @@ fn agent(
         state_labels: Vec::new(),
         tokens: Vec::new(),
         focused: true,
+        marked: false,
     }
 }
 
@@ -622,6 +623,63 @@ fn aggregate_priority_uses_client_observed_recency_across_machines() {
             target: Some(ClientEndpointFocusTarget::Pane(pane_id)),
         }] if activated == &endpoint_id && pane_id == "pane_1"
     ));
+}
+
+#[test]
+fn aggregate_priority_lifts_a_marked_agent_above_a_busier_machine() {
+    use crate::api::schema::AgentStatus;
+    use crate::config::AgentSidebarToken;
+
+    let mut config = Config::default();
+    config.ui.agent_panel_sort = crate::config::AgentPanelSortConfig::Priority;
+    config.ui.sidebar.agents.rows =
+        vec![vec![AgentSidebarToken::Machine, AgentSidebarToken::Agent]];
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    let profile = remote_profile();
+    let endpoint_id = ClientEndpointId::Ssh(profile.id.clone());
+    state.set_endpoint_catalog(&[profile]);
+    state.set_endpoint_status(&endpoint_id, ClientEndpointStatus::Online);
+
+    let mut local = snapshot();
+    local.agents = vec![agent("local agent", AgentStatus::Idle, 1)];
+    state.set_snapshot(Box::new(local));
+    state.set_pane_surface(surface());
+    let mut remote = snapshot();
+    remote.boot_id = "remote-boot".into();
+    // Blocked outranks idle, so the remote agent leads until the local one is marked.
+    remote.agents = vec![agent("remote agent", AgentStatus::Blocked, 1)];
+    state.set_endpoint_snapshot(&endpoint_id, Box::new(remote));
+
+    let frame_text = |state: &mut ClientShellState| {
+        let frame = state.compose(100, 28).expect("combined endpoint frame");
+        frame
+            .cells
+            .chunks(frame.width as usize)
+            .map(|row| {
+                row.iter()
+                    .map(|cell| cell.symbol.as_str())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let text = frame_text(&mut state);
+    assert!(
+        text.find("Build · remote agent").expect("remote agent")
+            < text.find("Local · local agent").expect("local agent")
+    );
+
+    let mut marked_local = snapshot();
+    let mut marked_agent = agent("local agent", AgentStatus::Idle, 1);
+    marked_agent.marked = true;
+    marked_local.agents = vec![marked_agent];
+    state.set_snapshot(Box::new(marked_local));
+    let text = frame_text(&mut state);
+    assert!(
+        text.find("Local · local agent").expect("local agent")
+            < text.find("Build · remote agent").expect("remote agent"),
+        "a marked agent leads the aggregate list: {text}"
+    );
 }
 
 #[test]
