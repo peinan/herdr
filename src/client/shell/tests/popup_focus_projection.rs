@@ -1473,3 +1473,48 @@ fn the_popup_copy_search_prompt_accepts_paste() {
         "the popup copy-search prompt must accept the paste shortcut"
     );
 }
+
+/// The mobile workspace switcher takes the whole screen without opening an
+/// overlay, and composition drops the popup hit for it. The popup must not go
+/// on swallowing clicks that belong to it.
+#[test]
+fn the_mobile_switcher_over_a_popup_receives_clicks() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.apply_popup_surface_metrics(&popup_surface_metrics(1, 0, 0, 3));
+    state.set_pane_surface(surface_with_popup());
+
+    // A narrow viewport puts the shell in its mobile layout.
+    state.mode = ClientShellMode::Navigate;
+    state.compose(40, 20).expect("mobile switcher frame");
+    assert!(
+        state.hits.popup.is_none(),
+        "the switcher owns the screen, so the popup hit is dropped"
+    );
+    assert!(state.overlay.is_none(), "the switcher opens no overlay");
+    let target = state
+        .hits
+        .mobile_targets
+        .first()
+        .map(|(rect, _)| *rect)
+        .expect("a switcher target");
+
+    let clicked =
+        state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: target.x + 1,
+            row: target.y,
+            modifiers: KeyModifiers::empty(),
+        })]);
+    assert!(
+        clicked
+            .requests
+            .iter()
+            .all(|request| !matches!(request, ClientMessage::ClientShellPopupInput { .. })),
+        "the click belongs to the switcher, not the popup"
+    );
+    assert!(
+        clicked.repaint || !clicked.actions.is_empty(),
+        "the switcher must react to the click"
+    );
+}

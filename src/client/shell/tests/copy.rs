@@ -2280,3 +2280,46 @@ fn a_new_popup_drag_disarms_the_previous_highlight_deadline() {
         "the release must still request the copy"
     );
 }
+
+/// Copy mode owns the cursor while it is active. A scroll it requested leaves
+/// the frame incoherent until the matching surface lands, and during that gap
+/// the popup process's own cursor must not show at an unrelated position.
+#[test]
+fn a_pending_popup_copy_scroll_hides_the_terminal_cursor() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.apply_popup_surface_metrics(&popup_surface_metrics(1, 4, 7, 3));
+    state.set_pane_surface(surface_with_popup());
+    state.compose(106, 20).expect("popup frame");
+
+    let mut outcome = ClientShellInput::default();
+    assert!(state.enter_copy_mode(&mut outcome));
+    let coherent = state.compose(106, 20).expect("copy mode frame");
+    assert!(
+        coherent.cursor.is_none(),
+        "copy mode replaces the terminal cursor with its own block"
+    );
+
+    // A page-up moves copy mode's own offset and requests the matching scroll.
+    // Until that surface lands the committed metrics still describe the old
+    // viewport, so the frame is incoherent.
+    state
+        .copy_mode
+        .as_mut()
+        .expect("popup copy mode")
+        .offset_from_bottom = 1;
+    assert!(
+        state
+            .hits
+            .popup
+            .as_ref()
+            .and_then(|hit| hit.scroll)
+            .is_some_and(|scroll| scroll.offset_from_bottom != 1),
+        "the committed metrics must still describe the old viewport"
+    );
+    let pending = state.compose(106, 20).expect("pending frame");
+    assert!(
+        pending.cursor.is_none(),
+        "a pending copy scroll must not reveal the popup process's cursor"
+    );
+}

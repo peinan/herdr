@@ -609,14 +609,18 @@ impl ClientShellState {
                     self.render_hit_selection_highlights(&mut composed, &popup_hit);
                     frame.replace_from_ratatui_buffer_preserving_effects(&composed, cursor);
                 }
-                if self.mode == ClientShellMode::Copy
-                    && self.copy_mode.as_ref().is_some_and(|copy_mode| {
+                if self.mode == ClientShellMode::Copy {
+                    // The blit restored the popup process's own cursor. Copy mode
+                    // owns the cursor for as long as it is active, including while
+                    // a scroll it requested is still in flight — otherwise the
+                    // live terminal cursor shows at an unrelated position.
+                    frame.cursor = None;
+                    if self.copy_mode.as_ref().is_some_and(|copy_mode| {
                         copy_mode.pane_id == popup_hit.pane_id
                             && client_copy_surface_coherent(Some(copy_mode), &popup_hit)
-                    })
-                {
-                    frame.cursor = None;
-                    self.render_hit_copy_cursor(&mut frame, &popup_hit)?;
+                    }) {
+                        self.render_hit_copy_cursor(&mut frame, &popup_hit)?;
+                    }
                 }
                 self.hits.popup = Some(popup_hit);
             }

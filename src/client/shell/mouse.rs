@@ -977,11 +977,12 @@ impl ClientShellState {
             }
             return;
         }
-        // A modal opened over the popup is handled further down, so only swallow
-        // the event when the popup itself is the frontmost surface.
-        if self.popup_terminal_id.is_some() && self.overlay.is_none() {
-            return;
-        }
+        // No second popup guard here. The branch above already returns for every
+        // event once the popup is the composed, frontmost surface, so this point
+        // is only reached when something else owns the screen: a modal, the
+        // mobile switcher, or an offline endpoint view. Composition drops the
+        // popup hit for those, and they have no overlay to be recognised by, so
+        // swallowing here left them unable to receive a click at all.
         if !self.replaying_url_click
             && self.overlay.is_none()
             && self.mode == ClientShellMode::Terminal
