@@ -2207,3 +2207,76 @@ fn two_staged_popup_reports_each_find_their_frame() {
         Some(4)
     );
 }
+
+/// A popup word selection arms a deadline that clears its highlight. Starting a
+/// new drag before it expires has to disarm it, or the tick deletes the
+/// selection while the button is still down and the release copies nothing.
+#[test]
+fn a_new_popup_drag_disarms_the_previous_highlight_deadline() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.apply_popup_surface_metrics(&popup_surface_metrics(1, 0, 0, 3));
+    state.set_pane_surface(popup_surface_with_lines(1, ["keep-me", "noise-a", ""]));
+    state.compose(106, 20).expect("popup frame");
+    let popup = state.hits.popup.as_ref().expect("popup hit").clone();
+
+    // A word selection leaves the highlight armed to clear shortly.
+    let mut request = ClientShellInput::default();
+    state.request_word_selection(&popup, 0, 1, &mut request);
+    let [ClientShellAction::Endpoint { request, .. }] = &request.actions[..] else {
+        panic!("a popup word selection should reach the endpoint");
+    };
+    let request_id = request.id.clone();
+    state.handle_endpoint_result(
+        "boot-1",
+        &request_id,
+        Ok(crate::api::schema::ResponseResult::PopupSelection {
+            terminal_id: "terminal-popup".into(),
+            text: "keep-me".into(),
+        }),
+    );
+    let armed = state
+        .selection_highlight_clear_deadline
+        .expect("the word selection should arm the highlight deadline");
+
+    // The user starts a fresh drag before that deadline.
+    state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: popup.inner_rect.x,
+        row: popup.inner_rect.y,
+        modifiers: KeyModifiers::empty(),
+    })]);
+    state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+        kind: MouseEventKind::Drag(MouseButton::Left),
+        column: popup.inner_rect.x + 4,
+        row: popup.inner_rect.y,
+        modifiers: KeyModifiers::empty(),
+    })]);
+    assert!(
+        state.selection_highlight_clear_deadline.is_none(),
+        "starting a drag must disarm the previous highlight deadline"
+    );
+
+    // The tick that would have fired must leave the live drag alone.
+    state.tick_copy_feedback(armed);
+    assert!(
+        state.selection.is_some(),
+        "the tick must not delete the selection under the pressed button"
+    );
+
+    let release =
+        state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: popup.inner_rect.x + 4,
+            row: popup.inner_rect.y,
+            modifiers: KeyModifiers::empty(),
+        })]);
+    assert!(
+        release.actions.iter().any(|action| matches!(
+            action,
+            ClientShellAction::Endpoint { request, .. }
+                if matches!(&request.method, crate::api::schema::Method::PopupSelectionRead(_))
+        )),
+        "the release must still request the copy"
+    );
+}
