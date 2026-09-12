@@ -124,6 +124,25 @@ pub(crate) struct ClientWriter {
 }
 
 impl ClientWriter {
+    /// Sends a render frame together with a control message that must reach the
+    /// client first. See `ClientWriterQueue::try_send_render_with_control`.
+    pub(crate) fn try_send_render_with_control(
+        &self,
+        control: Vec<u8>,
+        render: Vec<u8>,
+    ) -> Result<(), TrySendError<Vec<u8>>> {
+        #[cfg(test)]
+        if let Some(sender) = &self.render.test_render {
+            // Tests bypass the queue for frames; the control still rides it.
+            sender.try_send(render)?;
+            let _ = self.control.send(control);
+            return Ok(());
+        }
+        self.render
+            .queue
+            .try_send_render_with_control(control, render)
+    }
+
     /// Drops render-lane work that has not yet been claimed by the writer.
     pub(crate) fn discard_pending_render(&self) {
         self.render.queue.discard_pending_render();
@@ -305,6 +324,32 @@ impl ClientWriterQueue {
             return Err(TrySendError::Full(data));
         }
         state.render = Some(data);
+        self.ready.notify_one();
+        Ok(())
+    }
+
+    /// Enqueues a control message and a render frame under one lock.
+    ///
+    /// Sending them separately leaves a window: `try_send_render` wakes the
+    /// writer, which can claim the frame and write it before the control is
+    /// queued. The control lane's priority only orders messages already in the
+    /// queue, so the client would install the surface without the report it is
+    /// paired with. Here either both are queued or neither, the control lands
+    /// ahead of the frame, and the render slot gives them shared backpressure.
+    fn try_send_render_with_control(
+        &self,
+        control: Vec<u8>,
+        render: Vec<u8>,
+    ) -> Result<(), TrySendError<Vec<u8>>> {
+        let mut state = self.lock_state();
+        if !state.writer_alive {
+            return Err(TrySendError::Disconnected(render));
+        }
+        if state.render.is_some() {
+            return Err(TrySendError::Full(render));
+        }
+        state.control.push_back(control);
+        state.render = Some(render);
         self.ready.notify_one();
         Ok(())
     }

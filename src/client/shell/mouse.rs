@@ -345,13 +345,12 @@ impl ClientShellState {
         {
             return false;
         }
-        let Some(hit) = self.selection.as_ref().and_then(|selection| {
-            self.hits
-                .panes
-                .iter()
-                .find(|hit| hit.pane_id == selection.pane_id)
-                .cloned()
-        }) else {
+        let Some(hit) = self
+            .selection
+            .as_ref()
+            .map(|selection| selection.pane_id.clone())
+            .and_then(|pane_id| self.target_hit(&pane_id))
+        else {
             return false;
         };
         let Some(metrics) = self.selection_scroll_metrics(&hit) else {
@@ -936,6 +935,10 @@ impl ClientShellState {
                     MouseEventKind::Moved if hit.mouse_reporting => {
                         self.push_pane_mouse_event(&hit, mouse, mouse.modifiers, outcome);
                     }
+                    // A wheel during a drag has to move the selection's end with
+                    // the viewport, or releasing copies the pre-scroll range.
+                    MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+                        if selectable && self.scroll_in_progress_selection(mouse, outcome) => {}
                     MouseEventKind::ScrollUp
                     | MouseEventKind::ScrollDown
                     | MouseEventKind::ScrollLeft

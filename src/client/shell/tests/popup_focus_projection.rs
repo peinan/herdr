@@ -1411,3 +1411,65 @@ fn a_modal_over_the_popup_receives_mouse_events() {
         Some(ClientShellOverlay::Help(ClientHelpOverlay { scroll, .. })) if scroll > 0
     ));
 }
+
+/// An image transfer is input too, so it follows the same base context as keys
+/// and text: a shell sub-mode or a modal owns it before the popup does.
+#[test]
+fn image_paste_obeys_the_popup_input_context() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.apply_popup_surface_metrics(&popup_surface_metrics(1, 0, 0, 3));
+    state.set_pane_surface(surface_with_popup());
+    state.compose(106, 20).expect("popup frame");
+
+    assert_eq!(
+        state.clipboard_image_target(),
+        Some(crate::protocol::ClientClipboardImageTarget::Popup(
+            "terminal-popup".into()
+        ))
+    );
+
+    // A shell sub-mode is interpreting input; the image must not slip past it.
+    state.mode = ClientShellMode::Prefix;
+    assert_eq!(state.clipboard_image_target(), None);
+    state.mode = ClientShellMode::Copy;
+    assert_eq!(state.clipboard_image_target(), None);
+    state.mode = ClientShellMode::Terminal;
+
+    state.overlay = Some(ClientShellOverlay::Rename(ClientRenameOverlay {
+        title: "Rename workspace",
+        input: String::new(),
+        replace_on_type: false,
+        target: ClientRenameTarget::NewTab {
+            workspace_id: "w1".into(),
+            default_name: String::new(),
+        },
+    }));
+    assert_eq!(state.clipboard_image_target(), None);
+}
+
+/// The popup's copy-search prompt is a shell text field even though no overlay
+/// is open, so the paste shortcut has to reach it.
+#[test]
+fn the_popup_copy_search_prompt_accepts_paste() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.apply_popup_surface_metrics(&popup_surface_metrics(1, 0, 0, 3));
+    state.set_pane_surface(surface_with_popup());
+    state.compose(106, 20).expect("popup frame");
+
+    let mut outcome = ClientShellInput::default();
+    assert!(state.enter_copy_mode(&mut outcome));
+    // Without a prompt open the popup still owns the shortcut.
+    assert!(!state.modal_paste_target_active());
+
+    state.handle_input_bytes(b"/");
+    assert!(state
+        .copy_mode
+        .as_ref()
+        .is_some_and(|copy_mode| copy_mode.search_prompt.is_some()));
+    assert!(
+        state.modal_paste_target_active(),
+        "the popup copy-search prompt must accept the paste shortcut"
+    );
+}

@@ -663,12 +663,10 @@ impl HeadlessServer {
                     continue;
                 }
             };
-            // Held until the frame is accepted. Sending it for a frame the render
-            // lane then rejects would leave the client staging metrics whose
-            // surface never arrives, and the next report would overtake the older
-            // surface still queued ahead of it. The control lane drains ahead of
-            // the render lane, so queueing it after the frame still puts it in
-            // front on the wire.
+            // Sent with the frame under one lock, never before or after it: the
+            // writer can claim a frame the moment it is queued, so a separate
+            // control send races it in one direction and orphans itself in the
+            // other.
             let popup_metrics_control = match &prepared {
                 crate::server::render_stream::PreparedRender::Semantic {
                     popup_metrics: Some(metrics),
@@ -679,14 +677,12 @@ impl HeadlessServer {
             let shell_graphics_pending = next_shell_graphics_delivery
                 .as_ref()
                 .is_some_and(crate::kitty_graphics::surface::DeliveryCache::has_pending);
-            match writer.render.try_send(serialized) {
+            let sent = match popup_metrics_control {
+                Some(control) => writer.try_send_render_with_control(control, serialized),
+                None => writer.render.try_send(serialized),
+            };
+            match sent {
                 Ok(()) => {
-                    if let Some(control) = popup_metrics_control {
-                        if writer.control.send(control).is_err() {
-                            broken_clients.push(client_id);
-                            continue;
-                        }
-                    }
                     if let Some(delivery) = next_shell_graphics_delivery {
                         client.shell_graphics_delivery = delivery;
                     }

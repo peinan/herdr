@@ -1965,3 +1965,106 @@ fn typing_into_the_popup_ends_a_retained_selection() {
             if terminal_id == "terminal-popup"
     ));
 }
+
+/// A wheel during a popup drag has to carry the selection's end along with the
+/// viewport; otherwise releasing copies the range from before the scroll.
+#[test]
+fn a_wheel_during_a_popup_drag_moves_the_selection_end() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.apply_popup_surface_metrics(&popup_surface_metrics(1, 4, 7, 3));
+    state.set_pane_surface(surface_with_selectable_popup());
+    state.compose(106, 20).expect("popup frame");
+    let popup = state.hits.popup.as_ref().expect("popup hit").clone();
+
+    state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: popup.inner_rect.x,
+        row: popup.inner_rect.y,
+        modifiers: KeyModifiers::empty(),
+    })]);
+    state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+        kind: MouseEventKind::Drag(MouseButton::Left),
+        column: popup.inner_rect.x + 2,
+        row: popup.inner_rect.y + 1,
+        modifiers: KeyModifiers::empty(),
+    })]);
+    let before = state
+        .selection
+        .as_ref()
+        .map(|selection| selection.ordered_cells())
+        .expect("the drag selection");
+
+    let scrolled =
+        state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: popup.inner_rect.x + 2,
+            row: popup.inner_rect.y + 1,
+            modifiers: KeyModifiers::empty(),
+        })]);
+    assert!(
+        scrolled.actions.iter().any(|action| matches!(
+            action,
+            ClientShellAction::Endpoint { request, .. }
+                if matches!(&request.method, crate::api::schema::Method::PopupScroll(_))
+        )),
+        "the wheel must scroll the popup terminal, got {:?}",
+        scrolled.actions.len()
+    );
+    assert!(
+        scrolled
+            .requests
+            .iter()
+            .all(|request| !matches!(request, ClientMessage::ClientShellPopupInput { .. })),
+        "a wheel during a drag drives the selection, not the popup process"
+    );
+    let after = state
+        .selection
+        .as_ref()
+        .map(|selection| selection.ordered_cells())
+        .expect("the selection survives the scroll");
+    assert_ne!(
+        before, after,
+        "the selection end must follow the scrolled viewport"
+    );
+}
+
+/// A popup that resizes under an in-progress mouse selection invalidates it:
+/// the anchored cells no longer mean what they did.
+#[test]
+fn a_popup_resize_invalidates_a_mouse_selection() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.apply_popup_surface_metrics(&popup_surface_metrics(1, 0, 0, 3));
+    state.set_pane_surface(surface_with_selectable_popup());
+    state.compose(106, 20).expect("popup frame");
+    let popup = state.hits.popup.as_ref().expect("popup hit").clone();
+
+    state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: popup.inner_rect.x,
+        row: popup.inner_rect.y,
+        modifiers: KeyModifiers::empty(),
+    })]);
+    state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+        kind: MouseEventKind::Drag(MouseButton::Left),
+        column: popup.inner_rect.x + 3,
+        row: popup.inner_rect.y,
+        modifiers: KeyModifiers::empty(),
+    })]);
+    assert!(state.selection.is_some());
+
+    // The popup comes back a different size on the next frame.
+    let mut resized = selectable_popup_surface_at_revision(2);
+    if let Some(popup_surface) = resized.popup.as_deref_mut() {
+        let narrower = Buffer::with_lines(["popup", "", ""]);
+        popup_surface.frame = FrameData::from_ratatui_buffer_with_hyperlinks(&narrower, None, &[]);
+    }
+    state.apply_popup_surface_metrics(&popup_surface_metrics(2, 0, 0, 3));
+    state.set_pane_surface(resized);
+
+    assert!(
+        state.selection.is_none(),
+        "a resized popup must drop the selection anchored to the old geometry"
+    );
+}

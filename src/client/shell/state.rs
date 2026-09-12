@@ -1798,6 +1798,50 @@ impl ClientShellState {
             let Some(previous_surface) = self.pane_surface.as_ref() else {
                 return false;
             };
+            // The popup is not one of the panes, so its selection would never be
+            // checked here. Its geometry is the frame it renders into, and its
+            // content revision rides beside the surface.
+            if self.is_popup_target(&selection.pane_id) {
+                let previous_popup = previous_surface
+                    .popup
+                    .as_deref()
+                    .filter(|popup| popup.terminal_id == selection.pane_id);
+                let next_popup = surface
+                    .popup
+                    .as_deref()
+                    .filter(|popup| popup.terminal_id == selection.pane_id);
+                let (Some(previous_popup), Some(next_popup)) = (previous_popup, next_popup) else {
+                    return false;
+                };
+                let resized = previous_popup.frame.width != next_popup.frame.width
+                    || previous_popup.frame.height != next_popup.frame.height;
+                // The committed metrics still describe the frame on screen; the
+                // staged report is the one this surface is paired with.
+                let previous_revision = self
+                    .popup_metrics_for(&selection.pane_id)
+                    .map(|metrics| metrics.content_revision);
+                let next_revision = self
+                    .pending_popup_metrics
+                    .as_ref()
+                    .filter(|metrics| {
+                        metrics.terminal_id == selection.pane_id
+                            && metrics.surface_revision == surface.surface_revision
+                    })
+                    .map(|metrics| metrics.content_revision);
+                let content_moved = self.config.copy_on_select
+                    && match (previous_revision, next_revision) {
+                        (Some(previous), Some(next)) => {
+                            next != previous
+                                || !next.is_multiple_of(2)
+                                || !previous.is_multiple_of(2)
+                        }
+                        // No report paired with this frame means the rows cannot be
+                        // validated, so drop the selection rather than let a copy
+                        // resolve it through an unknown offset.
+                        _ => true,
+                    };
+                return resized || content_moved;
+            }
             let previous = previous_surface
                 .panes
                 .iter()
