@@ -1472,7 +1472,14 @@ impl App {
         else {
             return pane_not_found(id, &params.pane_id);
         };
+        let changed = pane.marked != params.marked;
         pane.marked = params.marked;
+        // The mark is a shared runtime fact exposed through `PaneInfo` and
+        // `AgentInfo`, so `pane.updated` subscribers would otherwise hold a
+        // stale value until an unrelated pane update happened to fire.
+        if changed {
+            self.emit_pane_updated(ws_idx, pane_id);
+        }
         encode_success(id, ResponseResult::Ok {})
     }
 
@@ -2267,6 +2274,49 @@ mod tests {
             },
         );
         assert!(!app.state.workspaces[0].pane_state(target).unwrap().marked);
+    }
+
+    /// The mark is exposed through `PaneInfo` and `AgentInfo`, so subscribers
+    /// that never look at a TUI snapshot must learn about it the same way they
+    /// learn about every other pane change.
+    #[test]
+    fn pane_mark_set_publishes_a_pane_update_only_when_the_value_changes() {
+        let (mut app, public_pane_id) = app_with_test_workspace();
+        let marked_events = |app: &App| {
+            app.event_hub
+                .events_after(0)
+                .iter()
+                .filter(|(_, envelope)| {
+                    matches!(
+                        &envelope.data,
+                        crate::api::schema::EventData::PaneUpdated { pane }
+                            if pane.pane_id == public_pane_id && pane.marked
+                    )
+                })
+                .count()
+        };
+
+        app.handle_pane_mark_set(
+            "req".into(),
+            PaneMarkSetParams {
+                pane_id: public_pane_id.clone(),
+                marked: true,
+            },
+        );
+        assert_eq!(marked_events(&app), 1, "marking must publish pane.updated");
+
+        app.handle_pane_mark_set(
+            "req".into(),
+            PaneMarkSetParams {
+                pane_id: public_pane_id.clone(),
+                marked: true,
+            },
+        );
+        assert_eq!(
+            marked_events(&app),
+            1,
+            "re-sending the same value must not publish another event"
+        );
     }
 
     #[test]

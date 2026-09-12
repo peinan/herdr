@@ -480,9 +480,18 @@ impl ClientShellState {
     }
 
     /// Give the projection back to the server once nothing is in flight for
-    /// this pane. Any snapshot seen meanwhile is newer than the value this
-    /// client requested, so it wins over both the optimistic write and the
-    /// rollback baseline.
+    /// this pane: a snapshot seen meanwhile wins over both the optimistic write
+    /// and the rollback baseline.
+    ///
+    /// A snapshot rendered before the server applied our value is
+    /// indistinguishable here from another client's newer change — both arrive
+    /// mid-flight carrying the value we replaced, and nothing in the response
+    /// dates it. Deferring to the snapshot is the recoverable choice: a mark
+    /// that changes server state goes through `request_changes_ui` and
+    /// `emit_pane_updated`, so a stale restore is corrected by the snapshot
+    /// that change publishes, whereas keeping the optimistic value would
+    /// discard another client's change for good. Telling the two apart would
+    /// need the response to carry the revision its change landed in.
     fn settle_agent_mark(&mut self, pane_id: &str, fallback: Option<bool>) -> bool {
         let settled = self
             .pending_agent_marks
