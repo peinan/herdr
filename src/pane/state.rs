@@ -10,6 +10,8 @@ pub struct PaneState {
     pub seen: bool,
     /// Whether unmodified right-click gestures should be forwarded to the pane application.
     pub right_click_passthrough: bool,
+    /// Whether the user flagged this pane for follow-up. Process-local; not persisted.
+    pub marked: bool,
 }
 
 impl PaneState {
@@ -18,6 +20,7 @@ impl PaneState {
             attached_terminal_id,
             seen: true,
             right_click_passthrough: false,
+            marked: false,
         }
     }
 }

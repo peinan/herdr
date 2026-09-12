@@ -75,6 +75,10 @@ impl ClientContextMenuOverlay {
                 ]);
                 items
             }
+            ClientContextMenuTarget::Agent { marked, .. } => vec![item(
+                if *marked { "Clear mark" } else { "Mark agent" },
+                Action::ToggleMark,
+            )],
         }
     }
 }
@@ -167,6 +171,28 @@ impl ClientShellState {
         }));
     }
 
+    pub(super) fn open_agent_context_menu(&mut self, pane_id: String, x: u16, y: u16) {
+        let Some(snapshot) = self.snapshot.as_deref() else {
+            return;
+        };
+        let Some(agent) = snapshot
+            .agents
+            .iter()
+            .find(|agent| agent.pane_id == pane_id)
+        else {
+            return;
+        };
+        self.overlay = Some(ClientShellOverlay::ContextMenu(ClientContextMenuOverlay {
+            target: ClientContextMenuTarget::Agent {
+                pane_id,
+                marked: agent.marked,
+            },
+            x,
+            y,
+            highlighted: 0,
+        }));
+    }
+
     pub(super) fn move_context_menu_selection(&mut self, delta: isize) {
         let Some(ClientShellOverlay::ContextMenu(menu)) = self.overlay.as_mut() else {
             return;
@@ -213,6 +239,9 @@ impl ClientShellState {
                 action,
                 outcome,
             ),
+            ClientContextMenuTarget::Agent { pane_id, marked } => {
+                self.activate_agent_context_action(pane_id, marked, action, outcome)
+            }
         }
         outcome.repaint = true;
     }
@@ -364,6 +393,21 @@ impl ClientShellState {
                 self.push_endpoint_method(Method::TabClose(TabTarget { tab_id }), outcome);
             }
             _ => {}
+        }
+    }
+
+    fn activate_agent_context_action(
+        &mut self,
+        pane_id: String,
+        marked: bool,
+        action: ClientContextMenuAction,
+        outcome: &mut ClientShellInput,
+    ) {
+        if action == ClientContextMenuAction::ToggleMark {
+            // The menu offered one fixed outcome ("Mark agent" or "Clear mark"),
+            // so send that absolute value rather than inverting whatever the
+            // state happens to be when the item is picked.
+            self.set_agent_mark(pane_id, !marked, outcome);
         }
     }
 

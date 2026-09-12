@@ -1757,6 +1757,28 @@ impl ClientShellState {
                     outcome.repaint = true;
                     return;
                 }
+                // Only agents on the active endpoint can be acted on here; a
+                // row belonging to another machine keeps its inert behavior.
+                let agent_pane_id = self
+                    .hits
+                    .endpoint_agents
+                    .iter()
+                    .find(|(rect, endpoint_id, _)| {
+                        super::contains(*rect, point) && *endpoint_id == self.active_endpoint_id
+                    })
+                    .map(|(_, _, pane_id)| pane_id.clone())
+                    .or_else(|| {
+                        self.hits
+                            .agents
+                            .iter()
+                            .find(|(rect, _)| super::contains(*rect, point))
+                            .map(|(_, pane_id)| pane_id.clone())
+                    });
+                if let Some(pane_id) = agent_pane_id {
+                    self.open_agent_context_menu(pane_id, mouse.column, mouse.row);
+                    outcome.repaint = true;
+                    return;
+                }
                 let pane_id = self
                     .hits
                     .panes

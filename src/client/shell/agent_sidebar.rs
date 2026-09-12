@@ -14,7 +14,18 @@ pub(super) struct AgentRow {
     pub(super) pane_id: String,
     pub(super) status: crate::api::schema::AgentStatus,
     pub(super) focused: bool,
+    pub(super) marked: bool,
     pub(super) rows: Vec<Vec<crate::ui::ResolvedToken>>,
+}
+
+/// Gutter glyph drawn ahead of a marked agent row. Falls back to the plain
+/// indent when the configured indicator is empty or wider than the gutter.
+fn mark_gutter(config: &ClientShellConfig, marked: bool) -> Option<&str> {
+    if !marked {
+        return None;
+    }
+    let indicator = config.agent_mark_indicator.as_str();
+    (display_width(indicator) == 1).then_some(indicator)
 }
 
 pub(super) fn ordered_agent_pane_ids(
@@ -38,6 +49,7 @@ pub(super) fn ordered_agent_pane_ids(
     if sort == crate::config::AgentPanelSortConfig::Priority {
         agents.sort_by_key(|agent| {
             (
+                std::cmp::Reverse(agent.marked),
                 std::cmp::Reverse(status_priority(agent.agent_status)),
                 std::cmp::Reverse(agent.state_change_seq),
             )
@@ -305,6 +317,7 @@ pub(super) fn agent_rows(
                 pane_id: agent.pane_id.clone(),
                 status: agent.agent_status,
                 focused: agent.focused,
+                marked: agent.marked,
                 rows,
             })
         })
@@ -354,9 +367,16 @@ pub(super) fn render_agent_row(
     } else {
         row.rows.clone()
     };
+    let gutter = mark_gutter(config, row.marked);
     for (index, tokens) in rows.iter().take(rect.height as usize).enumerate() {
         let indent = if index == 0 { 1 } else { 3 };
-        let mut spans = vec![ratatui::text::Span::raw(" ".repeat(indent))];
+        let mut spans = match gutter.filter(|_| index == 0) {
+            Some(indicator) => vec![ratatui::text::Span::styled(
+                indicator.to_string(),
+                Style::default().fg(config.agent_mark_color),
+            )],
+            None => vec![ratatui::text::Span::raw(" ".repeat(indent))],
+        };
         spans.extend(crate::ui::resolved_token_spans(
             tokens,
             icon,

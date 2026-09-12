@@ -376,6 +376,17 @@ fn agent_command() -> Command {
         )
         .subcommand(id_command("focus", "target", "Focus an agent"))
         .subcommand(
+            Command::new("mark")
+                .about("Mark an agent for follow-up")
+                .override_usage("herdr agent mark <TARGET> [--on|--off|--toggle]")
+                .arg(required("target", "TARGET"))
+                .arg(flag("on"))
+                .arg(flag("off"))
+                .arg(flag("toggle"))
+                .group(ArgGroup::new("agent_mark").args(["on", "off", "toggle"]))
+                .after_help("Without a flag, flips the current mark."),
+        )
+        .subcommand(
             Command::new("wait")
                 .about("Wait until an agent reaches one of the requested states")
                 .override_usage("herdr agent wait <TARGET> [OPTIONS]")
@@ -527,6 +538,20 @@ fn pane_command() -> Command {
                 .arg(required("pane_id", "PANE_ID"))
                 .arg(Arg::new("label").value_name("LABEL").num_args(1..))
                 .arg(flag("clear")),
+        )
+        .subcommand(
+            Command::new("mark")
+                .about("Mark a pane for follow-up")
+                .override_usage("herdr pane mark [<PANE_ID>|--pane ID|--current] --on|--off")
+                .arg(Arg::new("pane_id").value_name("PANE_ID"))
+                .args(current_pane_args())
+                .arg(flag("on"))
+                .arg(flag("off"))
+                .group(
+                    ArgGroup::new("pane_mark")
+                        .args(["on", "off"])
+                        .required(true),
+                ),
         )
         .subcommand(
             Command::new("input")
@@ -1260,6 +1285,23 @@ mod tests {
         assert!(pane
             .get_subcommands()
             .any(|subcommand| subcommand.get_name() == "wait-output"));
+    }
+
+    #[test]
+    fn spec_registers_both_mark_commands() {
+        let cmd = super::command();
+
+        // Registration is what gives these generated help and completions; the
+        // runtime dispatcher recognises them either way, so a missing entry
+        // only shows up as `--help` failing.
+        let pane_mark = command_path(&cmd, &["pane", "mark"]);
+        assert!(pane_mark
+            .get_arguments()
+            .any(|arg| arg.get_id() == "on" || arg.get_id() == "off"));
+        let agent_mark = command_path(&cmd, &["agent", "mark"]);
+        assert!(agent_mark
+            .get_arguments()
+            .any(|arg| arg.get_id() == "toggle"));
     }
 
     #[test]

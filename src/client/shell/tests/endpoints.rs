@@ -37,6 +37,7 @@ fn agent(
         state_labels: Vec::new(),
         tokens: Vec::new(),
         focused: true,
+        marked: false,
     }
 }
 
@@ -622,6 +623,207 @@ fn aggregate_priority_uses_client_observed_recency_across_machines() {
             target: Some(ClientEndpointFocusTarget::Pane(pane_id)),
         }] if activated == &endpoint_id && pane_id == "pane_1"
     ));
+}
+
+#[test]
+fn aggregate_priority_lifts_a_marked_agent_above_a_busier_machine() {
+    use crate::api::schema::AgentStatus;
+    use crate::config::AgentSidebarToken;
+
+    let mut config = Config::default();
+    config.ui.agent_panel_sort = crate::config::AgentPanelSortConfig::Priority;
+    config.ui.sidebar.agents.rows =
+        vec![vec![AgentSidebarToken::Machine, AgentSidebarToken::Agent]];
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    let profile = remote_profile();
+    let endpoint_id = ClientEndpointId::Ssh(profile.id.clone());
+    state.set_endpoint_catalog(&[profile]);
+    state.set_endpoint_status(&endpoint_id, ClientEndpointStatus::Online);
+
+    let mut local = snapshot();
+    local.agents = vec![agent("local agent", AgentStatus::Idle, 1)];
+    state.set_snapshot(Box::new(local));
+    state.set_pane_surface(surface());
+    let mut remote = snapshot();
+    remote.boot_id = "remote-boot".into();
+    // Blocked outranks idle, so the remote agent leads until the local one is marked.
+    remote.agents = vec![agent("remote agent", AgentStatus::Blocked, 1)];
+    state.set_endpoint_snapshot(&endpoint_id, Box::new(remote));
+
+    let frame_text = |state: &mut ClientShellState| {
+        let frame = state.compose(100, 28).expect("combined endpoint frame");
+        frame
+            .cells
+            .chunks(frame.width as usize)
+            .map(|row| {
+                row.iter()
+                    .map(|cell| cell.symbol.as_str())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let text = frame_text(&mut state);
+    assert!(
+        text.find("Build · remote agent").expect("remote agent")
+            < text.find("Local · local agent").expect("local agent")
+    );
+
+    let mut marked_local = snapshot();
+    let mut marked_agent = agent("local agent", AgentStatus::Idle, 1);
+    marked_agent.marked = true;
+    marked_local.agents = vec![marked_agent];
+    state.set_snapshot(Box::new(marked_local));
+    let text = frame_text(&mut state);
+    assert!(
+        text.find("Local · local agent").expect("local agent")
+            < text.find("Build · remote agent").expect("remote agent"),
+        "a marked agent leads the aggregate list: {text}"
+    );
+}
+
+#[test]
+fn the_collapsed_strip_tints_the_machine_initial_instead_of_replacing_it() {
+    use crate::api::schema::AgentStatus;
+
+    let mut config = Config::default();
+    config.ui.agent_panel_sort = crate::config::AgentPanelSortConfig::Priority;
+    // The expanded gutter glyph is switched off to prove the collapsed tint is
+    // driven by the mark itself, not by `agent_mark_indicator`.
+    config.ui.agent_mark_indicator = String::new();
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    let profile = remote_profile();
+    let endpoint_id = ClientEndpointId::Ssh(profile.id.clone());
+    state.set_endpoint_catalog(&[profile]);
+    state.set_endpoint_status(&endpoint_id, ClientEndpointStatus::Online);
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface());
+    let mut remote = snapshot();
+    remote.boot_id = "remote-boot".into();
+    remote.agents = vec![agent("remote agent", AgentStatus::Idle, 1)];
+    state.set_endpoint_snapshot(&endpoint_id, Box::new(remote.clone()));
+    state.sidebar_collapsed = true;
+
+    // (initial symbol, initial style, status symbol, status style)
+    let strip = |state: &mut ClientShellState| {
+        let frame = state.compose(100, 28).expect("collapsed endpoint frame");
+        let rect = state
+            .hits
+            .endpoint_agents
+            .iter()
+            .find(|(_, id, _)| id == &endpoint_id)
+            .expect("collapsed remote agent row")
+            .0;
+        let buffer = frame.to_ratatui_buffer().expect("frame should reconstruct");
+        let initial = &buffer[(rect.x, rect.y)];
+        let status = &buffer[(rect.x + 1, rect.y)];
+        (
+            initial.symbol().to_owned(),
+            initial.fg,
+            initial.modifier,
+            status.symbol().to_owned(),
+            status.fg,
+        )
+    };
+
+    let (initial, unmarked_fg, unmarked_modifier, status, unmarked_status_fg) = strip(&mut state);
+    assert_eq!(initial, "B", "the Build machine keeps its initial");
+    assert_ne!(unmarked_fg, state.config.agent_mark_color);
+    assert!(!unmarked_modifier.contains(Modifier::BOLD));
+
+    let mut marked_agent = agent("remote agent", AgentStatus::Idle, 1);
+    marked_agent.marked = true;
+    remote.agents = vec![marked_agent];
+    state.set_endpoint_snapshot(&endpoint_id, Box::new(remote.clone()));
+
+    let (marked_initial, marked_fg, marked_modifier, marked_status, marked_status_fg) =
+        strip(&mut state);
+    assert_eq!(
+        marked_initial, "B",
+        "marking must not cost the machine initial"
+    );
+    assert_eq!(marked_fg, state.config.agent_mark_color);
+    assert!(
+        marked_modifier.contains(Modifier::BOLD),
+        "weight keeps the mark readable when the color is near a status color"
+    );
+    // The status cell is untouched, so the mark never costs status information.
+    assert_eq!(marked_status, status);
+    assert_eq!(marked_status_fg, unmarked_status_fg);
+
+    // A stale machine dims its status icon, but the mark is a flag the user set
+    // and has to stay legible exactly then.
+    state.set_endpoint_status(&endpoint_id, ClientEndpointStatus::Connecting);
+    let (stale_initial, stale_fg, stale_modifier, _, stale_status_fg) = strip(&mut state);
+    assert_eq!(stale_initial, "B");
+    assert_eq!(stale_fg, state.config.agent_mark_color);
+    assert!(!stale_modifier.contains(Modifier::DIM));
+    assert_eq!(stale_status_fg, state.config.palette.overlay0);
+}
+
+#[test]
+fn an_optimistic_mark_reaches_the_cache_the_multi_machine_sidebar_draws_from() {
+    use crate::api::schema::AgentStatus;
+    use crate::config::AgentSidebarToken;
+
+    let mut config = Config::default();
+    config.ui.agent_panel_sort = crate::config::AgentPanelSortConfig::Priority;
+    config.ui.sidebar.agents.rows =
+        vec![vec![AgentSidebarToken::Machine, AgentSidebarToken::Agent]];
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    // A saved endpoint makes the sidebar render from the endpoint caches
+    // instead of the active projection.
+    let profile = remote_profile();
+    let endpoint_id = ClientEndpointId::Ssh(profile.id.clone());
+    state.set_endpoint_catalog(&[profile]);
+    state.set_endpoint_status(&endpoint_id, ClientEndpointStatus::Online);
+    assert!(state.endpoints.len() > 1);
+
+    let mut local = snapshot();
+    local.agents = vec![agent("local agent", AgentStatus::Idle, 1)];
+    local.focused_pane_id = Some("pane_1".into());
+    state.set_snapshot(Box::new(local));
+    state.set_pane_surface(surface());
+    let mut remote = snapshot();
+    remote.boot_id = "remote-boot".into();
+    remote.agents = vec![agent("remote agent", AgentStatus::Blocked, 1)];
+    state.set_endpoint_snapshot(&endpoint_id, Box::new(remote));
+
+    let frame_text = |state: &mut ClientShellState| {
+        let frame = state.compose(100, 28).expect("combined endpoint frame");
+        frame
+            .cells
+            .chunks(frame.width as usize)
+            .map(|row| {
+                row.iter()
+                    .map(|cell| cell.symbol.as_str())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let text = frame_text(&mut state);
+    assert!(
+        text.find("Build · remote agent").expect("remote agent")
+            < text.find("Local · local agent").expect("local agent"),
+        "blocked outranks idle before the mark: {text}"
+    );
+
+    let mut outcome = ClientShellInput::default();
+    state.record_binding(
+        crate::input::KeybindMatch::Action(crate::input::KeybindAction::ToggleAgentMark),
+        &mut outcome,
+    );
+    assert!(outcome.repaint);
+
+    // No server snapshot has arrived; the reorder can only come from the
+    // optimistic write reaching the cached projection this sidebar reads.
+    let text = frame_text(&mut state);
+    assert!(
+        text.find("Local · local agent").expect("local agent")
+            < text.find("Build · remote agent").expect("remote agent"),
+        "the optimistic mark must reach the cache the sidebar renders: {text}"
+    );
 }
 
 #[test]

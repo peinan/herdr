@@ -131,6 +131,10 @@ pub(super) fn snapshot(
         .map(|agent| {
             let pane_id = agent.pane_id;
             let focused = focused_pane_id.as_deref() == Some(pane_id.as_str());
+            // `AgentInfo` already carries the pane's mark, so resolving the
+            // public pane id again here would rescan workspaces once per agent
+            // per client snapshot.
+            let marked = agent.marked;
             let mut state_labels = agent.state_labels.into_iter().collect::<Vec<_>>();
             state_labels.sort_by(|left, right| left.0.cmp(&right.0));
             let mut tokens = agent.tokens.into_iter().collect::<Vec<_>>();
@@ -150,6 +154,7 @@ pub(super) fn snapshot(
                 state_labels,
                 tokens,
                 focused,
+                marked,
             }
         })
         .collect();

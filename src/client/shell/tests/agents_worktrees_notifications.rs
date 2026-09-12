@@ -362,6 +362,7 @@ fn pane_cycle_last_and_agent_actions_resolve_to_stable_pane_ids() {
             state_labels: Vec::new(),
             tokens: Vec::new(),
             focused: true,
+            marked: false,
         },
         ClientShellAgent {
             pane_id: "pane_2".into(),
@@ -378,6 +379,7 @@ fn pane_cycle_last_and_agent_actions_resolve_to_stable_pane_ids() {
             state_labels: Vec::new(),
             tokens: Vec::new(),
             focused: false,
+            marked: false,
         },
     ];
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
@@ -429,6 +431,594 @@ fn pane_cycle_last_and_agent_actions_resolve_to_stable_pane_ids() {
     ));
 }
 
+/// Two idle agents whose `state_change_seq` puts `pane_1` first, so a marked
+/// `pane_2` can only lead when the mark itself outranks the rest of the key.
+fn marked_agent_snapshot(marked_pane: &str) -> crate::protocol::ClientShellSnapshot {
+    let mut projected = snapshot();
+    let mut second_pane = projected.panes[0].clone();
+    second_pane.pane_id = "pane_2".into();
+    second_pane.focused = false;
+    projected.panes.push(second_pane);
+    projected.agents = ["pane_1", "pane_2"]
+        .into_iter()
+        .enumerate()
+        .map(|(index, pane_id)| ClientShellAgent {
+            pane_id: pane_id.into(),
+            workspace_id: "ws_1".into(),
+            tab_id: "tab_1".into(),
+            name: Some(format!("agent {}", index + 1)),
+            display_agent: None,
+            agent: None,
+            title: None,
+            terminal_title: None,
+            terminal_title_stripped: None,
+            agent_status: AgentStatus::Idle,
+            state_change_seq: 2 - index as u64,
+            state_labels: Vec::new(),
+            tokens: Vec::new(),
+            focused: index == 0,
+            marked: pane_id == marked_pane,
+        })
+        .collect();
+    projected
+}
+
+fn priority_sort_config() -> Config {
+    let mut config = Config::default();
+    config.ui.agent_panel_sort = crate::config::AgentPanelSortConfig::Priority;
+    config.ui.sidebar.agents.rows = vec![vec![crate::config::AgentSidebarToken::Agent]];
+    config
+}
+
+#[test]
+fn priority_sort_lifts_the_marked_agent_and_draws_its_gutter() {
+    let config = priority_sort_config();
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+
+    // Baseline: with nothing marked, state_change_seq puts pane_1 first. Without
+    // this the marked assertion below would pass even if the mark were ignored.
+    state.set_snapshot(Box::new(marked_agent_snapshot("none")));
+    state.set_pane_surface(surface());
+    state.compose(106, 30).expect("agent sidebar frame");
+    assert_eq!(
+        state
+            .hits
+            .agents
+            .iter()
+            .map(|(_, pane_id)| pane_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["pane_1", "pane_2"]
+    );
+
+    state.set_snapshot(Box::new(marked_agent_snapshot("pane_2")));
+
+    let frame = state.compose(106, 30).expect("agent sidebar frame");
+    assert_eq!(
+        state
+            .hits
+            .agents
+            .iter()
+            .map(|(_, pane_id)| pane_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["pane_2", "pane_1"]
+    );
+
+    let marked_row = state.hits.agents[0].0;
+    let gutter = frame.cells[marked_row.y as usize * frame.width as usize + marked_row.x as usize]
+        .symbol
+        .as_str();
+    assert_eq!(gutter, "\u{258c}", "marked rows lead with the mark glyph");
+
+    let plain_row = state.hits.agents[1].0;
+    let plain_gutter = frame.cells
+        [plain_row.y as usize * frame.width as usize + plain_row.x as usize]
+        .symbol
+        .as_str();
+    assert_eq!(plain_gutter, " ", "unmarked rows keep the plain indent");
+}
+
+#[test]
+fn an_empty_mark_indicator_keeps_the_row_gutter_blank() {
+    let mut config = priority_sort_config();
+    config.ui.agent_mark_indicator = String::new();
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    state.set_snapshot(Box::new(marked_agent_snapshot("pane_2")));
+    state.set_pane_surface(surface());
+
+    let frame = state.compose(106, 30).expect("agent sidebar frame");
+    let marked_row = state.hits.agents[0].0;
+    assert_eq!(
+        state.hits.agents[0].1, "pane_2",
+        "the mark still drives the order"
+    );
+    assert_eq!(
+        frame.cells[marked_row.y as usize * frame.width as usize + marked_row.x as usize]
+            .symbol
+            .as_str(),
+        " "
+    );
+}
+
+#[test]
+fn right_clicking_an_agent_row_toggles_its_mark() {
+    let config = priority_sort_config();
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    state.set_snapshot(Box::new(marked_agent_snapshot("pane_2")));
+    state.set_pane_surface(surface());
+    state.compose(106, 30).expect("agent sidebar frame");
+
+    // hits.agents[0] is the marked pane_2 row, so the menu must offer to clear.
+    let marked_row = state.hits.agents[0].0;
+    let open = state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Right),
+        column: marked_row.x,
+        row: marked_row.y,
+        modifiers: KeyModifiers::empty(),
+    })]);
+    assert!(open.repaint);
+    let frame = state.compose(106, 30).expect("context menu frame");
+    let text = frame
+        .cells
+        .chunks(frame.width as usize)
+        .map(|row| {
+            row.iter()
+                .map(|cell| cell.symbol.as_str())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("Clear mark"), "frame: {text}");
+
+    let mut activate = ClientShellInput::default();
+    state.activate_context_menu_item(0, &mut activate);
+    let [ClientShellAction::Endpoint { request, .. }] = &activate.actions[..] else {
+        panic!("the mark action should go through the endpoint API");
+    };
+    assert!(matches!(
+        &request.method,
+        crate::api::schema::Method::PaneMarkSet(params)
+            if params.pane_id == "pane_2" && !params.marked
+    ));
+}
+
+#[test]
+fn the_mark_keybinding_flips_the_focused_agent() {
+    let config = priority_sort_config();
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    // pane_1 is the focused agent and starts unmarked.
+    state.set_snapshot(Box::new(marked_agent_snapshot("pane_2")));
+    state.set_pane_surface(surface());
+
+    let mut outcome = ClientShellInput::default();
+    state.record_binding(
+        crate::input::KeybindMatch::Action(crate::input::KeybindAction::ToggleAgentMark),
+        &mut outcome,
+    );
+    let [ClientShellAction::Endpoint { request, .. }] = &outcome.actions[..] else {
+        panic!("the mark keybinding should use the endpoint API");
+    };
+    assert!(matches!(
+        &request.method,
+        crate::api::schema::Method::PaneMarkSet(params)
+            if params.pane_id == "pane_1" && params.marked
+    ));
+}
+
+#[test]
+fn a_second_mark_keypress_undoes_the_first_before_the_server_answers() {
+    let config = priority_sort_config();
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    // pane_1 is focused and unmarked.
+    state.set_snapshot(Box::new(marked_agent_snapshot("none")));
+    state.set_pane_surface(surface());
+
+    let mut marked = ClientShellInput::default();
+    state.record_binding(
+        crate::input::KeybindMatch::Action(crate::input::KeybindAction::ToggleAgentMark),
+        &mut marked,
+    );
+    assert!(marked.repaint);
+
+    // The marker shows immediately rather than waiting for the round trip.
+    let frame = state.compose(106, 30).expect("agent sidebar frame");
+    let row = state.hits.agents[0].0;
+    assert_eq!(state.hits.agents[0].1, "pane_1");
+    assert_eq!(
+        frame.cells[row.y as usize * frame.width as usize + row.x as usize]
+            .symbol
+            .as_str(),
+        "\u{258c}"
+    );
+
+    // No new server snapshot arrives between the two presses.
+    let mut cleared = ClientShellInput::default();
+    state.record_binding(
+        crate::input::KeybindMatch::Action(crate::input::KeybindAction::ToggleAgentMark),
+        &mut cleared,
+    );
+
+    let requested = |outcome: &ClientShellInput| {
+        let [ClientShellAction::Endpoint { request, .. }] = &outcome.actions[..] else {
+            panic!("the mark keybinding should use the endpoint API");
+        };
+        match &request.method {
+            crate::api::schema::Method::PaneMarkSet(params) => {
+                (params.pane_id.clone(), params.marked)
+            }
+            other => panic!("unexpected method: {other:?}"),
+        }
+    };
+    assert_eq!(requested(&marked), ("pane_1".to_owned(), true));
+    assert_eq!(
+        requested(&cleared),
+        ("pane_1".to_owned(), false),
+        "the second press must undo the first, not repeat it"
+    );
+}
+
+#[test]
+fn a_refused_mark_request_puts_the_projection_back() {
+    let config = priority_sort_config();
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    // pane_1 is focused and unmarked.
+    state.set_snapshot(Box::new(marked_agent_snapshot("none")));
+    state.set_pane_surface(surface());
+
+    let mut outcome = ClientShellInput::default();
+    state.record_binding(
+        crate::input::KeybindMatch::Action(crate::input::KeybindAction::ToggleAgentMark),
+        &mut outcome,
+    );
+    let [ClientShellAction::Endpoint { request, .. }] = &outcome.actions[..] else {
+        panic!("the mark keybinding should use the endpoint API");
+    };
+    let request_id = request.id.clone();
+    let marked_locally = |state: &mut ClientShellState| {
+        state.compose(106, 30).expect("agent sidebar frame");
+        state
+            .snapshot
+            .as_deref()
+            .and_then(|snapshot| {
+                snapshot
+                    .agents
+                    .iter()
+                    .find(|agent| agent.pane_id == "pane_1")
+            })
+            .is_some_and(|agent| agent.marked)
+    };
+    assert!(marked_locally(&mut state), "the mark shows optimistically");
+
+    let (repaint, actions) = state.handle_endpoint_result(
+        "boot-1",
+        &request_id,
+        Err(crate::client::shell::state::ClientShellEndpointError {
+            code: Some("pane_not_found".into()),
+            message: "pane not found".into(),
+        }),
+    );
+
+    assert!(repaint);
+    assert!(actions.is_empty());
+    assert!(
+        !marked_locally(&mut state),
+        "a refused mark must not leave the marker showing"
+    );
+
+    // The next toggle now works from the restored value rather than re-sending
+    // the value the server already refused.
+    let mut retry = ClientShellInput::default();
+    state.record_binding(
+        crate::input::KeybindMatch::Action(crate::input::KeybindAction::ToggleAgentMark),
+        &mut retry,
+    );
+    let [ClientShellAction::Endpoint { request, .. }] = &retry.actions[..] else {
+        panic!("the mark keybinding should use the endpoint API");
+    };
+    assert!(matches!(
+        &request.method,
+        crate::api::schema::Method::PaneMarkSet(params)
+            if params.pane_id == "pane_1" && params.marked
+    ));
+}
+
+/// Two presses land before either answer, so the second request must not treat
+/// the first press's optimistic value as the state to restore.
+#[test]
+fn overlapping_mark_requests_restore_the_server_value_not_the_optimistic_one() {
+    for first_succeeds in [false, true] {
+        let config = priority_sort_config();
+        let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+        // pane_1 is focused and unmarked on the server.
+        state.set_snapshot(Box::new(marked_agent_snapshot("none")));
+        state.set_pane_surface(surface());
+
+        let press = |state: &mut ClientShellState| {
+            let mut outcome = ClientShellInput::default();
+            state.record_binding(
+                crate::input::KeybindMatch::Action(crate::input::KeybindAction::ToggleAgentMark),
+                &mut outcome,
+            );
+            let [ClientShellAction::Endpoint { request, .. }] = &outcome.actions[..] else {
+                panic!("the mark keybinding should use the endpoint API");
+            };
+            request.id.clone()
+        };
+        let first = press(&mut state);
+        let second = press(&mut state);
+
+        let refused = || {
+            Err(crate::client::shell::state::ClientShellEndpointError {
+                code: Some("pane_not_found".into()),
+                message: "pane not found".into(),
+            })
+        };
+        let first_result = if first_succeeds {
+            Ok(crate::api::schema::ResponseResult::Ok {})
+        } else {
+            refused()
+        };
+        state.handle_endpoint_result("boot-1", &first, first_result);
+        state.handle_endpoint_result("boot-1", &second, refused());
+
+        state.compose(106, 30).expect("agent sidebar frame");
+        let marked = state
+            .snapshot
+            .as_deref()
+            .and_then(|snapshot| {
+                snapshot
+                    .agents
+                    .iter()
+                    .find(|agent| agent.pane_id == "pane_1")
+            })
+            .is_some_and(|agent| agent.marked);
+        // The first press asked for `true` and the second for `false`, so the
+        // server holds `true` only when the first request was accepted.
+        assert_eq!(
+            marked, first_succeeds,
+            "the projection must settle on the server value \
+             (first request accepted: {first_succeeds})"
+        );
+    }
+}
+
+#[test]
+fn the_default_single_endpoint_collapsed_sidebar_marks_the_index_cells() {
+    let config = priority_sort_config();
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    // One endpoint, which is the default shape and uses sidebar.rs rather than
+    // the multi-machine strip.
+    assert_eq!(state.endpoints.len(), 1);
+    state.set_snapshot(Box::new(marked_agent_snapshot("pane_2")));
+    state.set_pane_surface(surface());
+    state.sidebar_collapsed = true;
+
+    let frame = state.compose(106, 30).expect("collapsed sidebar frame");
+    let buffer = frame.to_ratatui_buffer().expect("frame should reconstruct");
+    let cell_for = |pane: &str| {
+        let rect = state
+            .hits
+            .agents
+            .iter()
+            .find(|(_, pane_id)| pane_id == pane)
+            .expect("agent row")
+            .0;
+        let cell = &buffer[(rect.x, rect.y)];
+        (cell.symbol().to_owned(), cell.fg, cell.modifier)
+    };
+
+    let (marked_symbol, marked_fg, marked_modifier) = cell_for("pane_2");
+    let (plain_symbol, plain_fg, plain_modifier) = cell_for("pane_1");
+
+    // The index digits still address the row; only the styling carries the mark.
+    assert!(marked_symbol.chars().all(|c| c.is_ascii_digit()));
+    assert!(plain_symbol.chars().all(|c| c.is_ascii_digit()));
+    assert_eq!(marked_fg, state.config.agent_mark_color);
+    assert!(marked_modifier.contains(Modifier::BOLD));
+    assert_ne!(plain_fg, state.config.agent_mark_color);
+    assert!(!plain_modifier.contains(Modifier::BOLD));
+}
+
+#[test]
+fn a_snapshot_between_toggles_keeps_the_pending_mark() {
+    let config = priority_sort_config();
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    // pane_1 is focused and unmarked.
+    state.set_snapshot(Box::new(marked_agent_snapshot("none")));
+    state.set_pane_surface(surface());
+
+    let requested = |outcome: &ClientShellInput| {
+        let [ClientShellAction::Endpoint { request, .. }] = &outcome.actions[..] else {
+            panic!("the mark keybinding should use the endpoint API");
+        };
+        match &request.method {
+            crate::api::schema::Method::PaneMarkSet(params) => params.marked,
+            other => panic!("unexpected method: {other:?}"),
+        }
+    };
+    let toggle = |state: &mut ClientShellState| {
+        let mut outcome = ClientShellInput::default();
+        state.record_binding(
+            crate::input::KeybindMatch::Action(crate::input::KeybindAction::ToggleAgentMark),
+            &mut outcome,
+        );
+        outcome
+    };
+
+    assert!(requested(&toggle(&mut state)));
+    assert!(!requested(&toggle(&mut state)));
+
+    // The server applied only the first request, so its snapshot still says
+    // marked. Replacing the projection with it must not lose the second
+    // request's value.
+    let mut server_view = marked_agent_snapshot("pane_1");
+    server_view.revision = 2;
+    state.set_snapshot(Box::new(server_view));
+
+    assert!(
+        requested(&toggle(&mut state)),
+        "a snapshot mid-flight must not make the next toggle repeat the last request"
+    );
+}
+
+#[test]
+fn a_refused_mark_repaints_even_when_nothing_is_rolled_back() {
+    let config = priority_sort_config();
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    state.set_snapshot(Box::new(marked_agent_snapshot("none")));
+    state.set_pane_surface(surface());
+
+    let mut first = ClientShellInput::default();
+    state.record_binding(
+        crate::input::KeybindMatch::Action(crate::input::KeybindAction::ToggleAgentMark),
+        &mut first,
+    );
+    let mut second = ClientShellInput::default();
+    state.record_binding(
+        crate::input::KeybindMatch::Action(crate::input::KeybindAction::ToggleAgentMark),
+        &mut second,
+    );
+    let request_id = |outcome: &ClientShellInput| {
+        let [ClientShellAction::Endpoint { request, .. }] = &outcome.actions[..] else {
+            panic!("expected an endpoint request");
+        };
+        request.id.clone()
+    };
+    let (first_id, second_id) = (request_id(&first), request_id(&second));
+
+    let refuse = |state: &mut ClientShellState, id: &str| {
+        state
+            .handle_endpoint_result(
+                "boot-1",
+                id,
+                Err(crate::client::shell::state::ClientShellEndpointError {
+                    code: Some("pane_not_found".into()),
+                    message: "pane not found".into(),
+                }),
+            )
+            .0
+    };
+
+    // The first failure rolls nothing back because a newer request owns the
+    // projection, and the second finds the value already restored. Both still
+    // have to repaint or their rejection notice is never drawn.
+    assert!(refuse(&mut state, &first_id));
+    assert!(refuse(&mut state, &second_id));
+}
+
+#[test]
+fn two_marks_failing_in_order_restore_the_server_value() {
+    let config = priority_sort_config();
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    // The server holds unmarked for pane_1 throughout; neither request lands.
+    state.set_snapshot(Box::new(marked_agent_snapshot("none")));
+    state.set_pane_surface(surface());
+
+    let toggle = |state: &mut ClientShellState| {
+        let mut outcome = ClientShellInput::default();
+        state.record_binding(
+            crate::input::KeybindMatch::Action(crate::input::KeybindAction::ToggleAgentMark),
+            &mut outcome,
+        );
+        let [ClientShellAction::Endpoint { request, .. }] = &outcome.actions[..] else {
+            panic!("expected an endpoint request");
+        };
+        request.id.clone()
+    };
+    let first = toggle(&mut state);
+    let second = toggle(&mut state);
+
+    let refuse = |state: &mut ClientShellState, id: &str| {
+        state.handle_endpoint_result(
+            "boot-1",
+            id,
+            Err(crate::client::shell::state::ClientShellEndpointError {
+                code: Some("pane_not_found".into()),
+                message: "pane not found".into(),
+            }),
+        );
+    };
+    // Failing in order: the first rollback is suppressed because the second
+    // request still owns the projection, so the second must restore the value
+    // the server actually holds rather than the first request's optimistic one.
+    refuse(&mut state, &first);
+    refuse(&mut state, &second);
+
+    let marked = state
+        .snapshot
+        .as_deref()
+        .and_then(|snapshot| {
+            snapshot
+                .agents
+                .iter()
+                .find(|agent| agent.pane_id == "pane_1")
+        })
+        .is_some_and(|agent| agent.marked);
+    assert!(
+        !marked,
+        "both requests failed, so the projection must be back to the server value"
+    );
+}
+
+#[test]
+fn another_clients_unmark_survives_our_in_flight_mark() {
+    let config = priority_sort_config();
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    // pane_1 is focused and unmarked.
+    state.set_snapshot(Box::new(marked_agent_snapshot("none")));
+    state.set_pane_surface(surface());
+
+    let mut outcome = ClientShellInput::default();
+    state.record_binding(
+        crate::input::KeybindMatch::Action(crate::input::KeybindAction::ToggleAgentMark),
+        &mut outcome,
+    );
+    let [ClientShellAction::Endpoint { request, .. }] = &outcome.actions[..] else {
+        panic!("expected an endpoint request");
+    };
+    let request_id = request.id.clone();
+
+    // Our mark applied, then another client cleared it, and that newer
+    // snapshot reaches us before our own acknowledgement does.
+    let mut newer = marked_agent_snapshot("none");
+    newer.revision = 2;
+    state.set_snapshot(Box::new(newer));
+
+    state.handle_endpoint_result(
+        "boot-1",
+        &request_id,
+        Ok(crate::api::schema::ResponseResult::Ok {}),
+    );
+
+    let marked = state
+        .snapshot
+        .as_deref()
+        .and_then(|snapshot| {
+            snapshot
+                .agents
+                .iter()
+                .find(|agent| agent.pane_id == "pane_1")
+        })
+        .is_some_and(|agent| agent.marked);
+    assert!(
+        !marked,
+        "the newer server value must survive; an unchanged server sends no further snapshot to correct us"
+    );
+
+    // And the next toggle works from that value rather than our stale request.
+    let mut next = ClientShellInput::default();
+    state.record_binding(
+        crate::input::KeybindMatch::Action(crate::input::KeybindAction::ToggleAgentMark),
+        &mut next,
+    );
+    let [ClientShellAction::Endpoint { request, .. }] = &next.actions[..] else {
+        panic!("expected an endpoint request");
+    };
+    assert!(matches!(
+        &request.method,
+        crate::api::schema::Method::PaneMarkSet(params) if params.marked
+    ));
+}
+
 #[test]
 fn agent_sidebar_honors_priority_symbols_tokens_and_stable_hits() {
     let mut projected = snapshot();
@@ -452,6 +1042,7 @@ fn agent_sidebar_honors_priority_symbols_tokens_and_stable_hits() {
             state_labels: Vec::new(),
             tokens: vec![("summary".into(), "review complete".into())],
             focused: true,
+            marked: false,
         },
         ClientShellAgent {
             pane_id: "pane_2".into(),
@@ -468,6 +1059,7 @@ fn agent_sidebar_honors_priority_symbols_tokens_and_stable_hits() {
             state_labels: vec![("blocked".into(), "needs input".into())],
             tokens: vec![("summary".into(), "waiting for Can".into())],
             focused: false,
+            marked: false,
         },
     ];
     let mut config = Config::default();
@@ -597,6 +1189,7 @@ fn active_agent_view_controls_sidebar_order_and_focus_indices() {
             state_labels: Vec::new(),
             tokens: Vec::new(),
             focused: true,
+            marked: false,
         },
         ClientShellAgent {
             pane_id: "pane_2".into(),
@@ -613,6 +1206,7 @@ fn active_agent_view_controls_sidebar_order_and_focus_indices() {
             state_labels: Vec::new(),
             tokens: Vec::new(),
             focused: false,
+            marked: false,
         },
         ClientShellAgent {
             pane_id: "pane_3".into(),
@@ -629,6 +1223,7 @@ fn active_agent_view_controls_sidebar_order_and_focus_indices() {
             state_labels: Vec::new(),
             tokens: Vec::new(),
             focused: false,
+            marked: false,
         },
     ];
     projected.agent_view_label = Some("review".into());
@@ -703,6 +1298,7 @@ fn agent_sort_toggle_is_client_local_and_persists_per_endpoint() {
         state_labels: Vec::new(),
         tokens: Vec::new(),
         focused: true,
+        marked: false,
     });
     let config =
         ClientShellConfig::from_config(&Config::default()).with_preferences_path(path.clone());
@@ -1161,6 +1757,7 @@ fn semantic_notifications_use_client_policy_and_stable_navigation_targets() {
         state_labels: Vec::new(),
         tokens: Vec::new(),
         focused: false,
+        marked: false,
     });
     state.set_snapshot(Box::new(projected));
     state.set_pane_surface(surface());

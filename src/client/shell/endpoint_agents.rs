@@ -15,27 +15,49 @@ pub(super) fn render_collapsed(
         if row.agent.focused {
             buffer.set_style(rect, Style::default().bg(config.palette.active_row_bg));
         }
-        let initial = row.machine_label.chars().next().unwrap_or('?');
+        let status_style = Style::default()
+            .fg(if row.stale {
+                config.palette.overlay0
+            } else {
+                status_color(row.agent.status, &config.palette)
+            })
+            .add_modifier(if row.stale {
+                Modifier::DIM
+            } else {
+                Modifier::empty()
+            });
+        // The collapsed strip is only two cells wide, so a mark tints the
+        // machine initial instead of replacing it: dropping the initial would
+        // cost machine identity exactly where federated ordering needs it. The
+        // tint ignores `agent_mark_indicator`, which configures the expanded
+        // gutter glyph rather than this strip, and it skips the stale DIM so a
+        // mark the user set stays legible on a row whose machine went away.
+        // Bold as well as tinted: the status icon beside it is already colored
+        // per status, so color alone would be ambiguous whenever the configured
+        // mark color lands near one of those five. Weight keeps the mark
+        // readable for any configured color.
+        let lead_style = if row.agent.marked {
+            Style::default()
+                .fg(config.agent_mark_color)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            status_style
+        };
+        let mut initial = [0u8; 4];
+        let initial = row
+            .machine_label
+            .chars()
+            .next()
+            .unwrap_or('?')
+            .encode_utf8(&mut initial);
+        put_text(buffer, rect.x, rect.y, rect.width, initial, lead_style);
         put_text(
             buffer,
-            rect.x,
+            rect.x + 1,
             rect.y,
-            rect.width,
-            &format!(
-                "{initial}{}",
-                status_icon(row.agent.status, config.status_indicators)
-            ),
-            Style::default()
-                .fg(if row.stale {
-                    config.palette.overlay0
-                } else {
-                    status_color(row.agent.status, &config.palette)
-                })
-                .add_modifier(if row.stale {
-                    Modifier::DIM
-                } else {
-                    Modifier::empty()
-                }),
+            rect.width.saturating_sub(1),
+            status_icon(row.agent.status, config.status_indicators),
+            status_style,
         );
         hits.endpoint_agents
             .push((rect, row.endpoint_id, row.agent.pane_id));

@@ -67,6 +67,7 @@ pub(crate) fn apply_agent_view(app: &AppState, entries: &mut Vec<AgentPanelEntry
     ) {
         entries.sort_by_key(|entry| {
             (
+                std::cmp::Reverse(entry.marked),
                 std::cmp::Reverse(super::api_helpers::tab_attention_priority(
                     entry.state,
                     entry.seen,
@@ -178,7 +179,10 @@ fn validate_field_value(field: &AgentViewField, value: &AgentViewValue) -> Resul
         (_, AgentViewValue::Context { .. }) => {
             Err("agent view context type does not match the selected field".to_string())
         }
-        (AgentViewField::Builtin(AgentViewBuiltinField::Seen), AgentViewValue::Bool(_))
+        (
+            AgentViewField::Builtin(AgentViewBuiltinField::Seen | AgentViewBuiltinField::Marked),
+            AgentViewValue::Bool(_),
+        )
         | (
             AgentViewField::Builtin(AgentViewBuiltinField::StateChangeSeq),
             AgentViewValue::Number(_),
@@ -315,6 +319,7 @@ fn builtin_field_value(
         AgentViewBuiltinField::PaneId => public_pane_id(app, entry).map(EvalValue::String),
         AgentViewBuiltinField::Agent => entry.agent_kind_label.clone().map(EvalValue::String),
         AgentViewBuiltinField::Seen => Some(EvalValue::Bool(entry.seen)),
+        AgentViewBuiltinField::Marked => Some(EvalValue::Bool(entry.marked)),
         AgentViewBuiltinField::StateChangeSeq => {
             entry.last_agent_state_change_seq.map(EvalValue::Number)
         }
@@ -377,6 +382,7 @@ fn sort_value(
                 entry.agent_kind_label.clone().map(EvalValue::String)
             }
             AgentViewBuiltinSortField::Seen => Some(EvalValue::Bool(entry.seen)),
+            AgentViewBuiltinSortField::Marked => Some(EvalValue::Bool(entry.marked)),
             AgentViewBuiltinSortField::StateChangeSeq => {
                 entry.last_agent_state_change_seq.map(EvalValue::Number)
             }

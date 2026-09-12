@@ -98,6 +98,8 @@ pub(crate) struct ClientShellConfig {
     pub(super) agents: crate::config::AgentsSidebarConfig,
     pub(super) agent_panel_sort: crate::config::AgentPanelSortConfig,
     pub(super) status_indicators: crate::config::StatusIndicatorStyle,
+    pub(super) agent_mark_indicator: String,
+    pub(super) agent_mark_color: ratatui::style::Color,
     pub(super) sound_enabled: bool,
     pub(super) toast_delivery: crate::config::ToastDelivery,
     pub(super) toast_delay_seconds: u64,
@@ -601,6 +603,7 @@ pub(super) enum ClientContextMenuAction {
     Zoom,
     ToggleRightClickPassthrough,
     ClosePane,
+    ToggleMark,
 }
 
 #[derive(Debug)]
@@ -622,6 +625,10 @@ pub(super) enum ClientContextMenuTarget {
         source_pane_id: Option<String>,
         has_manual_label: bool,
         right_click_passthrough: bool,
+    },
+    Agent {
+        pane_id: String,
+        marked: bool,
     },
 }
 
@@ -685,6 +692,15 @@ impl ClientShellOverlay {
 #[derive(Debug)]
 pub(super) enum PendingEndpointKind {
     Generic,
+    /// A `pane.mark.set` whose value was already written into the local
+    /// projection, carrying the value to restore if the server refuses it.
+    /// `previous` tracks the last server-confirmed mark rather than the
+    /// projection, so overlapping requests never restore an optimistic value.
+    MarkSet {
+        pane_id: String,
+        requested: bool,
+        previous: bool,
+    },
     ProductAnnouncementDismiss {
         version: String,
         id: String,
@@ -745,6 +761,17 @@ pub(super) struct PendingEndpointRequest {
     pub(super) method_name: String,
     pub(super) confirmation_workspace_id: Option<String>,
     pub(super) kind: PendingEndpointKind,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct PendingAgentMark {
+    /// What the newest in-flight request asked the server for.
+    pub(super) requested: bool,
+    /// The newest value a snapshot carried while a request was in flight, which
+    /// is what the optimistic write covered up. Restoring it once the last
+    /// request settles is the only way another client's change survives: an
+    /// unchanged server issues no further snapshot to correct us.
+    pub(super) server: Option<bool>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -981,6 +1008,11 @@ pub(crate) struct ClientShellState {
     pub(super) popup_pending_deadline: Option<std::time::Instant>,
     pub(super) next_request_id: u64,
     pub(super) pending_requests: HashMap<String, PendingEndpointRequest>,
+    /// Marks this client has asked for but not yet had answered, per pane.
+    /// Every snapshot rebuilds the projection wholesale, so without this a
+    /// snapshot landing between two toggles would resurface the server value
+    /// and make the next toggle repeat a request instead of undoing it.
+    pub(super) pending_agent_marks: HashMap<String, PendingAgentMark>,
     pub(super) pending_integration_installs: usize,
     pub(super) pending_notifications: Vec<ClientPendingNotification>,
     pub(super) visible_notification: Option<ClientVisibleNotification>,
@@ -1137,6 +1169,7 @@ impl ClientShellState {
             popup_pending_deadline: None,
             next_request_id: 1,
             pending_requests: HashMap::new(),
+            pending_agent_marks: HashMap::new(),
             pending_integration_installs: 0,
             pending_notifications: Vec::new(),
             visible_notification: None,
@@ -1580,6 +1613,7 @@ impl ClientShellState {
             }
         }
         self.snapshot = Some(snapshot);
+        self.reapply_pending_agent_marks();
         let pending_surface = self.pending_pane_surface.take();
         if let Some(surface) = pending_surface {
             let matching = self.snapshot.as_ref().is_some_and(|snapshot| {

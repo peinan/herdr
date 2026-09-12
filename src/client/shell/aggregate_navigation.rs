@@ -76,6 +76,7 @@ pub(super) fn aggregate_agent_rows(
         rows.sort_by_key(|row| {
             (
                 row.endpoint.stale(),
+                std::cmp::Reverse(row.agent.marked),
                 std::cmp::Reverse(status_priority(row.agent.agent_status)),
                 std::cmp::Reverse(row.recency),
             )
