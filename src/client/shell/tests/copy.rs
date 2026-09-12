@@ -2160,3 +2160,50 @@ fn a_popup_screen_switch_drops_the_selection() {
         "an alternate screen switch must drop the selection"
     );
 }
+
+/// A direct graphics transfer moves the pending frame onto the ordered lane and
+/// frees the render slot, so a second frame is accepted while the first is still
+/// queued. Both reports then arrive ahead of both frames, and the older frame
+/// still has to find its own.
+#[test]
+fn two_staged_popup_reports_each_find_their_frame() {
+    let mut state = popup_state_with_drag_selection();
+
+    // Both reports land before either surface does.
+    let mut first = popup_surface_metrics(2, 0, 0, 3);
+    first.content_revision = 2;
+    let mut second = popup_surface_metrics(3, 4, 7, 3);
+    second.content_revision = 4;
+    state.apply_popup_surface_metrics(&first);
+    state.apply_popup_surface_metrics(&second);
+
+    // The older frame must still be paired with its own report.
+    state.set_pane_surface(popup_surface_with_lines(2, ["keep-me", "noise-b", ""]));
+    assert_eq!(
+        state
+            .popup_metrics_for("terminal-popup")
+            .map(|metrics| metrics.content_revision),
+        Some(2),
+        "the older frame must commit the report stamped for it"
+    );
+    assert!(
+        state.selection.is_some(),
+        "and its selection must survive, since the selected cells did not move"
+    );
+
+    // Then the newer frame commits its own.
+    state.set_pane_surface(popup_surface_with_lines(3, ["keep-me", "noise-b", ""]));
+    assert_eq!(
+        state
+            .popup_metrics_for("terminal-popup")
+            .map(|metrics| metrics.content_revision),
+        Some(4)
+    );
+    assert_eq!(
+        state
+            .popup_metrics_for("terminal-popup")
+            .and_then(|metrics| metrics.scroll)
+            .map(|scroll| scroll.offset_from_bottom),
+        Some(4)
+    );
+}

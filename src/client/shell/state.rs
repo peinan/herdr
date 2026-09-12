@@ -999,8 +999,14 @@ pub(crate) struct ClientShellState {
     /// popup copy mode and popup selection rather than letting them run on
     /// metrics from another frame.
     pub(super) popup_metrics: Option<ClientPopupMetrics>,
-    /// The latest metrics report, held until the frame it is stamped for arrives.
-    pending_popup_metrics: Option<crate::protocol::endpoint::PopupSurfaceMetrics>,
+    /// Metrics reports held until the frames they are stamped for arrive.
+    ///
+    /// More than one can be outstanding: a direct graphics transfer moves the
+    /// pending frame onto the ordered lane and frees the render slot, so a second
+    /// frame is accepted while the first is still queued. Both reports then reach
+    /// the client ahead of both frames, and keeping only the newest would strand
+    /// the older frame without its pair.
+    pending_popup_metrics: VecDeque<crate::protocol::endpoint::PopupSurfaceMetrics>,
     pub(super) sidebar_collapsed: bool,
     pub(super) sidebar_collapsed_manual: bool,
     pub(super) sidebar_width: u16,
@@ -1160,7 +1166,7 @@ impl ClientShellState {
             },
             popup_terminal_id: None,
             popup_metrics: None,
-            pending_popup_metrics: None,
+            pending_popup_metrics: VecDeque::new(),
             sidebar_collapsed,
             sidebar_collapsed_manual: preferences.sidebar_collapsed.is_some(),
             sidebar_width,
@@ -1363,7 +1369,24 @@ impl ClientShellState {
         &mut self,
         metrics: &crate::protocol::endpoint::PopupSurfaceMetrics,
     ) {
-        self.pending_popup_metrics = Some(metrics.clone());
+        // Two frames can be in flight at once, and nothing beyond that: the
+        // render slot holds one and the ordered lane takes the one it displaces.
+        const MAX_STAGED: usize = 4;
+        self.pending_popup_metrics.push_back(metrics.clone());
+        while self.pending_popup_metrics.len() > MAX_STAGED {
+            self.pending_popup_metrics.pop_front();
+        }
+    }
+
+    /// The staged report stamped for one surface frame, if it is still held.
+    fn staged_popup_metrics(
+        &self,
+        terminal_id: &str,
+        surface_revision: u64,
+    ) -> Option<&crate::protocol::endpoint::PopupSurfaceMetrics> {
+        self.pending_popup_metrics.iter().find(|metrics| {
+            metrics.terminal_id == terminal_id && metrics.surface_revision == surface_revision
+        })
     }
 
     /// Commits the staged metrics against the surface frame now being applied.
@@ -1375,21 +1398,26 @@ impl ClientShellState {
     /// leaves the metrics unset, which disables popup copy mode and popup
     /// selection until a matching pair arrives.
     fn commit_popup_surface_metrics(&mut self, surface: &PaneSurfaceFrame) {
-        let committed = surface.popup.as_deref().and_then(|popup| {
-            let staged = self.pending_popup_metrics.as_ref()?;
-            (staged.surface_revision == surface.surface_revision
-                && staged.terminal_id == popup.terminal_id)
-                .then(|| ClientPopupMetrics {
-                    terminal_id: staged.terminal_id.clone(),
-                    scroll: staged.scroll,
-                    content_revision: staged.content_revision,
-                    alternate_screen_active: staged.alternate_screen_active,
-                })
+        let matched = surface.popup.as_deref().and_then(|popup| {
+            self.pending_popup_metrics.iter().position(|metrics| {
+                metrics.terminal_id == popup.terminal_id
+                    && metrics.surface_revision == surface.surface_revision
+            })
         });
-        if committed.is_some() {
-            self.pending_popup_metrics = None;
-        }
-        self.popup_metrics = committed;
+        self.popup_metrics = matched.map(|index| {
+            // Anything staged before this frame belongs to one already superseded.
+            self.pending_popup_metrics.drain(..index);
+            let staged = self
+                .pending_popup_metrics
+                .pop_front()
+                .expect("the matched report");
+            ClientPopupMetrics {
+                terminal_id: staged.terminal_id,
+                scroll: staged.scroll,
+                content_revision: staged.content_revision,
+                alternate_screen_active: staged.alternate_screen_active,
+            }
+        });
     }
 
     /// The committed popup metrics, but only when they describe `terminal_id`.
@@ -1406,7 +1434,7 @@ impl ClientShellState {
         self.input_leases = ClientInputLeases::default();
         self.popup_terminal_id = None;
         self.popup_metrics = None;
-        self.pending_popup_metrics = None;
+        self.pending_popup_metrics.clear();
         self.chrome_drag = None;
         self.workspace_press = None;
         self.tab_press = None;
@@ -1882,10 +1910,8 @@ impl ClientShellState {
                 // The committed metrics still describe the frame on screen; the
                 // staged report is the one this surface is paired with.
                 let previous_metrics = self.popup_metrics_for(&selection.pane_id);
-                let next_metrics = self.pending_popup_metrics.as_ref().filter(|metrics| {
-                    metrics.terminal_id == selection.pane_id
-                        && metrics.surface_revision == surface.surface_revision
-                });
+                let next_metrics =
+                    self.staged_popup_metrics(&selection.pane_id, surface.surface_revision);
                 let (Some(previous_metrics), Some(next_metrics)) = (previous_metrics, next_metrics)
                 else {
                     // No report paired with this frame means the rows cannot be

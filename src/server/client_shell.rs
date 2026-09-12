@@ -457,6 +457,10 @@ fn render_popup_surface(
             max_offset_from_bottom: metrics.max_offset_from_bottom as u64,
             viewport_rows: metrics.viewport_rows as u64,
         });
+    // Inside the bracket: a switch arrives as PTY bytes, so reading it before the
+    // closing sequence lets a concurrent one mark the revision odd instead of
+    // pairing old pixels with the new screen.
+    let alternate_screen_active = runtime.alternate_screen_active();
     let content_revision_after = runtime.content_seq();
     let content_revision = if content_revision_after == content_revision_before
         && content_revision_after.is_multiple_of(2)
@@ -496,7 +500,7 @@ fn render_popup_surface(
             surface_revision: 0,
             terminal_id: popup.terminal_id.to_string(),
             content_revision,
-            alternate_screen_active: runtime.alternate_screen_active(),
+            alternate_screen_active,
             scroll,
         },
     ))
