@@ -2529,18 +2529,14 @@ async fn popup_surface_metrics_reach_only_v2_clients() {
         let popup = surface.popup.as_deref().expect("popup terminal surface");
         assert_eq!(popup.terminal_id, popup_terminal_id.as_str());
 
-        let mut metrics = None;
-        while let Ok(message) = control_rx.try_recv() {
-            let ServerMessage::EndpointControl { kind, data } = read_server_message(message) else {
-                continue;
-            };
-            if kind == crate::protocol::endpoint::POPUP_SURFACE_METRICS_KIND {
-                metrics = Some(
-                    serde_json::from_str::<crate::protocol::endpoint::PopupSurfaceMetrics>(&data)
-                        .expect("popup metrics json"),
-                );
-            }
-        }
+        // A v2 client gets its report promptly; a v1 client must still get none
+        // after a wait long enough for one to have arrived.
+        let timeout = if surface_v2 {
+            Duration::from_secs(5)
+        } else {
+            Duration::from_millis(500)
+        };
+        let metrics = wait_for_popup_metrics(&control_rx, timeout);
         (metrics, surface.surface_revision.to_string())
     }
 
@@ -2558,6 +2554,30 @@ async fn popup_surface_metrics_reach_only_v2_clients() {
         v1_metrics.is_none(),
         "a generation-1 client must not receive the v2 popup metrics control"
     );
+}
+
+/// Waits for the popup metrics control, or gives up at the deadline.
+///
+/// The test writer forwards control messages on a background thread while render
+/// frames bypass the queue entirely, so receiving a surface says nothing about
+/// whether its control has been handed over yet. A non-blocking drain here races
+/// that thread.
+fn wait_for_popup_metrics(
+    control_rx: &std::sync::mpsc::Receiver<Vec<u8>>,
+    timeout: Duration,
+) -> Option<crate::protocol::endpoint::PopupSurfaceMetrics> {
+    let deadline = std::time::Instant::now() + timeout;
+    while let Some(remaining) = deadline.checked_duration_since(std::time::Instant::now()) {
+        let Ok(message) = control_rx.recv_timeout(remaining) else {
+            break;
+        };
+        if let ServerMessage::EndpointControl { kind, data } = read_server_message(message) {
+            if kind == crate::protocol::endpoint::POPUP_SURFACE_METRICS_KIND {
+                return serde_json::from_str(&data).ok();
+            }
+        }
+    }
+    None
 }
 
 /// Pins that the metrics travel with the frame and report the revision the
@@ -2601,17 +2621,8 @@ async fn popup_metrics_travel_with_the_frame_and_report_its_revision() {
 
     server.render_and_stream();
     let _surface = render_rx.recv().expect("popup surface");
-    let mut metrics = None;
-    while let Ok(message) = control_rx.try_recv() {
-        if let ServerMessage::EndpointControl { kind, data } = read_server_message(message) {
-            if kind == crate::protocol::endpoint::POPUP_SURFACE_METRICS_KIND {
-                metrics =
-                    serde_json::from_str::<crate::protocol::endpoint::PopupSurfaceMetrics>(&data)
-                        .ok();
-            }
-        }
-    }
-    let metrics = metrics.expect("popup metrics");
+    let metrics =
+        wait_for_popup_metrics(&control_rx, Duration::from_secs(5)).expect("popup metrics");
     assert_eq!(metrics.terminal_id, popup_terminal_id.as_str());
     assert!(
         metrics.content_revision.is_multiple_of(2),
