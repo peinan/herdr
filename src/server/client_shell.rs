@@ -248,6 +248,10 @@ pub(super) struct RenderedPaneSurface {
     pub(super) panes: Vec<protocol::PaneSurfacePane>,
     pub(super) splits: Vec<protocol::PaneSurfaceSplit>,
     pub(super) popup: Option<Box<protocol::ClientShellPopupSurface>>,
+    /// Popup terminal facts read across the same render as `popup`, so they
+    /// describe the buffer these pixels came from. Unstamped: the surface
+    /// revision is assigned when the frame is prepared.
+    pub(super) popup_metrics: Option<crate::protocol::endpoint::PopupSurfaceMetrics>,
     pub(super) graphics: protocol::SurfaceGraphicsScene,
     pub(super) graphics_delivery: crate::kitty_graphics::surface::DeliveryCache,
 }
@@ -392,28 +396,44 @@ pub(super) fn render_pane_surface(
         app,
         &layout.pane_infos,
         &layout.split_borders,
-        popup.as_deref(),
+        popup.as_ref().map(|(popup, _)| popup.as_ref()),
         target,
         cell_size,
         graphics_delivery,
         client_id,
     );
+    let (popup, popup_metrics) = match popup {
+        Some((popup, metrics)) => (Some(popup), Some(metrics)),
+        None => (None, None),
+    };
     RenderedPaneSurface {
         frame: FrameData::from_ratatui_buffer_with_hyperlinks(&buffer, cursor, &hyperlinks),
         panes,
         splits,
         popup,
+        popup_metrics,
         graphics,
         graphics_delivery: next_graphics_delivery,
     }
 }
 
+/// Renders the popup and reads its terminal facts across the same render.
+///
+/// The metrics have to bracket the render the way the pane path does: a popup
+/// that writes while its pixels are being collected would otherwise be
+/// described by a content revision and scroll offset from a different buffer,
+/// and a client maps viewport rows onto absolute rows through that offset. When
+/// the buffer moves the revision is returned odd, which makes every
+/// revision-checked endpoint reject it instead of extracting the wrong rows.
 fn render_popup_surface(
     app: &app::App,
     area: Rect,
     resize_runtime: bool,
     cell_size: crate::kitty_graphics::HostCellSize,
-) -> Option<Box<protocol::ClientShellPopupSurface>> {
+) -> Option<(
+    Box<protocol::ClientShellPopupSurface>,
+    crate::protocol::endpoint::PopupSurfaceMetrics,
+)> {
     let popup = app.state.popup_pane.as_ref()?;
     let geometry = if resize_runtime {
         resize_popup_runtime(app, area, cell_size)?
@@ -427,8 +447,28 @@ fn render_popup_surface(
     };
     let runtime = app.terminal_runtimes.get(&popup.terminal_id)?;
     let content_area = Rect::new(0, 0, geometry.inner.width, geometry.inner.height);
+    let content_revision_before = runtime.content_seq();
     let (buffer, cursor) =
         crate::server::render_stream::render_terminal_virtual(runtime, content_area);
+    let scroll = runtime
+        .scroll_metrics()
+        .map(|metrics| protocol::PaneSurfaceScrollMetrics {
+            offset_from_bottom: metrics.offset_from_bottom as u64,
+            max_offset_from_bottom: metrics.max_offset_from_bottom as u64,
+            viewport_rows: metrics.viewport_rows as u64,
+        });
+    // Inside the bracket: a switch arrives as PTY bytes, so reading it before the
+    // closing sequence lets a concurrent one mark the revision odd instead of
+    // pairing old pixels with the new screen.
+    let alternate_screen_active = runtime.alternate_screen_active();
+    let content_revision_after = runtime.content_seq();
+    let content_revision = if content_revision_after == content_revision_before
+        && content_revision_after.is_multiple_of(2)
+    {
+        content_revision_after
+    } else {
+        content_revision_after | 1
+    };
     let hyperlinks = runtime.visible_hyperlinks(content_area);
     let title = app
         .state
@@ -444,17 +484,26 @@ fn render_popup_surface(
     } else {
         (0, 0)
     };
-    Some(Box::new(protocol::ClientShellPopupSurface {
-        terminal_id: popup.terminal_id.to_string(),
-        title,
-        width: popup.width.map(client_popup_size),
-        height: popup.height.map(client_popup_size),
-        frame: FrameData::from_ratatui_buffer_with_hyperlinks(&buffer, cursor, &hyperlinks),
-        mouse_reporting: runtime.mouse_reporting_enabled(),
-        sgr_pixel_mouse: runtime.sgr_pixel_mouse_enabled(),
-        pixel_width,
-        pixel_height,
-    }))
+    Some((
+        Box::new(protocol::ClientShellPopupSurface {
+            terminal_id: popup.terminal_id.to_string(),
+            title,
+            width: popup.width.map(client_popup_size),
+            height: popup.height.map(client_popup_size),
+            frame: FrameData::from_ratatui_buffer_with_hyperlinks(&buffer, cursor, &hyperlinks),
+            mouse_reporting: runtime.mouse_reporting_enabled(),
+            sgr_pixel_mouse: runtime.sgr_pixel_mouse_enabled(),
+            pixel_width,
+            pixel_height,
+        }),
+        crate::protocol::endpoint::PopupSurfaceMetrics {
+            surface_revision: 0,
+            terminal_id: popup.terminal_id.to_string(),
+            content_revision,
+            alternate_screen_active,
+            scroll,
+        },
+    ))
 }
 
 pub(super) fn resize_popup_runtime(

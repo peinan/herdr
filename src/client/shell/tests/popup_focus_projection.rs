@@ -107,6 +107,7 @@ fn modal_paste_target_requires_a_focused_editable_client_field() {
     state.overlay = None;
     state.copy_mode = Some(ClientCopyModeState {
         pane_id: "pane_1".into(),
+        popup: false,
         content_revision: 0,
         geometry: (80, 24),
         cursor: crate::api::schema::PaneTextPoint { row: 0, col: 0 },
@@ -211,10 +212,18 @@ fn client_composes_popup_terminal_content_inside_client_owned_chrome() {
 fn popup_owns_keys_text_paste_and_mouse_before_shell_controls() {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
     state.set_snapshot(Box::new(snapshot()));
+    // Metrics are available, so nothing below is falling back for lack of them:
+    // a popup app that asked for mouse reporting keeps every mouse event.
+    state.apply_popup_surface_metrics(&popup_surface_metrics(1, 0, 0, 3));
     state.set_pane_surface(surface_with_popup());
     state.compose(106, 20).expect("popup frame");
+    assert!(state
+        .hits
+        .popup
+        .as_ref()
+        .is_some_and(|popup| popup.scroll.is_some() && popup.mouse_reporting));
 
-    for bytes in [b"x".as_slice(), b"\x02".as_slice(), b"\x1b".as_slice()] {
+    for bytes in [b"x".as_slice(), b"\x1b".as_slice()] {
         let input = state.handle_input_bytes(bytes);
         assert!(matches!(
             &input.requests[..],
@@ -223,6 +232,34 @@ fn popup_owns_keys_text_paste_and_mouse_before_shell_controls() {
         ));
         assert_eq!(state.mode, ClientShellMode::Terminal);
     }
+
+    // The prefix is the one key the shell keeps, so prefix actions such as copy
+    // mode stay reachable while the popup holds input.
+    let prefix = state.handle_input_bytes(b"\x02");
+    assert!(prefix.requests.is_empty());
+    assert_eq!(state.mode, ClientShellMode::Prefix);
+    // Pressing it twice sends the literal prefix to the popup, not to a pane. A
+    // shell whose prefix is the readline chord the popup needs (ctrl+a, say) is
+    // unusable without this escape hatch.
+    let literal = state.handle_input_bytes(b"\x02");
+    assert!(
+        matches!(
+            &literal.requests[..],
+            [ClientMessage::ClientShellPopupInput { terminal_id, events }]
+                if terminal_id == "terminal-popup"
+                    && matches!(
+                        &events[..],
+                        [ClientPaneInputEvent::Key { code, modifiers, .. }]
+                            if *code == crate::protocol::ClientKeyCode::Char('b')
+                                && *modifiers
+                                    & crossterm::event::KeyModifiers::CONTROL.bits()
+                                    != 0
+                    )
+        ),
+        "the second prefix press must reach the popup as the prefix key itself, got {:?}",
+        literal.requests
+    );
+    assert_eq!(state.mode, ClientShellMode::Terminal);
 
     let text = state.handle_raw_events(vec![RawInputEvent::Text(crate::input::TextCommit::new(
         "ime",
@@ -260,6 +297,33 @@ fn popup_owns_keys_text_paste_and_mouse_before_shell_controls() {
     assert!(state.pane_mouse_gesture.is_some());
     state.set_pane_surface(surface());
     assert!(state.pane_mouse_gesture.is_none());
+}
+
+#[test]
+fn a_popup_shell_sub_mode_keeps_keys_text_and_paste_from_the_popup() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.apply_popup_surface_metrics(&popup_surface_metrics(1, 0, 0, 3));
+    state.set_pane_surface(surface_with_popup());
+    state.compose(106, 20).expect("popup frame");
+
+    let mut outcome = ClientShellInput::default();
+    assert!(state.enter_copy_mode(&mut outcome));
+    assert_eq!(state.mode, ClientShellMode::Copy);
+
+    // Copy-mode navigation is interpreted by the shell, never forwarded.
+    let key = state.handle_input_bytes(b"k");
+    assert!(key
+        .requests
+        .iter()
+        .all(|request| !matches!(request, ClientMessage::ClientShellPopupInput { .. })));
+
+    let text = state.handle_raw_events(vec![RawInputEvent::Text(crate::input::TextCommit::new(
+        "ime",
+    ))]);
+    assert!(text.requests.is_empty());
+    let paste = state.handle_raw_events(vec![RawInputEvent::Paste("paste".into())]);
+    assert!(paste.requests.is_empty());
 }
 
 #[test]
@@ -1223,4 +1287,234 @@ fn retained_surface_patch_rejects_stale_base_without_mutating_surface() {
     });
     assert!(matches!(outcome, ClientPaneSurfacePatchOutcome::Rejected));
     assert_eq!(state.pane_surface, before);
+}
+
+/// Prefix actions reach the shell while a popup is open, so a client modal can
+/// now be opened over one. It has to receive its own keys — otherwise it can be
+/// neither used nor dismissed, because every key goes to the popup's process.
+#[test]
+fn a_modal_over_the_popup_owns_the_keyboard_and_closes_on_esc() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.apply_popup_surface_metrics(&popup_surface_metrics(1, 0, 0, 3));
+    state.set_pane_surface(surface_with_popup());
+    state.compose(106, 20).expect("popup frame");
+
+    let mut open = ClientShellInput::default();
+    state.record_binding(
+        crate::input::KeybindMatch::Action(crate::input::KeybindAction::Help),
+        &mut open,
+    );
+    assert!(matches!(state.overlay, Some(ClientShellOverlay::Help(_))));
+
+    // Ordinary keys drive the modal's search box, not the popup terminal.
+    let typed = state.handle_input_bytes(b"/");
+    assert!(
+        typed
+            .requests
+            .iter()
+            .all(|request| !matches!(request, ClientMessage::ClientShellPopupInput { .. })),
+        "modal keys must not reach the popup, got {:?}",
+        typed.requests
+    );
+    let text = state.handle_raw_events(vec![RawInputEvent::Text(crate::input::TextCommit::new(
+        "pane",
+    ))]);
+    assert!(
+        text.requests.is_empty(),
+        "modal text must not reach the popup, got {:?}",
+        text.requests
+    );
+    let paste = state.handle_raw_events(vec![RawInputEvent::Paste("pasted".into())]);
+    assert!(paste.requests.is_empty());
+
+    // Esc closes the search box, then the modal itself.
+    state.handle_input_bytes(b"\x1b");
+    assert!(matches!(state.overlay, Some(ClientShellOverlay::Help(_))));
+    let closed = state.handle_input_bytes(b"\x1b");
+    assert!(closed.repaint);
+    assert!(state.overlay.is_none(), "esc must close the modal");
+
+    // With the modal gone the popup gets its keys back.
+    let after = state.handle_input_bytes(b"x");
+    assert!(matches!(
+        &after.requests[..],
+        [ClientMessage::ClientShellPopupInput { terminal_id, .. }]
+            if terminal_id == "terminal-popup"
+    ));
+}
+
+/// The popup suppresses the modal paste shortcut, but a modal opened over one
+/// owns the keyboard and still needs it for its own text field.
+#[test]
+fn a_modal_over_the_popup_still_takes_the_paste_shortcut() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.apply_popup_surface_metrics(&popup_surface_metrics(1, 0, 0, 3));
+    state.set_pane_surface(surface_with_popup());
+    state.compose(106, 20).expect("popup frame");
+
+    // With only the popup up the shortcut stays with the popup terminal.
+    assert!(!state.modal_paste_target_active());
+
+    state.overlay = Some(ClientShellOverlay::Rename(ClientRenameOverlay {
+        title: "Rename workspace",
+        input: String::new(),
+        replace_on_type: false,
+        target: ClientRenameTarget::NewTab {
+            workspace_id: "w1".into(),
+            default_name: String::new(),
+        },
+    }));
+    assert!(
+        state.modal_paste_target_active(),
+        "a modal over the popup must still accept the paste shortcut"
+    );
+}
+
+/// herdr is mouse-first, so a modal opened over the popup has to receive clicks
+/// too — the popup guard further down the mouse path swallowed them.
+#[test]
+fn a_modal_over_the_popup_receives_mouse_events() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.apply_popup_surface_metrics(&popup_surface_metrics(1, 0, 0, 3));
+    state.set_pane_surface(surface_with_popup());
+    state.compose(106, 20).expect("popup frame");
+
+    let mut open = ClientShellInput::default();
+    state.record_binding(
+        crate::input::KeybindMatch::Action(crate::input::KeybindAction::Help),
+        &mut open,
+    );
+    state.compose(106, 30).expect("help overlay");
+    assert!(matches!(state.overlay, Some(ClientShellOverlay::Help(_))));
+
+    // Scrolling the modal must move the modal, not reach the popup terminal.
+    let scrolled =
+        state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 40,
+            row: 10,
+            modifiers: KeyModifiers::empty(),
+        })]);
+    assert!(
+        scrolled
+            .requests
+            .iter()
+            .all(|request| !matches!(request, ClientMessage::ClientShellPopupInput { .. })),
+        "modal mouse events must not reach the popup, got {:?}",
+        scrolled.requests
+    );
+    assert!(matches!(
+        state.overlay,
+        Some(ClientShellOverlay::Help(ClientHelpOverlay { scroll, .. })) if scroll > 0
+    ));
+}
+
+/// An image transfer is input too, so it follows the same base context as keys
+/// and text: a shell sub-mode or a modal owns it before the popup does.
+#[test]
+fn image_paste_obeys_the_popup_input_context() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.apply_popup_surface_metrics(&popup_surface_metrics(1, 0, 0, 3));
+    state.set_pane_surface(surface_with_popup());
+    state.compose(106, 20).expect("popup frame");
+
+    assert_eq!(
+        state.clipboard_image_target(),
+        Some(crate::protocol::ClientClipboardImageTarget::Popup(
+            "terminal-popup".into()
+        ))
+    );
+
+    // A shell sub-mode is interpreting input; the image must not slip past it.
+    state.mode = ClientShellMode::Prefix;
+    assert_eq!(state.clipboard_image_target(), None);
+    state.mode = ClientShellMode::Copy;
+    assert_eq!(state.clipboard_image_target(), None);
+    state.mode = ClientShellMode::Terminal;
+
+    state.overlay = Some(ClientShellOverlay::Rename(ClientRenameOverlay {
+        title: "Rename workspace",
+        input: String::new(),
+        replace_on_type: false,
+        target: ClientRenameTarget::NewTab {
+            workspace_id: "w1".into(),
+            default_name: String::new(),
+        },
+    }));
+    assert_eq!(state.clipboard_image_target(), None);
+}
+
+/// The popup's copy-search prompt is a shell text field even though no overlay
+/// is open, so the paste shortcut has to reach it.
+#[test]
+fn the_popup_copy_search_prompt_accepts_paste() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.apply_popup_surface_metrics(&popup_surface_metrics(1, 0, 0, 3));
+    state.set_pane_surface(surface_with_popup());
+    state.compose(106, 20).expect("popup frame");
+
+    let mut outcome = ClientShellInput::default();
+    assert!(state.enter_copy_mode(&mut outcome));
+    // Without a prompt open the popup still owns the shortcut.
+    assert!(!state.modal_paste_target_active());
+
+    state.handle_input_bytes(b"/");
+    assert!(state
+        .copy_mode
+        .as_ref()
+        .is_some_and(|copy_mode| copy_mode.search_prompt.is_some()));
+    assert!(
+        state.modal_paste_target_active(),
+        "the popup copy-search prompt must accept the paste shortcut"
+    );
+}
+
+/// The mobile workspace switcher takes the whole screen without opening an
+/// overlay, and composition drops the popup hit for it. The popup must not go
+/// on swallowing clicks that belong to it.
+#[test]
+fn the_mobile_switcher_over_a_popup_receives_clicks() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.apply_popup_surface_metrics(&popup_surface_metrics(1, 0, 0, 3));
+    state.set_pane_surface(surface_with_popup());
+
+    // A narrow viewport puts the shell in its mobile layout.
+    state.mode = ClientShellMode::Navigate;
+    state.compose(40, 20).expect("mobile switcher frame");
+    assert!(
+        state.hits.popup.is_none(),
+        "the switcher owns the screen, so the popup hit is dropped"
+    );
+    assert!(state.overlay.is_none(), "the switcher opens no overlay");
+    let target = state
+        .hits
+        .mobile_targets
+        .first()
+        .map(|(rect, _)| *rect)
+        .expect("a switcher target");
+
+    let clicked =
+        state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: target.x + 1,
+            row: target.y,
+            modifiers: KeyModifiers::empty(),
+        })]);
+    assert!(
+        clicked
+            .requests
+            .iter()
+            .all(|request| !matches!(request, ClientMessage::ClientShellPopupInput { .. })),
+        "the click belongs to the switcher, not the popup"
+    );
+    assert!(
+        clicked.repaint || !clicked.actions.is_empty(),
+        "the switcher must react to the click"
+    );
 }

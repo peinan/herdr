@@ -208,6 +208,46 @@ fn surface_with_popup() -> PaneSurfaceFrame {
     surface
 }
 
+/// The popup surface with a plain terminal that selects text instead of
+/// consuming mouse events.
+fn surface_with_selectable_popup() -> PaneSurfaceFrame {
+    let mut surface = surface_with_popup();
+    if let Some(popup) = surface.popup.as_deref_mut() {
+        popup.mouse_reporting = false;
+    }
+    surface
+}
+
+/// The same popup pixels under a later surface revision, as a scroll-only move
+/// produces.
+fn selectable_popup_surface_at_revision(surface_revision: u64) -> PaneSurfaceFrame {
+    PaneSurfaceFrame {
+        surface_revision,
+        ..surface_with_selectable_popup()
+    }
+}
+
+/// Popup terminal facts as the v2 surface codec reports them, stamped for the
+/// surface frame they must be committed against.
+fn popup_surface_metrics(
+    surface_revision: u64,
+    offset_from_bottom: u64,
+    max_offset_from_bottom: u64,
+    viewport_rows: u64,
+) -> crate::protocol::endpoint::PopupSurfaceMetrics {
+    crate::protocol::endpoint::PopupSurfaceMetrics {
+        surface_revision,
+        terminal_id: "terminal-popup".into(),
+        content_revision: 0,
+        alternate_screen_active: false,
+        scroll: Some(crate::protocol::PaneSurfaceScrollMetrics {
+            offset_from_bottom,
+            max_offset_from_bottom,
+            viewport_rows,
+        }),
+    }
+}
+
 mod agents_worktrees_notifications;
 mod chrome_context;
 mod copy;

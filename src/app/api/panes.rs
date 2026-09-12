@@ -225,28 +225,14 @@ impl App {
                 format!("pane not found: {}", params.pane_id),
             ));
         };
-        let before = runtime.content_seq();
-        if params
-            .content_revision
-            .is_some_and(|revision| revision != before || !before.is_multiple_of(2))
-        {
-            return Err(("stale_content", "pane content changed".to_owned()));
-        }
-        let selection = crate::selection::Selection::absolute_range(
+        selection_text_for(
+            runtime,
             pane_id,
-            (params.anchor.row, params.anchor.col),
-            (params.cursor.row, params.cursor.col),
-        );
-        let Some(text) = runtime.extract_selection(&selection) else {
-            return Err((
-                "selection_unavailable",
-                "selection text is unavailable".to_owned(),
-            ));
-        };
-        if params.content_revision.is_some() && runtime.content_seq() != before {
-            return Err(("stale_content", "pane content changed".to_owned()));
-        }
-        Ok(text)
+            params.anchor,
+            params.cursor,
+            params.content_revision,
+        )
+        .map_err(|(code, message)| (code, message.to_owned()))
     }
 
     pub(super) fn handle_pane_selection_read(
@@ -280,105 +266,23 @@ impl App {
         else {
             return pane_not_found(id, &params.pane_id);
         };
-        let before = runtime.content_seq();
-        if params
-            .content_revision
-            .is_some_and(|revision| revision != before || !before.is_multiple_of(2))
-        {
-            return encode_error(id, "stale_content", "pane content changed");
-        }
-        let target = match params.motion {
-            PaneCopyMotion::LineEnd | PaneCopyMotion::FirstNonBlank => {
-                let width = runtime
-                    .terminal_dimensions()
-                    .map_or(1, |(cols, _)| cols.max(1));
-                let selection = crate::selection::Selection::absolute_range(
-                    pane_id,
-                    (params.cursor.row, 0),
-                    (params.cursor.row, width.saturating_sub(1)),
-                );
-                let Some(text) = runtime.extract_selection(&selection) else {
-                    return encode_error(
-                        id,
-                        "copy_motion_unavailable",
-                        "terminal row is unavailable",
-                    );
-                };
-                let col = match params.motion {
-                    PaneCopyMotion::LineEnd => {
-                        crate::copy_mode::last_character_col(&text).unwrap_or(0)
-                    }
-                    PaneCopyMotion::FirstNonBlank => {
-                        crate::copy_mode::first_non_blank_col(&text).unwrap_or(0)
-                    }
-                    _ => unreachable!(),
-                };
-                crate::pane::TerminalTextPoint {
-                    row: params.cursor.row,
-                    col: col.min(width.saturating_sub(1)),
-                }
-            }
-            PaneCopyMotion::NextWordStart
-            | PaneCopyMotion::PreviousWordStart
-            | PaneCopyMotion::NextWordEnd
-            | PaneCopyMotion::NextBigWordStart
-            | PaneCopyMotion::PreviousBigWordStart
-            | PaneCopyMotion::NextBigWordEnd => {
-                let motion = match params.motion {
-                    PaneCopyMotion::NextWordStart => crate::pane::TerminalWordMotion::NextStart,
-                    PaneCopyMotion::PreviousWordStart => {
-                        crate::pane::TerminalWordMotion::PreviousStart
-                    }
-                    PaneCopyMotion::NextWordEnd => crate::pane::TerminalWordMotion::NextEnd,
-                    PaneCopyMotion::NextBigWordStart => {
-                        crate::pane::TerminalWordMotion::NextBigStart
-                    }
-                    PaneCopyMotion::PreviousBigWordStart => {
-                        crate::pane::TerminalWordMotion::PreviousBigStart
-                    }
-                    PaneCopyMotion::NextBigWordEnd => crate::pane::TerminalWordMotion::NextBigEnd,
-                    _ => unreachable!(),
-                };
-                runtime
-                    .word_motion_target(params.cursor.row, params.cursor.col, motion)
-                    .unwrap_or(crate::pane::TerminalTextPoint {
-                        row: params.cursor.row,
-                        col: params.cursor.col,
-                    })
-            }
-            PaneCopyMotion::PreviousParagraph | PaneCopyMotion::NextParagraph => runtime
-                .paragraph_motion_target(
-                    params.cursor.row,
-                    if params.motion == PaneCopyMotion::PreviousParagraph {
-                        -1
-                    } else {
-                        1
-                    },
-                )
-                .map(|target| crate::pane::TerminalTextPoint {
-                    row: target.row,
-                    col: params.cursor.col,
-                })
-                .unwrap_or(crate::pane::TerminalTextPoint {
-                    row: params.cursor.row,
-                    col: params.cursor.col,
-                }),
-        };
-        let after = runtime.content_seq();
-        if params.content_revision.is_some() && after != before {
-            return encode_error(id, "stale_content", "pane content changed");
-        }
-        encode_success(
-            id,
-            ResponseResult::PaneCopyMotion {
-                pane_id: params.pane_id,
-                cursor: crate::api::schema::PaneTextPoint {
-                    row: target.row,
-                    col: target.col,
+        match copy_motion_for(
+            runtime,
+            pane_id,
+            params.cursor,
+            params.motion,
+            params.content_revision,
+        ) {
+            Ok((cursor, content_revision)) => encode_success(
+                id,
+                ResponseResult::PaneCopyMotion {
+                    pane_id: params.pane_id,
+                    cursor,
+                    content_revision,
                 },
-                content_revision: after,
-            },
-        )
+            ),
+            Err((code, message)) => encode_error(id, code, message),
+        }
     }
 
     pub(super) fn handle_pane_copy_search(
@@ -395,74 +299,27 @@ impl App {
         else {
             return pane_not_found(id, &params.pane_id);
         };
-        const MAX_QUERY_BYTES: usize = 4096;
-        const MAX_RETURNED_MATCHES: usize = 1024;
-        if params.query.len() > MAX_QUERY_BYTES {
-            return encode_error(id, "query_too_large", "copy search query is too large");
-        }
-        let before = runtime.content_seq();
-        if before != params.content_revision || !before.is_multiple_of(2) {
-            return encode_error(id, "stale_content", "pane content changed");
-        }
-        let cursor = crate::pane::TerminalTextPoint {
-            row: params.cursor.row,
-            col: params.cursor.col,
-        };
-        let previous = params.previous.map(|previous| {
-            (
-                crate::pane::TerminalTextPoint {
-                    row: previous.start.row,
-                    col: previous.start.col,
-                },
-                crate::pane::TerminalTextPoint {
-                    row: previous.end.row,
-                    col: previous.end.col,
-                },
-            )
-        });
-        let direction = match params.direction {
-            PaneCopySearchDirection::Forward => crate::pane::TerminalSearchDirection::Forward,
-            PaneCopySearchDirection::Backward => crate::pane::TerminalSearchDirection::Backward,
-        };
-        let result = runtime.search_text_window(
+        match copy_search_for(
+            runtime,
             &params.query,
-            params.query.chars().any(char::is_uppercase),
-            direction,
-            cursor,
-            previous,
-            MAX_RETURNED_MATCHES,
-        );
-        let after = runtime.content_seq();
-        if after != before || !after.is_multiple_of(2) {
-            return encode_error(id, "stale_content", "pane content changed");
+            params.direction,
+            params.cursor,
+            params.content_revision,
+            params.previous,
+        ) {
+            Ok(outcome) => encode_success(
+                id,
+                ResponseResult::PaneCopySearch {
+                    pane_id: params.pane_id,
+                    content_revision: outcome.content_revision,
+                    matches: outcome.matches,
+                    total: outcome.total,
+                    current: outcome.current,
+                    current_global: outcome.current_global,
+                },
+            ),
+            Err((code, message)) => encode_error(id, code, message),
         }
-        let matches = result
-            .matches
-            .into_iter()
-            .map(|text_match| PaneTextRange {
-                start: PaneTextPoint {
-                    row: text_match.start.row,
-                    col: text_match.start.col,
-                },
-                end: PaneTextPoint {
-                    row: text_match.end.row,
-                    col: text_match.end.col,
-                },
-            })
-            .collect();
-        encode_success(
-            id,
-            ResponseResult::PaneCopySearch {
-                pane_id: params.pane_id,
-                content_revision: after,
-                matches,
-                total: u64::try_from(result.total).unwrap_or(u64::MAX),
-                current: result.current.and_then(|index| u32::try_from(index).ok()),
-                current_global: result
-                    .current_global
-                    .and_then(|index| u64::try_from(index).ok()),
-            },
-        )
     }
 
     pub(super) fn handle_pane_focus(&mut self, id: String, target: PaneTarget) -> String {
@@ -1970,6 +1827,214 @@ fn normalize_state_labels(
 
 fn pane_not_found(id: String, pane_id: &str) -> String {
     encode_error(id, "pane_not_found", format!("pane {pane_id} not found"))
+}
+
+/// Copy-mode failure as an API error code plus message.
+pub(super) type CopyModeError = (&'static str, &'static str);
+
+/// Terminal-independent result of one copy-mode search request.
+pub(super) struct CopySearchOutcome {
+    pub(super) content_revision: u64,
+    pub(super) matches: Vec<PaneTextRange>,
+    pub(super) total: u64,
+    pub(super) current: Option<u32>,
+    pub(super) current_global: Option<u64>,
+}
+
+/// Extracts selection text from one terminal runtime.
+///
+/// Shared by the workspace pane and popup copy-mode endpoints; the runtime is
+/// resolved by the caller because the popup belongs to no workspace.
+pub(super) fn selection_text_for(
+    runtime: &crate::terminal::TerminalRuntime,
+    pane_id: PaneId,
+    anchor: PaneTextPoint,
+    cursor: PaneTextPoint,
+    content_revision: Option<u64>,
+) -> Result<String, CopyModeError> {
+    let before = runtime.content_seq();
+    if content_revision.is_some_and(|revision| revision != before || !before.is_multiple_of(2)) {
+        return Err(("stale_content", "pane content changed"));
+    }
+    let selection = crate::selection::Selection::absolute_range(
+        pane_id,
+        (anchor.row, anchor.col),
+        (cursor.row, cursor.col),
+    );
+    let Some(text) = runtime.extract_selection(&selection) else {
+        return Err(("selection_unavailable", "selection text is unavailable"));
+    };
+    if content_revision.is_some() && runtime.content_seq() != before {
+        return Err(("stale_content", "pane content changed"));
+    }
+    Ok(text)
+}
+
+/// Resolves one copy-mode motion against a terminal runtime.
+pub(super) fn copy_motion_for(
+    runtime: &crate::terminal::TerminalRuntime,
+    pane_id: PaneId,
+    cursor: PaneTextPoint,
+    motion: PaneCopyMotion,
+    content_revision: Option<u64>,
+) -> Result<(PaneTextPoint, u64), CopyModeError> {
+    let before = runtime.content_seq();
+    if content_revision.is_some_and(|revision| revision != before || !before.is_multiple_of(2)) {
+        return Err(("stale_content", "pane content changed"));
+    }
+    let target = match motion {
+        PaneCopyMotion::LineEnd | PaneCopyMotion::FirstNonBlank => {
+            let width = runtime
+                .terminal_dimensions()
+                .map_or(1, |(cols, _)| cols.max(1));
+            let selection = crate::selection::Selection::absolute_range(
+                pane_id,
+                (cursor.row, 0),
+                (cursor.row, width.saturating_sub(1)),
+            );
+            let Some(text) = runtime.extract_selection(&selection) else {
+                return Err(("copy_motion_unavailable", "terminal row is unavailable"));
+            };
+            let col = match motion {
+                PaneCopyMotion::LineEnd => crate::copy_mode::last_character_col(&text).unwrap_or(0),
+                PaneCopyMotion::FirstNonBlank => {
+                    crate::copy_mode::first_non_blank_col(&text).unwrap_or(0)
+                }
+                _ => unreachable!(),
+            };
+            crate::pane::TerminalTextPoint {
+                row: cursor.row,
+                col: col.min(width.saturating_sub(1)),
+            }
+        }
+        PaneCopyMotion::NextWordStart
+        | PaneCopyMotion::PreviousWordStart
+        | PaneCopyMotion::NextWordEnd
+        | PaneCopyMotion::NextBigWordStart
+        | PaneCopyMotion::PreviousBigWordStart
+        | PaneCopyMotion::NextBigWordEnd => {
+            let motion = match motion {
+                PaneCopyMotion::NextWordStart => crate::pane::TerminalWordMotion::NextStart,
+                PaneCopyMotion::PreviousWordStart => crate::pane::TerminalWordMotion::PreviousStart,
+                PaneCopyMotion::NextWordEnd => crate::pane::TerminalWordMotion::NextEnd,
+                PaneCopyMotion::NextBigWordStart => crate::pane::TerminalWordMotion::NextBigStart,
+                PaneCopyMotion::PreviousBigWordStart => {
+                    crate::pane::TerminalWordMotion::PreviousBigStart
+                }
+                PaneCopyMotion::NextBigWordEnd => crate::pane::TerminalWordMotion::NextBigEnd,
+                _ => unreachable!(),
+            };
+            runtime
+                .word_motion_target(cursor.row, cursor.col, motion)
+                .unwrap_or(crate::pane::TerminalTextPoint {
+                    row: cursor.row,
+                    col: cursor.col,
+                })
+        }
+        PaneCopyMotion::PreviousParagraph | PaneCopyMotion::NextParagraph => runtime
+            .paragraph_motion_target(
+                cursor.row,
+                if motion == PaneCopyMotion::PreviousParagraph {
+                    -1
+                } else {
+                    1
+                },
+            )
+            .map(|target| crate::pane::TerminalTextPoint {
+                row: target.row,
+                col: cursor.col,
+            })
+            .unwrap_or(crate::pane::TerminalTextPoint {
+                row: cursor.row,
+                col: cursor.col,
+            }),
+    };
+    let after = runtime.content_seq();
+    if content_revision.is_some() && after != before {
+        return Err(("stale_content", "pane content changed"));
+    }
+    Ok((
+        PaneTextPoint {
+            row: target.row,
+            col: target.col,
+        },
+        after,
+    ))
+}
+
+/// Runs one copy-mode search window against a terminal runtime.
+pub(super) fn copy_search_for(
+    runtime: &crate::terminal::TerminalRuntime,
+    query: &str,
+    direction: PaneCopySearchDirection,
+    cursor: PaneTextPoint,
+    content_revision: u64,
+    previous: Option<PaneTextRange>,
+) -> Result<CopySearchOutcome, CopyModeError> {
+    const MAX_QUERY_BYTES: usize = 4096;
+    const MAX_RETURNED_MATCHES: usize = 1024;
+    if query.len() > MAX_QUERY_BYTES {
+        return Err(("query_too_large", "copy search query is too large"));
+    }
+    let before = runtime.content_seq();
+    if before != content_revision || !before.is_multiple_of(2) {
+        return Err(("stale_content", "pane content changed"));
+    }
+    let cursor = crate::pane::TerminalTextPoint {
+        row: cursor.row,
+        col: cursor.col,
+    };
+    let previous = previous.map(|previous| {
+        (
+            crate::pane::TerminalTextPoint {
+                row: previous.start.row,
+                col: previous.start.col,
+            },
+            crate::pane::TerminalTextPoint {
+                row: previous.end.row,
+                col: previous.end.col,
+            },
+        )
+    });
+    let direction = match direction {
+        PaneCopySearchDirection::Forward => crate::pane::TerminalSearchDirection::Forward,
+        PaneCopySearchDirection::Backward => crate::pane::TerminalSearchDirection::Backward,
+    };
+    let result = runtime.search_text_window(
+        query,
+        query.chars().any(char::is_uppercase),
+        direction,
+        cursor,
+        previous,
+        MAX_RETURNED_MATCHES,
+    );
+    let after = runtime.content_seq();
+    if after != before || !after.is_multiple_of(2) {
+        return Err(("stale_content", "pane content changed"));
+    }
+    let matches = result
+        .matches
+        .into_iter()
+        .map(|text_match| PaneTextRange {
+            start: PaneTextPoint {
+                row: text_match.start.row,
+                col: text_match.start.col,
+            },
+            end: PaneTextPoint {
+                row: text_match.end.row,
+                col: text_match.end.col,
+            },
+        })
+        .collect();
+    Ok(CopySearchOutcome {
+        content_revision: after,
+        matches,
+        total: u64::try_from(result.total).unwrap_or(u64::MAX),
+        current: result.current.and_then(|index| u32::try_from(index).ok()),
+        current_global: result
+            .current_global
+            .and_then(|index| u64::try_from(index).ok()),
+    })
 }
 
 impl App {

@@ -8,6 +8,7 @@ mod layouts;
 mod pane_graphics;
 mod panes;
 pub(crate) mod plugins;
+mod popup;
 pub(super) mod responses;
 mod session;
 mod tabs;
@@ -1197,6 +1198,16 @@ impl App {
                 } else {
                     responses::encode_error(request.id, "popup_not_open", "no popup is open")
                 };
+            }
+            Method::PopupScroll(params) => return self.handle_popup_scroll(request.id, params),
+            Method::PopupSelectionRead(params) => {
+                return self.handle_popup_selection_read(request.id, params)
+            }
+            Method::PopupCopyMotion(params) => {
+                return self.handle_popup_copy_motion(request.id, params)
+            }
+            Method::PopupCopySearch(params) => {
+                return self.handle_popup_copy_search(request.id, params)
             }
             Method::PaneSendKeys(params) => return self.handle_pane_send_keys(request.id, params),
             Method::IntegrationList(_) => {

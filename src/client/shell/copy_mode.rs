@@ -9,11 +9,52 @@ impl ClientShellState {
         self.copy_input_queue.clear();
     }
 
+    /// Identity of the surface copy mode acts on: the popup while one is open,
+    /// otherwise the focused pane.
+    pub(super) fn copy_mode_target_id(&self) -> Option<String> {
+        self.popup_terminal_id
+            .clone()
+            .or_else(|| self.focused_pane_id())
+    }
+
+    /// True when `id` addresses the live popup terminal rather than a pane.
+    pub(super) fn is_popup_target(&self, id: &str) -> bool {
+        self.popup_terminal_id.as_deref() == Some(id)
+    }
+
+    /// Content revision for a pane, or for the popup the revision that rides
+    /// beside the surface.
+    pub(super) fn target_content_revision(&self, id: &str) -> Option<u64> {
+        if self.is_popup_target(id) {
+            return self
+                .popup_metrics_for(id)
+                .map(|metrics| metrics.content_revision);
+        }
+        self.pane_surface
+            .as_ref()?
+            .panes
+            .iter()
+            .find(|pane| pane.pane_id == id)
+            .map(|pane| pane.content_revision)
+    }
+
+    /// Hit geometry for a pane or for the popup.
+    pub(super) fn target_hit(&self, id: &str) -> Option<PaneHit> {
+        if let Some(hit) = self.hits.popup.as_ref().filter(|hit| hit.pane_id == id) {
+            return Some(hit.clone());
+        }
+        self.hits
+            .panes
+            .iter()
+            .find(|hit| hit.pane_id == id)
+            .cloned()
+    }
+
     pub(super) fn enter_copy_mode(&mut self, outcome: &mut ClientShellInput) -> bool {
-        let pane_id = match self.focused_pane_id() {
-            Some(pane_id) => pane_id,
-            None => return false,
+        let Some(pane_id) = self.copy_mode_target_id() else {
+            return false;
         };
+        let popup = self.is_popup_target(&pane_id);
         if self
             .copy_mode
             .as_ref()
@@ -25,13 +66,7 @@ impl ClientShellState {
         if self.copy_mode.is_some() {
             self.exit_copy_mode(false, outcome);
         }
-        let Some(hit) = self
-            .hits
-            .panes
-            .iter()
-            .find(|hit| hit.pane_id == pane_id)
-            .cloned()
-        else {
+        let Some(hit) = self.target_hit(&pane_id) else {
             return false;
         };
         let Some(metrics) = hit.scroll else {
@@ -45,6 +80,25 @@ impl ClientShellState {
             .pane_surface
             .as_ref()
             .and_then(|surface| {
+                if popup {
+                    // The popup renders its own frame at origin, so its cursor is
+                    // already relative to the popup's content area.
+                    let popup_surface = surface
+                        .popup
+                        .as_deref()
+                        .filter(|popup_surface| popup_surface.terminal_id == pane_id)?;
+                    let cursor = popup_surface
+                        .frame
+                        .cursor
+                        .as_ref()
+                        .filter(|cursor| cursor.visible)?;
+                    return (cursor.x < popup_surface.frame.width
+                        && cursor.y < popup_surface.frame.height)
+                        .then_some(crate::api::schema::PaneTextPoint {
+                            row: viewport_top.saturating_add(u32::from(cursor.y)),
+                            col: cursor.x,
+                        });
+                }
                 let pane = surface.panes.iter().find(|pane| pane.pane_id == pane_id)?;
                 let cursor = surface
                     .frame
@@ -70,13 +124,10 @@ impl ClientShellState {
         self.stop_selection_autoscroll();
         self.selection_highlight_clear_deadline = None;
         self.reset_copy_pipeline();
-        let content_revision = self
-            .pane_surface
-            .as_ref()
-            .and_then(|surface| surface.panes.iter().find(|pane| pane.pane_id == pane_id))
-            .map_or(0, |pane| pane.content_revision);
+        let content_revision = self.target_content_revision(&pane_id).unwrap_or(0);
         self.copy_mode = Some(ClientCopyModeState {
             pane_id,
+            popup,
             content_revision,
             geometry: (hit.inner_rect.width, hit.inner_rect.height),
             cursor,
@@ -507,12 +558,8 @@ impl ClientShellState {
     }
 
     fn copy_hit(&self) -> Option<PaneHit> {
-        let pane_id = self.copy_mode.as_ref()?.pane_id.as_str();
-        self.hits
-            .panes
-            .iter()
-            .find(|hit| hit.pane_id == pane_id)
-            .cloned()
+        let pane_id = self.copy_mode.as_ref()?.pane_id.clone();
+        self.target_hit(&pane_id)
     }
 
     fn move_copy_cursor(&mut self, row_delta: i16, col_delta: i16, outcome: &mut ClientShellInput) {
@@ -738,17 +785,29 @@ impl ClientShellState {
             };
             let session_generation = self.copy_session_generation;
             let pane_id = copy_mode.pane_id.clone();
+            let popup = copy_mode.popup;
             let origin = copy_mode.cursor;
             let (method, kind) = match operation {
                 ClientCopyOperation::Motion(motion) => (
-                    crate::api::schema::Method::PaneCopyMotion(
-                        crate::api::schema::PaneCopyMotionParams {
-                            pane_id: pane_id.clone(),
-                            cursor: origin,
-                            motion,
-                            content_revision: Some(copy_mode.content_revision),
-                        },
-                    ),
+                    if popup {
+                        crate::api::schema::Method::PopupCopyMotion(
+                            crate::api::schema::PopupCopyMotionParams {
+                                terminal_id: pane_id.clone(),
+                                cursor: origin,
+                                motion,
+                                content_revision: Some(copy_mode.content_revision),
+                            },
+                        )
+                    } else {
+                        crate::api::schema::Method::PaneCopyMotion(
+                            crate::api::schema::PaneCopyMotionParams {
+                                pane_id: pane_id.clone(),
+                                cursor: origin,
+                                motion,
+                                content_revision: Some(copy_mode.content_revision),
+                            },
+                        )
+                    },
                     PendingEndpointKind::CopyMotion {
                         pane_id,
                         origin,
@@ -774,16 +833,29 @@ impl ClientShellState {
                         })
                         .flatten();
                     (
-                        crate::api::schema::Method::PaneCopySearch(
-                            crate::api::schema::PaneCopySearchParams {
-                                pane_id: pane_id.clone(),
-                                query: query.clone(),
-                                direction,
-                                cursor: origin,
-                                content_revision: copy_mode.content_revision,
-                                previous,
-                            },
-                        ),
+                        if popup {
+                            crate::api::schema::Method::PopupCopySearch(
+                                crate::api::schema::PopupCopySearchParams {
+                                    terminal_id: pane_id.clone(),
+                                    query: query.clone(),
+                                    direction,
+                                    cursor: origin,
+                                    content_revision: copy_mode.content_revision,
+                                    previous,
+                                },
+                            )
+                        } else {
+                            crate::api::schema::Method::PaneCopySearch(
+                                crate::api::schema::PaneCopySearchParams {
+                                    pane_id: pane_id.clone(),
+                                    query: query.clone(),
+                                    direction,
+                                    cursor: origin,
+                                    content_revision: copy_mode.content_revision,
+                                    previous,
+                                },
+                            )
+                        },
                         PendingEndpointKind::CopySearch {
                             pane_id,
                             origin,

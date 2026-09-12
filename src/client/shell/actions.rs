@@ -260,35 +260,53 @@ impl ClientShellState {
         }
     }
 
+    /// Builds a selection read for a pane or for the popup terminal.
+    fn selection_read_method(
+        &self,
+        id: String,
+        anchor: crate::api::schema::PaneTextPoint,
+        cursor: crate::api::schema::PaneTextPoint,
+        content_revision: Option<u64>,
+    ) -> crate::api::schema::Method {
+        if self.is_popup_target(&id) {
+            return crate::api::schema::Method::PopupSelectionRead(
+                crate::api::schema::PopupSelectionReadParams {
+                    terminal_id: id,
+                    anchor,
+                    cursor,
+                    content_revision,
+                },
+            );
+        }
+        crate::api::schema::Method::PaneSelectionRead(crate::api::schema::PaneSelectionReadParams {
+            pane_id: id,
+            anchor,
+            cursor,
+            content_revision,
+        })
+    }
+
     pub(super) fn request_selection_copy(&mut self, outcome: &mut ClientShellInput, live: bool) {
         let Some(selection) = self.selection.as_ref() else {
             return;
         };
         let pane_id = selection.pane_id.clone();
         let content_revision = self
-            .pane_surface
-            .as_ref()
-            .and_then(|surface| surface.panes.iter().find(|pane| pane.pane_id == pane_id))
-            .map(|pane| pane.content_revision)
+            .target_content_revision(&pane_id)
             // Read a manual mouse selection atomically from the live terminal. Output
             // between the displayed frame and this request must not reject the copy.
             .filter(|_| !live);
         let (anchor, cursor) = selection.ordered_cells();
+        let anchor = crate::api::schema::PaneTextPoint {
+            row: anchor.0,
+            col: anchor.1,
+        };
+        let cursor = crate::api::schema::PaneTextPoint {
+            row: cursor.0,
+            col: cursor.1,
+        };
         self.push_endpoint_method_with_kind(
-            crate::api::schema::Method::PaneSelectionRead(
-                crate::api::schema::PaneSelectionReadParams {
-                    pane_id,
-                    anchor: crate::api::schema::PaneTextPoint {
-                        row: anchor.0,
-                        col: anchor.1,
-                    },
-                    cursor: crate::api::schema::PaneTextPoint {
-                        row: cursor.0,
-                        col: cursor.1,
-                    },
-                    content_revision,
-                },
-            ),
+            self.selection_read_method(pane_id, anchor, cursor, content_revision),
             PendingEndpointKind::SelectionCopy,
             outcome,
         );
@@ -302,33 +320,22 @@ impl ClientShellState {
         outcome: &mut ClientShellInput,
     ) {
         let absolute_row = crate::selection::absolute_row_for_viewport(viewport_row, hit.scroll);
-        let content_revision = self
-            .pane_surface
-            .as_ref()
-            .and_then(|surface| {
-                surface
-                    .panes
-                    .iter()
-                    .find(|pane| pane.pane_id == hit.pane_id)
-            })
-            .map(|pane| pane.content_revision);
+        let content_revision = self.target_content_revision(&hit.pane_id);
         self.word_selection_generation = self.word_selection_generation.saturating_add(1);
         let generation = self.word_selection_generation;
         self.pending_word_selection = Some(generation);
         if !self.push_endpoint_method_with_kind(
-            crate::api::schema::Method::PaneSelectionRead(
-                crate::api::schema::PaneSelectionReadParams {
-                    pane_id: hit.pane_id.clone(),
-                    anchor: crate::api::schema::PaneTextPoint {
-                        row: absolute_row,
-                        col: 0,
-                    },
-                    cursor: crate::api::schema::PaneTextPoint {
-                        row: absolute_row,
-                        col: hit.inner_rect.width.saturating_sub(1),
-                    },
-                    content_revision,
+            self.selection_read_method(
+                hit.pane_id.clone(),
+                crate::api::schema::PaneTextPoint {
+                    row: absolute_row,
+                    col: 0,
                 },
+                crate::api::schema::PaneTextPoint {
+                    row: absolute_row,
+                    col: hit.inner_rect.width.saturating_sub(1),
+                },
+                content_revision,
             ),
             PendingEndpointKind::WordSelection {
                 pane_id: hit.pane_id.clone(),
@@ -524,6 +531,7 @@ impl ClientShellState {
         let Some(pending) = self.pending_requests.remove(request_id) else {
             return (false, Vec::new());
         };
+        let result = fold_popup_copy_result(result);
         if pending.boot_id != boot_id
             || self
                 .snapshot
@@ -669,11 +677,14 @@ impl ClientShellState {
                 col,
                 generation,
             } => {
-                if self.pending_word_selection != Some(generation)
-                    || self.snapshot.as_deref().is_none_or(|snapshot| {
-                        !snapshot.panes.iter().any(|pane| pane.pane_id == pane_id)
-                    })
-                {
+                // The popup terminal is never in `snapshot.panes`, so it needs its
+                // own liveness test. Matching the current popup id also keeps a
+                // reply for a popup that has since been replaced from landing.
+                let target_is_live = self.is_popup_target(&pane_id)
+                    || self.snapshot.as_deref().is_some_and(|snapshot| {
+                        snapshot.panes.iter().any(|pane| pane.pane_id == pane_id)
+                    });
+                if self.pending_word_selection != Some(generation) || !target_is_live {
                     return (false, Vec::new());
                 }
                 self.pending_word_selection = None;
@@ -1171,4 +1182,46 @@ impl ClientShellState {
             _ => None,
         }
     }
+}
+
+/// Folds popup copy-mode results onto their pane-shaped equivalents.
+///
+/// The popup and pane endpoints differ only in how the target is addressed, so
+/// the pending-request handlers stay single-path for both.
+fn fold_popup_copy_result(
+    result: Result<crate::api::schema::ResponseResult, ClientShellEndpointError>,
+) -> Result<crate::api::schema::ResponseResult, ClientShellEndpointError> {
+    use crate::api::schema::ResponseResult;
+
+    Ok(match result? {
+        ResponseResult::PopupSelection { terminal_id, text } => ResponseResult::PaneSelection {
+            pane_id: terminal_id,
+            text,
+        },
+        ResponseResult::PopupCopyMotion {
+            terminal_id,
+            cursor,
+            content_revision,
+        } => ResponseResult::PaneCopyMotion {
+            pane_id: terminal_id,
+            cursor,
+            content_revision,
+        },
+        ResponseResult::PopupCopySearch {
+            terminal_id,
+            content_revision,
+            matches,
+            total,
+            current,
+            current_global,
+        } => ResponseResult::PaneCopySearch {
+            pane_id: terminal_id,
+            content_revision,
+            matches,
+            total,
+            current,
+            current_global,
+        },
+        other => other,
+    })
 }

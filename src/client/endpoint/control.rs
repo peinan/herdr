@@ -3,6 +3,7 @@ use super::ClientEndpointId;
 pub(crate) enum EndpointControlMessage {
     HealthPong,
     Snapshot(Box<crate::protocol::ClientShellSnapshot>),
+    PopupMetrics(crate::protocol::endpoint::PopupSurfaceMetrics),
     Ignored,
 }
 
@@ -17,6 +18,11 @@ pub(crate) fn decode_endpoint_control(
         let snapshot = serde_json::from_str(data)
             .map_err(|error| format!("invalid endpoint snapshot: {error}"))?;
         return Ok(EndpointControlMessage::Snapshot(Box::new(snapshot)));
+    }
+    if kind == crate::protocol::endpoint::POPUP_SURFACE_METRICS_KIND {
+        let metrics = serde_json::from_str(data)
+            .map_err(|error| format!("invalid popup surface metrics: {error}"))?;
+        return Ok(EndpointControlMessage::PopupMetrics(metrics));
     }
     if kind.starts_with("shell.snapshot.") {
         return Err(format!(

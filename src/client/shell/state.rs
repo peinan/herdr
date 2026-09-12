@@ -30,6 +30,68 @@ fn pane_surface_row<'a>(
         .get(start..start + usize::from(pane.inner_rect.width))
 }
 
+/// Cells of one absolute scrollback row as the popup currently shows it.
+///
+/// The popup renders its own frame at the origin, so unlike a pane its rows are
+/// not offset into the surface buffer.
+fn popup_surface_row(
+    popup: &crate::protocol::ClientShellPopupSurface,
+    scroll: Option<crate::protocol::PaneSurfaceScrollMetrics>,
+    absolute_row: u32,
+) -> Option<&[crate::protocol::CellData]> {
+    let viewport_top = scroll
+        .map(|scroll| {
+            scroll
+                .max_offset_from_bottom
+                .saturating_sub(scroll.offset_from_bottom) as u32
+        })
+        .unwrap_or(0);
+    let viewport_row = u16::try_from(absolute_row.checked_sub(viewport_top)?).ok()?;
+    if viewport_row >= popup.frame.height {
+        return None;
+    }
+    let start = usize::from(viewport_row) * usize::from(popup.frame.width);
+    popup
+        .frame
+        .cells
+        .get(start..start + usize::from(popup.frame.width))
+}
+
+/// Whether the selected cells still read the same in the popup.
+///
+/// The popup writes constantly in normal use, so a bare content revision change
+/// is not evidence that the selection moved; only the selected cells are.
+fn popup_selection_cells_unchanged(
+    selection: &crate::selection::Selection<String>,
+    previous_popup: &crate::protocol::ClientShellPopupSurface,
+    previous_scroll: Option<crate::protocol::PaneSurfaceScrollMetrics>,
+    next_popup: &crate::protocol::ClientShellPopupSurface,
+    next_scroll: Option<crate::protocol::PaneSurfaceScrollMetrics>,
+) -> bool {
+    let ((start_row, start_col), (end_row, end_col)) = selection.ordered_cells();
+    (start_row..=end_row).all(|row| {
+        let first_col = if row == start_row { start_col } else { 0 };
+        let last_col = if row == end_row {
+            end_col
+        } else {
+            previous_popup.frame.width.saturating_sub(1)
+        };
+        popup_surface_row(previous_popup, previous_scroll, row)
+            .zip(popup_surface_row(next_popup, next_scroll, row))
+            .and_then(|(previous, next)| {
+                previous
+                    .get(usize::from(first_col)..=usize::from(last_col))
+                    .zip(next.get(usize::from(first_col)..=usize::from(last_col)))
+            })
+            .is_some_and(|(previous, next)| {
+                previous
+                    .iter()
+                    .zip(next)
+                    .all(|(previous, next)| previous.symbol == next.symbol)
+            })
+    })
+}
+
 fn selection_cells_unchanged(
     selection: &crate::selection::Selection<String>,
     previous_surface: &PaneSurfaceFrame,
@@ -888,9 +950,23 @@ pub(super) struct ClientCopySearchResult {
     pub(super) current_global: Option<u64>,
 }
 
+/// Terminal facts about the open popup that the surface frame itself cannot
+/// carry. Present only while a popup is open on a server that speaks the v2
+/// surface codec; without it popup copy mode stays unavailable.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct ClientPopupMetrics {
+    pub(super) terminal_id: String,
+    pub(super) scroll: Option<crate::protocol::PaneSurfaceScrollMetrics>,
+    pub(super) content_revision: u64,
+    pub(super) alternate_screen_active: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct ClientCopyModeState {
+    /// Pane id, or the popup terminal id when `popup` is set.
     pub(super) pane_id: String,
+    /// True when `pane_id` addresses the popup terminal instead of a pane.
+    pub(super) popup: bool,
     pub(super) content_revision: u64,
     pub(super) geometry: (u16, u16),
     pub(super) cursor: crate::api::schema::PaneTextPoint,
@@ -919,6 +995,18 @@ pub(crate) struct ClientShellState {
     pub(super) graphics: crate::kitty_graphics::surface::ClientState,
     pub(super) graphics_cell_size: crate::kitty_graphics::HostCellSize,
     pub(super) popup_terminal_id: Option<String>,
+    /// Popup metrics for the surface frame currently on screen. `None` disables
+    /// popup copy mode and popup selection rather than letting them run on
+    /// metrics from another frame.
+    pub(super) popup_metrics: Option<ClientPopupMetrics>,
+    /// Metrics reports held until the frames they are stamped for arrive.
+    ///
+    /// More than one can be outstanding: a direct graphics transfer moves the
+    /// pending frame onto the ordered lane and frees the render slot, so a second
+    /// frame is accepted while the first is still queued. Both reports then reach
+    /// the client ahead of both frames, and keeping only the newest would strand
+    /// the older frame without its pair.
+    pending_popup_metrics: VecDeque<crate::protocol::endpoint::PopupSurfaceMetrics>,
     pub(super) sidebar_collapsed: bool,
     pub(super) sidebar_collapsed_manual: bool,
     pub(super) sidebar_width: u16,
@@ -1077,6 +1165,8 @@ impl ClientShellState {
                 height_px: 1,
             },
             popup_terminal_id: None,
+            popup_metrics: None,
+            pending_popup_metrics: VecDeque::new(),
             sidebar_collapsed,
             sidebar_collapsed_manual: preferences.sidebar_collapsed.is_some(),
             sidebar_width,
@@ -1261,12 +1351,90 @@ impl ClientShellState {
         }
     }
 
+    /// Stores the popup terminal facts that ride beside the surface on the v2
+    /// surface codec.
+    ///
+    /// They describe the popup terminal rather than one frame, so a report for a
+    /// popup this client no longer shows is simply dropped.
+    /// Stages a popup metrics report until its surface frame arrives.
+    ///
+    /// Applying it now would be wrong: a viewport row becomes an absolute
+    /// scrollback row through `max_offset_from_bottom - offset_from_bottom`, so
+    /// metrics from a newer frame than the one on screen resolve a selection to
+    /// the wrong rows. A scroll-only move leaves `content_revision` untouched, so
+    /// the endpoint's staleness guard would not catch it either — the copy would
+    /// just be silently wrong. `commit_popup_surface_metrics` pairs the report
+    /// with the frame it was stamped for instead.
+    pub(crate) fn apply_popup_surface_metrics(
+        &mut self,
+        metrics: &crate::protocol::endpoint::PopupSurfaceMetrics,
+    ) {
+        // Two frames can be in flight at once, and nothing beyond that: the
+        // render slot holds one and the ordered lane takes the one it displaces.
+        const MAX_STAGED: usize = 4;
+        self.pending_popup_metrics.push_back(metrics.clone());
+        while self.pending_popup_metrics.len() > MAX_STAGED {
+            self.pending_popup_metrics.pop_front();
+        }
+    }
+
+    /// The staged report stamped for one surface frame, if it is still held.
+    fn staged_popup_metrics(
+        &self,
+        terminal_id: &str,
+        surface_revision: u64,
+    ) -> Option<&crate::protocol::endpoint::PopupSurfaceMetrics> {
+        self.pending_popup_metrics.iter().find(|metrics| {
+            metrics.terminal_id == terminal_id && metrics.surface_revision == surface_revision
+        })
+    }
+
+    /// Commits the staged metrics against the surface frame now being applied.
+    ///
+    /// The server stamps every report with the revision of the one frame it
+    /// belongs to and only sends a report alongside that frame, so a match means
+    /// the metrics and the pixels come from the same server tick. Anything else —
+    /// no popup, no report, a report for a different frame or a different popup —
+    /// leaves the metrics unset, which disables popup copy mode and popup
+    /// selection until a matching pair arrives.
+    fn commit_popup_surface_metrics(&mut self, surface: &PaneSurfaceFrame) {
+        let matched = surface.popup.as_deref().and_then(|popup| {
+            self.pending_popup_metrics.iter().position(|metrics| {
+                metrics.terminal_id == popup.terminal_id
+                    && metrics.surface_revision == surface.surface_revision
+            })
+        });
+        self.popup_metrics = matched.map(|index| {
+            // Anything staged before this frame belongs to one already superseded.
+            self.pending_popup_metrics.drain(..index);
+            let staged = self
+                .pending_popup_metrics
+                .pop_front()
+                .expect("the matched report");
+            ClientPopupMetrics {
+                terminal_id: staged.terminal_id,
+                scroll: staged.scroll,
+                content_revision: staged.content_revision,
+                alternate_screen_active: staged.alternate_screen_active,
+            }
+        });
+    }
+
+    /// The committed popup metrics, but only when they describe `terminal_id`.
+    pub(super) fn popup_metrics_for(&self, terminal_id: &str) -> Option<&ClientPopupMetrics> {
+        self.popup_metrics
+            .as_ref()
+            .filter(|metrics| metrics.terminal_id == terminal_id)
+    }
+
     pub(super) fn reset_endpoint_projection(&mut self) {
         self.hits = ShellHitMap::default();
         self.pane_surface = None;
         self.pending_pane_surface = None;
         self.input_leases = ClientInputLeases::default();
         self.popup_terminal_id = None;
+        self.popup_metrics = None;
+        self.pending_popup_metrics.clear();
         self.chrome_drag = None;
         self.workspace_press = None;
         self.tab_press = None;
@@ -1447,12 +1615,17 @@ impl ClientShellState {
         {
             self.reveal_focused_tab = true;
         }
+        // A popup selection is anchored to a terminal that is neither the focused
+        // pane nor one of the snapshot's panes, so both tests below would wipe it
+        // on every snapshot — and snapshots arrive on any agent status change.
+        // A mouse selection has no `copy_mode` to restore it from.
         if self.selection.as_ref().is_some_and(|selection| {
-            snapshot.focused_pane_id.as_deref() != Some(selection.pane_id.as_str())
-                || !snapshot
-                    .panes
-                    .iter()
-                    .any(|pane| pane.pane_id == selection.pane_id)
+            !self.is_popup_target(&selection.pane_id)
+                && (snapshot.focused_pane_id.as_deref() != Some(selection.pane_id.as_str())
+                    || !snapshot
+                        .panes
+                        .iter()
+                        .any(|pane| pane.pane_id == selection.pane_id))
         }) {
             self.selection = None;
             self.selection_autoscroll = None;
@@ -1466,11 +1639,17 @@ impl ClientShellState {
             .as_ref()
             .map(|copy_mode| copy_mode.pane_id.clone())
         {
-            let pane_exists = snapshot
-                .panes
-                .iter()
-                .any(|pane| pane.pane_id == copy_pane_id);
-            let pane_focused = snapshot.focused_pane_id.as_deref() == Some(copy_pane_id.as_str());
+            // Popup copy mode is anchored to a terminal that is never one of the
+            // snapshot's panes, and the popup holds input for as long as it is
+            // open, so it counts as both live and focused.
+            let popup_copy = self.is_popup_target(&copy_pane_id);
+            let pane_exists = popup_copy
+                || snapshot
+                    .panes
+                    .iter()
+                    .any(|pane| pane.pane_id == copy_pane_id);
+            let pane_focused =
+                popup_copy || snapshot.focused_pane_id.as_deref() == Some(copy_pane_id.as_str());
             if !pane_exists {
                 self.copy_mode = None;
                 self.reset_copy_pipeline();
@@ -1515,8 +1694,14 @@ impl ClientShellState {
                 .and_then(|id| self.navigation_target(&self.active_endpoint_id, id));
             self.reveal_mobile_workspace = self.mobile_layout_active();
         }
-        let pane_exists =
-            |pane_id: &String| snapshot.panes.iter().any(|pane| &pane.pane_id == pane_id);
+        // The popup terminal is never one of the snapshot's panes, so a plain
+        // membership test would drop its pending scroll state on every snapshot —
+        // and snapshots arrive on any agent status change.
+        let popup_terminal_id = self.popup_terminal_id.clone();
+        let pane_exists = |pane_id: &String| {
+            snapshot.panes.iter().any(|pane| &pane.pane_id == pane_id)
+                || popup_terminal_id.as_deref() == Some(pane_id.as_str())
+        };
         self.pane_scroll_in_flight
             .retain(|pane_id, _| pane_exists(pane_id));
         self.pane_scroll_queued
@@ -1705,6 +1890,54 @@ impl ClientShellState {
             let Some(previous_surface) = self.pane_surface.as_ref() else {
                 return false;
             };
+            // The popup is not one of the panes, so its selection would never be
+            // checked here. Its geometry is the frame it renders into, and its
+            // content revision rides beside the surface.
+            if self.is_popup_target(&selection.pane_id) {
+                let previous_popup = previous_surface
+                    .popup
+                    .as_deref()
+                    .filter(|popup| popup.terminal_id == selection.pane_id);
+                let next_popup = surface
+                    .popup
+                    .as_deref()
+                    .filter(|popup| popup.terminal_id == selection.pane_id);
+                let (Some(previous_popup), Some(next_popup)) = (previous_popup, next_popup) else {
+                    return false;
+                };
+                let resized = previous_popup.frame.width != next_popup.frame.width
+                    || previous_popup.frame.height != next_popup.frame.height;
+                // The committed metrics still describe the frame on screen; the
+                // staged report is the one this surface is paired with.
+                let previous_metrics = self.popup_metrics_for(&selection.pane_id);
+                let next_metrics =
+                    self.staged_popup_metrics(&selection.pane_id, surface.surface_revision);
+                let (Some(previous_metrics), Some(next_metrics)) = (previous_metrics, next_metrics)
+                else {
+                    // No report paired with this frame means the rows cannot be
+                    // validated, so drop the selection rather than let a copy
+                    // resolve it through an unknown offset.
+                    return true;
+                };
+                // Swapping screens replaces the buffer under the same geometry.
+                let screen_switched = previous_metrics.alternate_screen_active
+                    != next_metrics.alternate_screen_active;
+                // A popup writes constantly in normal use, so a revision change on
+                // its own says nothing about the selected rows. Only invalidate
+                // when those cells actually moved, as a pane does.
+                let content_moved = self.config.copy_on_select
+                    && next_metrics.content_revision != previous_metrics.content_revision
+                    && (!previous_metrics.content_revision.is_multiple_of(2)
+                        || !next_metrics.content_revision.is_multiple_of(2)
+                        || !popup_selection_cells_unchanged(
+                            selection,
+                            previous_popup,
+                            previous_metrics.scroll,
+                            next_popup,
+                            next_metrics.scroll,
+                        ));
+                return resized || screen_switched || content_moved;
+            }
             let previous = previous_surface
                 .panes
                 .iter()
@@ -1750,18 +1983,63 @@ impl ClientShellState {
                 self.pane_scroll_targets.remove(&pane.pane_id);
             }
         }
+        // Pair the staged report with this exact frame before anything reads the
+        // metrics; a mismatch leaves them unset rather than stale.
+        self.commit_popup_surface_metrics(&surface);
+        // The popup is not in `surface.panes`, so its reached scroll target needs
+        // the same clearing the loop above does for panes. Leaving it behind pins
+        // the copy-mode offset and suppresses the cursor and highlights for good.
+        if let Some(terminal_id) = surface
+            .popup
+            .as_deref()
+            .map(|popup| popup.terminal_id.clone())
+        {
+            if let (Some(target), Some(scroll)) = (
+                self.pane_scroll_targets.get(&terminal_id).copied(),
+                self.popup_metrics_for(&terminal_id).and_then(|m| m.scroll),
+            ) {
+                let target = target
+                    .min(usize::try_from(scroll.max_offset_from_bottom).unwrap_or(usize::MAX));
+                if usize::try_from(scroll.offset_from_bottom).unwrap_or(usize::MAX) == target {
+                    self.pane_scroll_targets.remove(&terminal_id);
+                }
+            }
+        }
+        let popup_metrics = self.popup_metrics.clone();
         let mut invalidated_copy_pane = None;
         if let Some(copy_mode) = self.copy_mode.as_mut() {
-            if let Some(pane) = surface
-                .panes
-                .iter()
-                .find(|pane| pane.pane_id == copy_mode.pane_id)
-            {
-                let geometry = (pane.inner_rect.width, pane.inner_rect.height);
-                if copy_mode.content_revision != pane.content_revision
-                    || copy_mode.geometry != geometry
+            // The popup carries its terminal facts beside the surface because it
+            // is not one of the tab's panes; both resync the same way.
+            let target = if copy_mode.popup {
+                surface
+                    .popup
+                    .as_deref()
+                    .filter(|popup| popup.terminal_id == copy_mode.pane_id)
+                    .zip(popup_metrics.filter(|metrics| metrics.terminal_id == copy_mode.pane_id))
+                    .map(|(popup, metrics)| {
+                        (
+                            (popup.frame.width, popup.frame.height),
+                            metrics.content_revision,
+                            metrics.scroll,
+                        )
+                    })
+            } else {
+                surface
+                    .panes
+                    .iter()
+                    .find(|pane| pane.pane_id == copy_mode.pane_id)
+                    .map(|pane| {
+                        (
+                            (pane.inner_rect.width, pane.inner_rect.height),
+                            pane.content_revision,
+                            pane.scroll,
+                        )
+                    })
+            };
+            if let Some((geometry, content_revision, scroll)) = target {
+                if copy_mode.content_revision != content_revision || copy_mode.geometry != geometry
                 {
-                    copy_mode.content_revision = pane.content_revision;
+                    copy_mode.content_revision = content_revision;
                     copy_mode.geometry = geometry;
                     copy_mode.selection = None;
                     copy_mode.search_matches.clear();
@@ -1772,10 +2050,10 @@ impl ClientShellState {
                     copy_mode.copy_after_search = false;
                     invalidated_copy_pane = Some(copy_mode.pane_id.clone());
                 }
-                if let Some(scroll) = pane.scroll {
+                if let Some(scroll) = scroll {
                     let actual_offset =
                         usize::try_from(scroll.offset_from_bottom).unwrap_or(usize::MAX);
-                    if !self.pane_scroll_targets.contains_key(&pane.pane_id) {
+                    if !self.pane_scroll_targets.contains_key(&copy_mode.pane_id) {
                         copy_mode.offset_from_bottom = actual_offset;
                     }
                     copy_mode.max_offset_from_bottom =

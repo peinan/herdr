@@ -18,6 +18,16 @@ pub const ENDPOINT_WELCOME_KIND: &str = "endpoint.welcome.v1";
 pub const SNAPSHOT_CODEC_V1: &str = "shell.snapshot.v1";
 pub const ENDPOINT_SNAPSHOT_KIND: &str = SNAPSHOT_CODEC_V1;
 pub const SURFACE_CODEC_V1: &str = "shell.surface.v1";
+/// The generation-1 surface stream plus one named control message.
+///
+/// This codec does not change a single surface byte: `ServerMessage::PaneSurface`
+/// encodes exactly as it does under `shell.surface.v1`, and a v1 client is never
+/// sent the extra control. The only difference is that a v2 client also receives
+/// [`POPUP_SURFACE_METRICS_KIND`] immediately before every popup-bearing surface
+/// frame. Anyone cutting a v3 should read that as the rule: the surface frames
+/// are frozen at generation 1 and new surface facts ride the control lane.
+pub const SURFACE_CODEC_V2: &str = "shell.surface.v2";
+pub const POPUP_SURFACE_METRICS_KIND: &str = "shell.surface.popup.v2";
 pub const INPUT_CODEC_V1: &str = "shell.input.semantic.v1";
 pub const BLOB_CODEC_V1: &str = "shell.blob.v1";
 pub const SURFACE_INTEREST_CAPABILITY: &str = "surface_interest";
@@ -52,6 +62,46 @@ pub struct EndpointClientHello {
     pub input_codecs: Vec<String>,
     #[serde(default)]
     pub blob_codecs: Vec<String>,
+}
+
+/// Popup terminal facts that the pane surface frame cannot carry.
+///
+/// The popup is not one of the tab's panes and `ClientShellPopupSurface` is
+/// frozen at generation 1, so these ride the named control lane instead.
+///
+/// They are *not* safe to apply on arrival. A client maps a viewport row onto an
+/// absolute scrollback row with `max_offset_from_bottom - offset_from_bottom`, so
+/// metrics from a different frame than the one on screen silently resolve a
+/// selection to the wrong rows — and a scroll-only move does not change
+/// `content_revision`, so no staleness guard would catch it. `surface_revision`
+/// names the one surface frame these metrics belong to; a client must stage them
+/// and commit only against that frame.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PopupSurfaceMetrics {
+    /// Revision of the popup surface frame these metrics describe.
+    pub surface_revision: u64,
+    pub terminal_id: String,
+    pub content_revision: u64,
+    /// Whether the popup terminal is on its alternate screen. A switch replaces
+    /// the whole buffer without necessarily changing the popup's size, so a
+    /// selection anchored to the old screen has to be dropped.
+    #[serde(default)]
+    pub alternate_screen_active: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scroll: Option<crate::protocol::PaneSurfaceScrollMetrics>,
+}
+
+impl PopupSurfaceMetrics {
+    /// Whether both describe the same popup state, ignoring the frame stamp.
+    ///
+    /// The server compares metrics before a surface revision is assigned, so the
+    /// stamp cannot take part in change detection.
+    pub fn describes_same_state(&self, other: &Self) -> bool {
+        self.terminal_id == other.terminal_id
+            && self.content_revision == other.content_revision
+            && self.alternate_screen_active == other.alternate_screen_active
+            && self.scroll == other.scroll
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -98,15 +148,31 @@ impl EndpointClientHello {
                 .any(|codec| codec == INPUT_CODEC_V1)
             && self.blob_codecs.iter().any(|codec| codec == BLOB_CODEC_V1)
     }
+
+    /// Whether this client also accepts the popup metrics control that rides
+    /// beside the generation-1 surface frames.
+    pub fn supports_surface_v2(&self) -> bool {
+        self.surface_codecs
+            .iter()
+            .any(|codec| codec == SURFACE_CODEC_V2)
+    }
 }
 
 impl EndpointServerWelcome {
-    pub fn compatible(methods: Vec<String>) -> Self {
+    /// Builds the welcome, selecting the surface codec the client offered.
+    ///
+    /// `shell.surface.v1` stays the floor: a client that offers only v1 keeps
+    /// exactly the generation-1 stream.
+    pub fn compatible_with_surface_codec(methods: Vec<String>, surface_v2: bool) -> Self {
         Self {
             generation: ENDPOINT_PROTOCOL_GENERATION,
             server_version: crate::build_info::version(),
             snapshot_codec: SNAPSHOT_CODEC_V1.into(),
-            surface_codec: SURFACE_CODEC_V1.into(),
+            surface_codec: if surface_v2 {
+                SURFACE_CODEC_V2.into()
+            } else {
+                SURFACE_CODEC_V1.into()
+            },
             input_codec: INPUT_CODEC_V1.into(),
             blob_codec: BLOB_CODEC_V1.into(),
             methods,
@@ -277,7 +343,7 @@ mod tests {
 
     #[test]
     fn compatible_server_advertises_endpoint_lifecycle_capabilities() {
-        let welcome = EndpointServerWelcome::compatible(Vec::new());
+        let welcome = EndpointServerWelcome::compatible_with_surface_codec(Vec::new(), false);
         assert_eq!(
             welcome.capabilities,
             vec![
@@ -309,8 +375,63 @@ mod tests {
     }
 
     #[test]
+    fn generation_one_clients_keep_the_v1_surface_codec() {
+        let hello = hello();
+        assert!(hello.supports_required_codecs());
+        assert!(!hello.supports_surface_v2());
+        let welcome = EndpointServerWelcome::compatible_with_surface_codec(
+            Vec::new(),
+            hello.supports_surface_v2(),
+        );
+        assert_eq!(welcome.surface_codec, SURFACE_CODEC_V1);
+    }
+
+    #[test]
+    fn surface_v2_is_selected_only_when_the_client_offers_it() {
+        let mut hello = hello();
+        hello.surface_codecs = vec![SURFACE_CODEC_V2.into(), SURFACE_CODEC_V1.into()];
+        assert!(hello.supports_required_codecs());
+        assert!(hello.supports_surface_v2());
+        let welcome = EndpointServerWelcome::compatible_with_surface_codec(
+            Vec::new(),
+            hello.supports_surface_v2(),
+        );
+        assert_eq!(welcome.surface_codec, SURFACE_CODEC_V2);
+
+        // Offering only v2 is not a compatible core: v1 stays the floor.
+        let mut v2_only = hello.clone();
+        v2_only.surface_codecs = vec![SURFACE_CODEC_V2.into()];
+        assert!(!v2_only.supports_required_codecs());
+    }
+
+    #[test]
+    fn popup_surface_metrics_round_trip_and_tolerate_missing_scroll() {
+        let metrics = PopupSurfaceMetrics {
+            surface_revision: 4,
+            terminal_id: "term_1".into(),
+            content_revision: 8,
+            alternate_screen_active: false,
+            scroll: Some(crate::protocol::PaneSurfaceScrollMetrics {
+                offset_from_bottom: 2,
+                max_offset_from_bottom: 9,
+                viewport_rows: 5,
+            }),
+        };
+        let encoded = serde_json::to_string(&metrics).unwrap();
+        let decoded: PopupSurfaceMetrics = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded, metrics);
+
+        let without_scroll: PopupSurfaceMetrics = serde_json::from_str(
+            r#"{"surface_revision":1,"terminal_id":"term_1","content_revision":0}"#,
+        )
+        .unwrap();
+        assert!(without_scroll.scroll.is_none());
+    }
+
+    #[test]
     fn welcome_ignores_future_named_fields() {
-        let welcome = EndpointServerWelcome::compatible(vec!["pane.close".into()]);
+        let welcome =
+            EndpointServerWelcome::compatible_with_surface_codec(vec!["pane.close".into()], false);
         let mut value = serde_json::to_value(&welcome).unwrap();
         value["future_service"] = serde_json::json!("v2");
         let decoded: EndpointServerWelcome = serde_json::from_value(value).unwrap();

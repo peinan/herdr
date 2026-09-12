@@ -117,6 +117,83 @@ impl ClientShellState {
             && self.config.prefix_indicator == PrefixIndicatorConfig::Highlight
     }
 
+    /// Paints the mouse selection and copy-mode search highlights that belong to
+    /// one pane or popup hit.
+    fn render_hit_selection_highlights(
+        &self,
+        composed: &mut ratatui::buffer::Buffer,
+        hit: &PaneHit,
+    ) {
+        let copy_surface_coherent = client_copy_surface_coherent(self.copy_mode.as_ref(), hit);
+        if copy_surface_coherent {
+            render_client_copy_search_highlights(
+                composed,
+                self.copy_mode.as_ref(),
+                hit,
+                &self.config.palette,
+                false,
+            );
+        }
+        let selection_is_stale_copy_projection = !copy_surface_coherent
+            && self.copy_mode.as_ref().is_some_and(|copy_mode| {
+                copy_mode.pane_id == hit.pane_id
+                    && self
+                        .selection
+                        .as_ref()
+                        .is_some_and(|selection| selection.pane_id == hit.pane_id)
+            });
+        if !selection_is_stale_copy_projection {
+            crate::ui::render_selection_highlight(
+                self.selection.as_ref(),
+                composed,
+                &hit.pane_id,
+                hit.inner_rect,
+                hit.scroll,
+                &self.config.palette,
+                crate::terminal_theme::TerminalTheme::default(),
+            );
+        }
+        if copy_surface_coherent {
+            render_client_copy_search_highlights(
+                composed,
+                self.copy_mode.as_ref(),
+                hit,
+                &self.config.palette,
+                true,
+            );
+        }
+    }
+
+    /// Paints the copy-mode block cursor inside one pane or popup hit.
+    fn render_hit_copy_cursor(&self, frame: &mut FrameData, hit: &PaneHit) -> Option<()> {
+        let copy_mode = self.copy_mode.as_ref()?;
+        let viewport_top = copy_mode
+            .max_offset_from_bottom
+            .saturating_sub(copy_mode.offset_from_bottom)
+            .min(u32::MAX as usize) as u32;
+        let viewport_row = copy_mode.cursor.row.saturating_sub(viewport_top);
+        if viewport_row >= u32::from(hit.inner_rect.height)
+            || copy_mode.cursor.col >= hit.inner_rect.width
+        {
+            frame.cursor = None;
+            return Some(());
+        }
+        let mut composed = frame.to_ratatui_buffer()?;
+        let x = hit.inner_rect.x + copy_mode.cursor.col;
+        let y = hit.inner_rect.y + viewport_row as u16;
+        composed[(x, y)].set_style(
+            Style::default()
+                .fg(match self.config.palette.panel_bg {
+                    ratatui::style::Color::Reset => self.config.palette.surface_dim,
+                    color => color,
+                })
+                .bg(self.config.palette.accent)
+                .add_modifier(Modifier::BOLD),
+        );
+        frame.replace_from_ratatui_buffer_preserving_effects(&composed, None);
+        Some(())
+    }
+
     pub(crate) fn compose(&mut self, cols: u16, rows: u16) -> Option<FrameData> {
         if self.last_composed_size != Some((cols, rows)) && self.mode == ClientShellMode::Navigate {
             self.reveal_navigation_workspace = true;
@@ -325,80 +402,19 @@ impl ClientShellState {
             let cursor = frame.cursor.clone();
             let mut composed = frame.to_ratatui_buffer()?;
             for hit in &self.hits.panes {
-                let copy_surface_coherent =
-                    client_copy_surface_coherent(self.copy_mode.as_ref(), hit);
-                if copy_surface_coherent {
-                    render_client_copy_search_highlights(
-                        &mut composed,
-                        self.copy_mode.as_ref(),
-                        hit,
-                        &self.config.palette,
-                        false,
-                    );
-                }
-                let selection_is_stale_copy_projection = !copy_surface_coherent
-                    && self.copy_mode.as_ref().is_some_and(|copy_mode| {
-                        copy_mode.pane_id == hit.pane_id
-                            && self
-                                .selection
-                                .as_ref()
-                                .is_some_and(|selection| selection.pane_id == hit.pane_id)
-                    });
-                if !selection_is_stale_copy_projection {
-                    crate::ui::render_selection_highlight(
-                        self.selection.as_ref(),
-                        &mut composed,
-                        &hit.pane_id,
-                        hit.inner_rect,
-                        hit.scroll,
-                        &self.config.palette,
-                        crate::terminal_theme::TerminalTheme::default(),
-                    );
-                }
-                if copy_surface_coherent {
-                    render_client_copy_search_highlights(
-                        &mut composed,
-                        self.copy_mode.as_ref(),
-                        hit,
-                        &self.config.palette,
-                        true,
-                    );
-                }
+                self.render_hit_selection_highlights(&mut composed, hit);
             }
             frame.replace_from_ratatui_buffer_preserving_effects(&composed, cursor);
         }
         if self.mode == ClientShellMode::Copy {
             frame.cursor = None;
-            if let Some(copy_mode) = self.copy_mode.as_ref() {
-                if let Some(hit) = self.hits.panes.iter().find(|hit| {
+            if let Some(hit) = self.copy_mode.as_ref().and_then(|copy_mode| {
+                self.hits.panes.iter().find(|hit| {
                     hit.pane_id == copy_mode.pane_id
                         && client_copy_surface_coherent(Some(copy_mode), hit)
-                }) {
-                    let viewport_top = copy_mode
-                        .max_offset_from_bottom
-                        .saturating_sub(copy_mode.offset_from_bottom)
-                        .min(u32::MAX as usize) as u32;
-                    let viewport_row = copy_mode.cursor.row.saturating_sub(viewport_top);
-                    if viewport_row < u32::from(hit.inner_rect.height)
-                        && copy_mode.cursor.col < hit.inner_rect.width
-                    {
-                        let mut composed = frame.to_ratatui_buffer()?;
-                        let x = hit.inner_rect.x + copy_mode.cursor.col;
-                        let y = hit.inner_rect.y + viewport_row as u16;
-                        composed[(x, y)].set_style(
-                            Style::default()
-                                .fg(match self.config.palette.panel_bg {
-                                    ratatui::style::Color::Reset => self.config.palette.surface_dim,
-                                    color => color,
-                                })
-                                .bg(self.config.palette.accent)
-                                .add_modifier(Modifier::BOLD),
-                        );
-                        frame.replace_from_ratatui_buffer_preserving_effects(&composed, None);
-                    } else {
-                        frame.cursor = None;
-                    }
-                }
+                })
+            }) {
+                self.render_hit_copy_cursor(&mut frame, &hit.clone())?;
             }
         }
         restore_mode_bar(&mut frame, mode_bar, mode_bar_cells.as_deref());
@@ -563,18 +579,50 @@ impl ClientShellState {
                         crate::protocol::color_to_u32(self.config.palette.panel_bg),
                     );
                 }
-                self.hits.popup = Some(PaneHit {
+                let popup_hit = PaneHit {
                     rect: geometry.outer,
                     inner_rect: geometry.inner,
                     scrollbar_rect: None,
-                    scroll: None,
+                    scroll: self
+                        .popup_metrics_for(&popup.terminal_id)
+                        .and_then(|metrics| metrics.scroll)
+                        .map(|metrics| crate::pane::ScrollMetrics {
+                            offset_from_bottom: usize::try_from(metrics.offset_from_bottom)
+                                .unwrap_or(usize::MAX),
+                            max_offset_from_bottom: usize::try_from(metrics.max_offset_from_bottom)
+                                .unwrap_or(usize::MAX),
+                            viewport_rows: usize::try_from(metrics.viewport_rows)
+                                .unwrap_or(usize::MAX),
+                        }),
                     pane_id: popup.terminal_id.clone(),
                     popup: true,
                     mouse_reporting: popup.mouse_reporting,
                     sgr_pixel_mouse: popup.sgr_pixel_mouse,
                     pixel_width: popup.pixel_width,
                     pixel_height: popup.pixel_height,
-                });
+                };
+                // The popup's own cells were just blitted over the pane surface, so
+                // its highlights and copy cursor have to be painted again on top.
+                if has_selection || has_search {
+                    let cursor = frame.cursor.clone();
+                    let mut composed = frame.to_ratatui_buffer()?;
+                    self.render_hit_selection_highlights(&mut composed, &popup_hit);
+                    frame.replace_from_ratatui_buffer_preserving_effects(&composed, cursor);
+                }
+                if self.mode == ClientShellMode::Copy {
+                    // The blit restored the popup process's own cursor. Copy mode
+                    // owns the cursor for as long as it is active, including while
+                    // a scroll it requested is still in flight — otherwise the
+                    // live terminal cursor shows at an unrelated position.
+                    frame.cursor = None;
+                    if self.copy_mode.as_ref().is_some_and(|copy_mode| {
+                        copy_mode.pane_id == popup_hit.pane_id
+                            && client_copy_surface_coherent(Some(copy_mode), &popup_hit)
+                    }) {
+                        self.render_hit_copy_cursor(&mut frame, &popup_hit)?;
+                    }
+                }
+                self.hits.popup = Some(popup_hit);
             }
         }
         if !layout.mobile_header.is_empty()
