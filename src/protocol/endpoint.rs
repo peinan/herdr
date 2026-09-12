@@ -82,6 +82,11 @@ pub struct PopupSurfaceMetrics {
     pub surface_revision: u64,
     pub terminal_id: String,
     pub content_revision: u64,
+    /// Whether the popup terminal is on its alternate screen. A switch replaces
+    /// the whole buffer without necessarily changing the popup's size, so a
+    /// selection anchored to the old screen has to be dropped.
+    #[serde(default)]
+    pub alternate_screen_active: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scroll: Option<crate::protocol::PaneSurfaceScrollMetrics>,
 }
@@ -94,6 +99,7 @@ impl PopupSurfaceMetrics {
     pub fn describes_same_state(&self, other: &Self) -> bool {
         self.terminal_id == other.terminal_id
             && self.content_revision == other.content_revision
+            && self.alternate_screen_active == other.alternate_screen_active
             && self.scroll == other.scroll
     }
 }
@@ -404,6 +410,7 @@ mod tests {
             surface_revision: 4,
             terminal_id: "term_1".into(),
             content_revision: 8,
+            alternate_screen_active: false,
             scroll: Some(crate::protocol::PaneSurfaceScrollMetrics {
                 offset_from_bottom: 2,
                 max_offset_from_bottom: 9,

@@ -437,15 +437,15 @@ impl ClientShellState {
     }
 
     pub(super) fn modal_paste_target_active(&self) -> bool {
-        // A modal opened over a popup owns the keyboard, so the popup only
-        // suppresses the paste shortcut when no modal is up.
         let copy_search_prompt = self
             .copy_mode
             .as_ref()
             .is_some_and(|copy_mode| copy_mode.search_prompt.is_some());
         if self.popup_pending
-            // The copy-search prompt is a text field the shell owns, including
-            // over a popup, where no overlay is open to mark it as modal.
+            // A modal opened over a popup owns the keyboard, so the popup only
+            // suppresses the shortcut when no modal is up. The copy-search prompt
+            // is a shell text field too, including over a popup, where no overlay
+            // is open to mark it as modal.
             || (!copy_search_prompt
                 && self.overlay.is_none()
                 && self.popup_input_target().is_some())

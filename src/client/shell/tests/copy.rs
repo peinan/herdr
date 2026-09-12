@@ -2068,3 +2068,95 @@ fn a_popup_resize_invalidates_a_mouse_selection() {
         "a resized popup must drop the selection anchored to the old geometry"
     );
 }
+
+/// Builds a popup surface whose visible rows read `lines`.
+fn popup_surface_with_lines(surface_revision: u64, lines: [&str; 3]) -> PaneSurfaceFrame {
+    let mut surface = selectable_popup_surface_at_revision(surface_revision);
+    if let Some(popup) = surface.popup.as_deref_mut() {
+        let buffer = Buffer::with_lines(lines);
+        popup.frame = FrameData::from_ratatui_buffer_with_hyperlinks(&buffer, None, &[]);
+    }
+    surface
+}
+
+/// Sets up a popup drag selection over the first row and returns the state.
+fn popup_state_with_drag_selection() -> ClientShellState {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.apply_popup_surface_metrics(&popup_surface_metrics(1, 0, 0, 3));
+    state.set_pane_surface(popup_surface_with_lines(1, ["keep-me", "noise-a", ""]));
+    state.compose(106, 20).expect("popup frame");
+    let popup = state.hits.popup.as_ref().expect("popup hit").clone();
+
+    state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: popup.inner_rect.x,
+        row: popup.inner_rect.y,
+        modifiers: KeyModifiers::empty(),
+    })]);
+    state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+        kind: MouseEventKind::Drag(MouseButton::Left),
+        column: popup.inner_rect.x + 6,
+        row: popup.inner_rect.y,
+        modifiers: KeyModifiers::empty(),
+    })]);
+    assert!(
+        state.selection.is_some(),
+        "the drag should start a selection"
+    );
+    state
+}
+
+/// A popup writes constantly, so output that leaves the selected cells alone
+/// must not cancel a drag the user is still making.
+#[test]
+fn popup_output_outside_the_selection_keeps_the_drag() {
+    let mut state = popup_state_with_drag_selection();
+    assert!(state.config.copy_on_select, "the default path is the risk");
+
+    // Row 2 changes; the selected row 0 does not.
+    let mut metrics = popup_surface_metrics(2, 0, 0, 3);
+    metrics.content_revision = 2;
+    state.apply_popup_surface_metrics(&metrics);
+    state.set_pane_surface(popup_surface_with_lines(2, ["keep-me", "noise-b", ""]));
+
+    assert!(
+        state.selection.is_some(),
+        "output outside the selection must not cancel the drag"
+    );
+}
+
+/// But a write that lands on the selected cells does invalidate it: those rows
+/// no longer say what the user picked.
+#[test]
+fn popup_output_inside_the_selection_drops_it() {
+    let mut state = popup_state_with_drag_selection();
+
+    let mut metrics = popup_surface_metrics(2, 0, 0, 3);
+    metrics.content_revision = 2;
+    state.apply_popup_surface_metrics(&metrics);
+    state.set_pane_surface(popup_surface_with_lines(2, ["changed", "noise-a", ""]));
+
+    assert!(
+        state.selection.is_none(),
+        "a write over the selected cells must drop the selection"
+    );
+}
+
+/// Switching to the alternate screen replaces the buffer without necessarily
+/// resizing the popup, so the selection has to go with it.
+#[test]
+fn a_popup_screen_switch_drops_the_selection() {
+    let mut state = popup_state_with_drag_selection();
+
+    // Same size, same revision, same cells — only the screen changed.
+    let mut metrics = popup_surface_metrics(2, 0, 0, 3);
+    metrics.alternate_screen_active = true;
+    state.apply_popup_surface_metrics(&metrics);
+    state.set_pane_surface(popup_surface_with_lines(2, ["keep-me", "noise-a", ""]));
+
+    assert!(
+        state.selection.is_none(),
+        "an alternate screen switch must drop the selection"
+    );
+}

@@ -239,6 +239,7 @@ fn popup_surface_metrics(
         surface_revision,
         terminal_id: "terminal-popup".into(),
         content_revision: 0,
+        alternate_screen_active: false,
         scroll: Some(crate::protocol::PaneSurfaceScrollMetrics {
             offset_from_bottom,
             max_offset_from_bottom,

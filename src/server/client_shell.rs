@@ -496,6 +496,7 @@ fn render_popup_surface(
             surface_revision: 0,
             terminal_id: popup.terminal_id.to_string(),
             content_revision,
+            alternate_screen_active: runtime.alternate_screen_active(),
             scroll,
         },
     ))

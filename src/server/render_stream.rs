@@ -551,6 +551,7 @@ mod tests {
                 surface_revision: 0,
                 terminal_id: "popup-terminal".into(),
                 content_revision: 4,
+                alternate_screen_active: false,
                 scroll: Some(crate::protocol::PaneSurfaceScrollMetrics {
                     offset_from_bottom,
                     max_offset_from_bottom: 9,
