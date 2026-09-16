@@ -12,6 +12,14 @@ ZIG_VERSION ?= 0.15.2
 INSTALL_DIR ?= $(HOME)/.local/bin
 BIN         := herdr
 
+# macOS 26 の Command Line Tools SDK には libSystem の arm64-macos ターゲットが無く、
+# zig 0.15.2 はそのままだとリンクに失敗する(undefined symbol: _exit ...)。zig は PATH 上の
+# `xcrun --show-sdk-path` で SDK を探すので、旧 SDK を返す xcrun シムを zig にだけ見せる
+# ラッパ経由で呼ぶ。作り方は docs/fork/FORK_WORKFLOW.md §0。
+# ラッパが無い環境では未設定のままにして、build.rs の PATH 探索(= mise の zig)に委ねる。
+ZIG_WRAPPER := $(HOME)/.local/share/herdr-fork/zig
+ZIG         ?= $(wildcard $(ZIG_WRAPPER))
+
 # Fork build identity. `Cargo.toml`'s version stays upstream-managed, so the base
 # version follows upstream automatically; HERDR_BUILD_ID counts fork feature
 # generations on top of it. `herdr --version` then reports e.g. 0.9.0-fork.9,
@@ -42,7 +50,7 @@ help:
 .PHONY: build
 build:
 	HERDR_BUILD_CHANNEL=$(HERDR_BUILD_CHANNEL) HERDR_BUILD_ID=$(HERDR_BUILD_ID) \
-		mise exec zig@$(ZIG_VERSION) -- just build
+		$(if $(ZIG),ZIG=$(ZIG)) mise exec zig@$(ZIG_VERSION) -- just build
 
 # Build, then replace the installed binary. Restart herdr afterwards to apply.
 .PHONY: install

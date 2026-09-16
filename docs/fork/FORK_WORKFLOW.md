@@ -221,10 +221,16 @@ install -m 0755 target/release/herdr ~/.local/bin/herdr        # 入れ替え（
 herdr --version                                                # → herdr 0.9.0-fork.9
 ```
 
-`make build` / `make install` は上の env を自分で渡すので `HERDR_BUILD_ID` を書く必要はない
-（`Makefile` が持つ。`make build HERDR_BUILD_ID=10` で一時上書きも可）。ただし
-`mise exec zig@0.15.2 -- just build` を呼ぶため、§0 の xcrun シムが PATH に無いと
-macOS 26 の SDK 問題でリンクに失敗する。当面は上記のように `ZIG` にラッパを渡す。
+**`make install` 一発でも同じ結果になる。** `Makefile` が `HERDR_BUILD_ID` と、§0 の zig ラッパ
+（`~/.local/share/herdr-fork/zig` が在れば `ZIG` として）を自分で渡すので、前置は要らない:
+
+```bash
+make install        # ビルド → ~/.local/bin/herdr へ設置
+herdr --version     # → herdr 0.9.0-fork.9
+```
+
+`make build HERDR_BUILD_ID=10` で番号だけ一時上書きもできる。ラッパが無い環境では `ZIG` を
+渡さず `mise exec zig@0.15.2` の PATH 解決に委ねる（macOS 26 以外ではそれで通る）。
 
 env を付けずにビルドすると素の `0.9.0` になり、upstream のバイナリと見分けが付かなくなる。
 
