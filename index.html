@@ -1003,8 +1003,12 @@ footer{margin-top:110px;border-top:1px solid var(--line-soft)}
         <div class="hd-label"><span>build &amp; install</span></div>
         <pre class="cfg"><span class="sh">git clone https://github.com/peinan/herdr.git</span>
 <span class="sh">cd herdr</span>
-<span class="sh">make install</span>  <span class="c"># → ~/.local/bin/herdr</span></pre>
+<span class="sh">make install</span>  <span class="c"># → ~/.local/bin/herdr</span>
+
+<span class="sh">herdr --version</span>
+<span class="c"># herdr 0.9.0-fork.9</span></pre>
         <p class="ins-note">ビルドには Rust toolchain と Zig 0.15.2(vendored libghostty-vt 用)が必要。<code class="mono">make</code> は mise で zig を用意します。mise を使わない場合は <code class="mono">ZIG=/path/to/zig just build</code>。</p>
+        <p class="ins-note"><code class="mono">0.9.0</code> は追従している upstream のバージョン、<code class="mono">fork.9</code> がこのフォーク独自機能の世代です。upstream を取り込んでも fork 番号は変わりません(機能の集合が変わっていないので)。<code class="mono">make</code> を通さずに <code class="mono">just build</code> した場合は素の <code class="mono">0.9.0</code> になります。</p>
       </div>
       <div class="panel">
         <div class="hd-label"><span>~/.config/herdr/config.toml</span></div>
