@@ -124,6 +124,25 @@ pub(crate) struct ClientWriter {
 }
 
 impl ClientWriter {
+    /// Sends a render frame together with a control message that must reach the
+    /// client first. See `ClientWriterQueue::try_send_render_with_control`.
+    pub(crate) fn try_send_render_with_control(
+        &self,
+        control: Vec<u8>,
+        render: Vec<u8>,
+    ) -> Result<(), TrySendError<Vec<u8>>> {
+        #[cfg(test)]
+        if let Some(sender) = &self.render.test_render {
+            // Tests bypass the queue for frames; the control still rides it.
+            sender.try_send(render)?;
+            let _ = self.control.send(control);
+            return Ok(());
+        }
+        self.render
+            .queue
+            .try_send_render_with_control(control, render)
+    }
+
     /// Drops render-lane work that has not yet been claimed by the writer.
     pub(crate) fn discard_pending_render(&self) {
         self.render.queue.discard_pending_render();
@@ -309,6 +328,32 @@ impl ClientWriterQueue {
         Ok(())
     }
 
+    /// Enqueues a control message and a render frame under one lock.
+    ///
+    /// Sending them separately leaves a window: `try_send_render` wakes the
+    /// writer, which can claim the frame and write it before the control is
+    /// queued. The control lane's priority only orders messages already in the
+    /// queue, so the client would install the surface without the report it is
+    /// paired with. Here either both are queued or neither, the control lands
+    /// ahead of the frame, and the render slot gives them shared backpressure.
+    fn try_send_render_with_control(
+        &self,
+        control: Vec<u8>,
+        render: Vec<u8>,
+    ) -> Result<(), TrySendError<Vec<u8>>> {
+        let mut state = self.lock_state();
+        if !state.writer_alive {
+            return Err(TrySendError::Disconnected(render));
+        }
+        if state.render.is_some() {
+            return Err(TrySendError::Full(render));
+        }
+        state.control.push_back(control);
+        state.render = Some(render);
+        self.ready.notify_one();
+        Ok(())
+    }
+
     fn discard_pending_render(&self) {
         let mut state = self.lock_state();
         state.render = None;
@@ -395,6 +440,9 @@ pub(crate) enum ServerEvent {
         endpoint_keybindings: bool,
         mouse_capture: bool,
         surface_active: bool,
+        /// Whether the client negotiated the v2 surface codec and so accepts the
+        /// popup metrics control.
+        surface_v2: bool,
         writer: ClientWriter,
     },
     /// A client sent an input message.
@@ -760,6 +808,7 @@ pub(crate) fn handle_client_handshake(
                     hello.endpoint_keybindings,
                     hello.mouse_capture,
                     hello.surface_active,
+                    hello.supports_surface_v2(),
                 )),
             )
         }
@@ -800,12 +849,13 @@ pub(crate) fn handle_client_handshake(
     } else {
         RenderEncoding::TerminalAnsi
     };
-    let welcome = if shell_options.is_some() {
-        let welcome = EndpointServerWelcome::compatible(
+    let welcome = if let Some(options) = shell_options.as_ref() {
+        let welcome = EndpointServerWelcome::compatible_with_surface_codec(
             crate::server::client_commands::supported_client_shell_method_names()
                 .iter()
                 .map(|method| (*method).to_owned())
                 .collect(),
+            options.5,
         );
         ServerMessage::EndpointControl {
             kind: ENDPOINT_WELCOME_KIND.into(),
@@ -854,6 +904,7 @@ pub(crate) fn handle_client_handshake(
         endpoint_keybindings,
         mouse_capture,
         surface_active,
+        surface_v2,
     )) = shell_options
     {
         ServerEvent::ClientShellConnected {
@@ -867,6 +918,7 @@ pub(crate) fn handle_client_handshake(
             endpoint_keybindings,
             mouse_capture,
             surface_active,
+            surface_v2,
             writer,
         }
     } else {
@@ -1829,6 +1881,7 @@ mod tests {
                 endpoint_keybindings,
                 mouse_capture,
                 surface_active,
+                surface_v2,
                 writer,
             } => {
                 assert_eq!(client_id, 43);
@@ -1839,6 +1892,8 @@ mod tests {
                 assert!(endpoint_keybindings);
                 assert!(mouse_capture);
                 assert!(surface_active);
+                // This hello offers only the generation-1 surface codec.
+                assert!(!surface_v2);
                 drop(writer);
             }
             other => panic!("expected ClientShellConnected, got {other:?}"),

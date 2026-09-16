@@ -1,6 +1,26 @@
 use super::*;
 
 impl HeadlessServer {
+    /// Frames the popup metrics control that must reach a v2 client before the
+    /// surface frame it is stamped for.
+    fn frame_popup_surface_metrics(
+        metrics: &crate::protocol::endpoint::PopupSurfaceMetrics,
+    ) -> Option<Vec<u8>> {
+        let data = match serde_json::to_string(metrics) {
+            Ok(data) => data,
+            Err(err) => {
+                warn!(err = %err, "failed to encode popup surface metrics");
+                return None;
+            }
+        };
+        Self::frame_server_message(&ServerMessage::EndpointControl {
+            kind: crate::protocol::endpoint::POPUP_SURFACE_METRICS_KIND.into(),
+            data,
+        })
+        .inspect_err(|err| warn!(err = %err, "failed to frame popup surface metrics"))
+        .ok()
+    }
+
     fn shell_focused_runtime(
         &self,
         client_id: u64,
@@ -488,6 +508,7 @@ impl HeadlessServer {
                         panes,
                         splits,
                         popup,
+                        popup_metrics,
                         graphics,
                         graphics_delivery: next_graphics_delivery,
                     } = render_client_shell_pane_surface(
@@ -504,7 +525,14 @@ impl HeadlessServer {
                         "full_render.render_tab_surface_virtual",
                         render_started,
                     );
-                    surface_parts = Some((panes, splits, popup, graphics, next_graphics_delivery));
+                    surface_parts = Some((
+                        panes,
+                        splits,
+                        popup,
+                        popup_metrics,
+                        graphics,
+                        next_graphics_delivery,
+                    ));
                     frame
                 }
                 ClientConnectionMode::TerminalPending => continue,
@@ -555,17 +583,23 @@ impl HeadlessServer {
             };
             let has_graphics = surface_parts
                 .as_ref()
-                .is_some_and(|(_, _, _, graphics, _)| {
+                .is_some_and(|(_, _, _, _, graphics, _)| {
                     !graphics.assets.is_empty()
                         || !graphics.placements.is_empty()
                         || !graphics.retained_assets.is_empty()
                 });
             let mut next_shell_graphics_delivery = None;
-            let prepared = if let Some((panes, splits, popup, graphics, delivery)) = surface_parts {
+            let prepared = if let Some((panes, splits, popup, popup_metrics, graphics, delivery)) =
+                surface_parts
+            {
                 next_shell_graphics_delivery = Some(delivery);
-                client
-                    .render_state
-                    .prepare_pane_surface(protocol::PaneSurfaceFrame {
+                // These were read across this client's own popup render, so they
+                // describe the buffer its pixels came from. A v1 client is sent
+                // none of it and costs nothing extra.
+                let frame_popup_metrics =
+                    popup_metrics.filter(|_| popup.is_some() && client.shell_surface_v2);
+                client.render_state.prepare_pane_surface(
+                    protocol::PaneSurfaceFrame {
                         boot_id: self.client_shell_boot_id.clone(),
                         projection_revision: shell_projection_revision,
                         surface_revision: 0,
@@ -574,7 +608,9 @@ impl HeadlessServer {
                         splits,
                         popup,
                         graphics,
-                    })
+                    },
+                    frame_popup_metrics,
+                )
             } else {
                 client.render_state.prepare_frame(frame)
             };
@@ -627,10 +663,25 @@ impl HeadlessServer {
                     continue;
                 }
             };
+            // Sent with the frame under one lock, never before or after it: the
+            // writer can claim a frame the moment it is queued, so a separate
+            // control send races it in one direction and orphans itself in the
+            // other.
+            let popup_metrics_control = match &prepared {
+                crate::server::render_stream::PreparedRender::Semantic {
+                    popup_metrics: Some(metrics),
+                    ..
+                } => Self::frame_popup_surface_metrics(metrics),
+                _ => None,
+            };
             let shell_graphics_pending = next_shell_graphics_delivery
                 .as_ref()
                 .is_some_and(crate::kitty_graphics::surface::DeliveryCache::has_pending);
-            match writer.render.try_send(serialized) {
+            let sent = match popup_metrics_control {
+                Some(control) => writer.try_send_render_with_control(control, serialized),
+                None => writer.render.try_send(serialized),
+            };
+            match sent {
                 Ok(()) => {
                     if let Some(delivery) = next_shell_graphics_delivery {
                         client.shell_graphics_delivery = delivery;

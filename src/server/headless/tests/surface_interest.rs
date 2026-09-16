@@ -58,6 +58,7 @@ async fn metadata_only_shell_is_isolated_until_surface_activation() {
             endpoint_keybindings: true,
             mouse_capture: true,
             surface_active: false,
+            surface_v2: true,
             writer,
         })
     );
@@ -260,6 +261,7 @@ async fn presentation_sync_epoch_replays_modes_and_title() {
             endpoint_keybindings: true,
             mouse_capture: true,
             surface_active: true,
+            surface_v2: true,
             writer,
         })
     );
@@ -374,6 +376,7 @@ async fn two_headless_servers_drive_atomic_endpoint_handoff() {
             endpoint_keybindings: true,
             mouse_capture: true,
             surface_active: true,
+            surface_v2: true,
             writer: source_writer,
         })
     );
@@ -399,6 +402,7 @@ async fn two_headless_servers_drive_atomic_endpoint_handoff() {
             endpoint_keybindings: true,
             mouse_capture: true,
             surface_active: false,
+            surface_v2: true,
             writer: target_writer,
         })
     );

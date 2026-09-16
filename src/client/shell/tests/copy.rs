@@ -19,6 +19,7 @@ fn pasted_help_and_copy_queries_strip_control_characters() {
     state.overlay = None;
     state.copy_mode = Some(ClientCopyModeState {
         pane_id: "pane_1".into(),
+        popup: false,
         content_revision: 0,
         geometry: (80, 24),
         cursor: crate::api::schema::PaneTextPoint { row: 0, col: 0 },
@@ -1374,4 +1375,951 @@ fn word_selection_result_survives_focus_snapshot_lag() {
         .selection
         .as_ref()
         .is_some_and(crate::selection::Selection::is_visible));
+}
+
+#[test]
+fn popup_selection_copies_through_endpoint_extraction() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.apply_popup_surface_metrics(&popup_surface_metrics(1, 0, 0, 3));
+    state.set_pane_surface(surface_with_selectable_popup());
+    state.compose(106, 20).expect("popup frame");
+    let popup = state.hits.popup.as_ref().expect("popup hit").clone();
+    assert!(popup.scroll.is_some(), "v2 metrics should reach the hit");
+
+    state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: popup.inner_rect.x,
+        row: popup.inner_rect.y,
+        modifiers: KeyModifiers::empty(),
+    })]);
+    assert!(state
+        .selection
+        .as_ref()
+        .is_some_and(|selection| selection.pane_id == "terminal-popup"));
+
+    let drag = state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+        kind: MouseEventKind::Drag(MouseButton::Left),
+        column: popup.inner_rect.x + 4,
+        row: popup.inner_rect.y,
+        modifiers: KeyModifiers::empty(),
+    })]);
+    assert!(drag.repaint);
+    let selected = state.compose(106, 20).expect("selected popup frame");
+    let selected_cell =
+        &selected.cells[usize::from(popup.inner_rect.y) * 106 + usize::from(popup.inner_rect.x)];
+    assert_ne!(
+        selected_cell.bg,
+        crate::protocol::color_to_u32(ratatui::style::Color::Reset),
+        "the popup selection must be painted over the blitted popup cells"
+    );
+
+    let release =
+        state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: popup.inner_rect.x + 4,
+            row: popup.inner_rect.y,
+            modifiers: KeyModifiers::empty(),
+        })]);
+    let [ClientShellAction::Endpoint { request, .. }] = &release.actions[..] else {
+        panic!("popup selection release should request endpoint extraction");
+    };
+    let request_id = request.id.clone();
+    assert!(matches!(
+        &request.method,
+        crate::api::schema::Method::PopupSelectionRead(params)
+            if params.terminal_id == "terminal-popup"
+                && params.anchor == crate::api::schema::PaneTextPoint { row: 0, col: 0 }
+                && params.cursor == crate::api::schema::PaneTextPoint { row: 0, col: 4 }
+    ));
+
+    let (_, actions) = state.handle_endpoint_result(
+        "boot-1",
+        &request_id,
+        Ok(crate::api::schema::ResponseResult::PopupSelection {
+            terminal_id: "terminal-popup".into(),
+            text: "popup".into(),
+        }),
+    );
+    assert!(matches!(
+        &actions[..],
+        [ClientShellAction::ClipboardWrite(bytes)] if bytes == b"popup"
+    ));
+}
+
+#[test]
+fn popup_drag_selection_uses_absolute_rows_when_scrolled_back() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    // Scrolled two lines back in a three-row popup: the top visible row is
+    // absolute row 5 of an eight-row history.
+    state.apply_popup_surface_metrics(&popup_surface_metrics(1, 2, 7, 3));
+    state.set_pane_surface(surface_with_selectable_popup());
+    state.compose(106, 20).expect("popup frame");
+    let popup = state.hits.popup.as_ref().expect("popup hit").clone();
+
+    state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: popup.inner_rect.x,
+        row: popup.inner_rect.y + 1,
+        modifiers: KeyModifiers::empty(),
+    })]);
+    state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+        kind: MouseEventKind::Drag(MouseButton::Left),
+        column: popup.inner_rect.x + 3,
+        row: popup.inner_rect.y + 1,
+        modifiers: KeyModifiers::empty(),
+    })]);
+    let release =
+        state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: popup.inner_rect.x + 3,
+            row: popup.inner_rect.y + 1,
+            modifiers: KeyModifiers::empty(),
+        })]);
+    let [ClientShellAction::Endpoint { request, .. }] = &release.actions[..] else {
+        panic!("popup selection release should request endpoint extraction");
+    };
+    assert!(
+        matches!(
+            &request.method,
+            crate::api::schema::Method::PopupSelectionRead(params)
+                if params.anchor.row == 6 && params.cursor.row == 6
+        ),
+        "scrolled-back popup rows must be absolute, got {:?}",
+        request.method
+    );
+}
+
+#[test]
+fn popup_copy_motion_targets_the_popup_terminal() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.apply_popup_surface_metrics(&popup_surface_metrics(1, 0, 0, 3));
+    state.set_pane_surface(surface_with_popup());
+    state.compose(106, 20).expect("popup frame");
+
+    let mut outcome = ClientShellInput::default();
+    assert!(state.enter_copy_mode(&mut outcome));
+    assert_eq!(state.mode, ClientShellMode::Copy);
+    assert!(state
+        .copy_mode
+        .as_ref()
+        .is_some_and(|copy_mode| copy_mode.popup && copy_mode.pane_id == "terminal-popup"));
+
+    let motion = state.handle_input_bytes(b"$");
+    let [ClientShellAction::Endpoint { request, .. }] = &motion.actions[..] else {
+        panic!("copy motion should reach the endpoint");
+    };
+    assert!(matches!(
+        &request.method,
+        crate::api::schema::Method::PopupCopyMotion(params)
+            if params.terminal_id == "terminal-popup"
+    ));
+}
+
+#[test]
+fn popup_copy_mode_is_unavailable_without_v2_surface_metrics() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface_with_popup());
+    state.compose(106, 20).expect("popup frame");
+
+    let mut outcome = ClientShellInput::default();
+    assert!(
+        !state.enter_copy_mode(&mut outcome),
+        "a v1 server sends no popup scroll metrics, so copy mode must stay closed"
+    );
+    assert!(state.copy_mode.is_none());
+}
+
+/// Selects across one popup row and releases, returning the release outcome.
+fn drag_popup_row(
+    state: &mut ClientShellState,
+    popup: &PaneHit,
+    viewport_row: u16,
+) -> ClientShellInput {
+    for kind in [
+        MouseEventKind::Down(MouseButton::Left),
+        MouseEventKind::Drag(MouseButton::Left),
+        MouseEventKind::Up(MouseButton::Left),
+    ] {
+        let column = if matches!(kind, MouseEventKind::Down(_)) {
+            popup.inner_rect.x
+        } else {
+            popup.inner_rect.x + 3
+        };
+        let outcome =
+            state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+                kind,
+                column,
+                row: popup.inner_rect.y + viewport_row,
+                modifiers: KeyModifiers::empty(),
+            })]);
+        if matches!(kind, MouseEventKind::Up(_)) {
+            return outcome;
+        }
+    }
+    unreachable!("the release arm returns")
+}
+
+/// A popup scroll that leaves the rendered popup identical still moves every
+/// visible row to a different absolute scrollback row, and it does not touch
+/// `content_revision`, so the endpoint's staleness guard cannot catch a
+/// mismatch. The client must therefore never resolve a selection through
+/// metrics belonging to a frame other than the one on screen.
+#[test]
+fn popup_metrics_from_another_frame_never_resolve_a_selection() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.apply_popup_surface_metrics(&popup_surface_metrics(1, 2, 7, 3));
+    state.set_pane_surface(selectable_popup_surface_at_revision(1));
+    state.compose(106, 20).expect("popup frame");
+    let popup = state.hits.popup.as_ref().expect("popup hit").clone();
+    assert_eq!(
+        popup.scroll.map(|scroll| scroll.offset_from_bottom),
+        Some(2)
+    );
+
+    // The server has scrolled on and reported it, but the frame that move
+    // produced has not been applied yet. The staged report must not reach the
+    // hit the user is currently looking at.
+    state.apply_popup_surface_metrics(&popup_surface_metrics(2, 5, 7, 3));
+    state.compose(106, 20).expect("popup frame");
+    let popup = state.hits.popup.as_ref().expect("popup hit").clone();
+    assert_eq!(
+        popup.scroll.map(|scroll| scroll.offset_from_bottom),
+        Some(2),
+        "metrics stamped for a later frame must not retarget the displayed one"
+    );
+
+    let release = drag_popup_row(&mut state, &popup, 1);
+    let [ClientShellAction::Endpoint { request, .. }] = &release.actions[..] else {
+        panic!("popup selection release should request endpoint extraction");
+    };
+    assert!(
+        matches!(
+            &request.method,
+            crate::api::schema::Method::PopupSelectionRead(params)
+                if params.anchor.row == 6 && params.cursor.row == 6
+        ),
+        "rows must follow the displayed frame, got {:?}",
+        request.method
+    );
+
+    // Applying that frame commits its own metrics, and only then do the rows move.
+    state.set_pane_surface(selectable_popup_surface_at_revision(2));
+    state.compose(106, 20).expect("popup frame");
+    let popup = state.hits.popup.as_ref().expect("popup hit").clone();
+    assert_eq!(
+        popup.scroll.map(|scroll| scroll.offset_from_bottom),
+        Some(5)
+    );
+    let release = drag_popup_row(&mut state, &popup, 1);
+    let [ClientShellAction::Endpoint { request, .. }] = &release.actions[..] else {
+        panic!("popup selection release should request endpoint extraction");
+    };
+    assert!(matches!(
+        &request.method,
+        crate::api::schema::Method::PopupSelectionRead(params)
+            if params.anchor.row == 3 && params.cursor.row == 3
+    ));
+}
+
+#[test]
+fn a_popup_frame_without_matching_metrics_disables_selection() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    // A report stamped for a frame that never arrives leaves the displayed frame
+    // without metrics; selection must be off rather than guess an offset.
+    state.apply_popup_surface_metrics(&popup_surface_metrics(9, 2, 7, 3));
+    state.set_pane_surface(selectable_popup_surface_at_revision(1));
+    state.compose(106, 20).expect("popup frame");
+    let popup = state.hits.popup.as_ref().expect("popup hit").clone();
+    assert!(popup.scroll.is_none());
+
+    let release = drag_popup_row(&mut state, &popup, 1);
+    assert!(state.selection.is_none());
+    assert!(
+        release.actions.is_empty(),
+        "no selection may be extracted without metrics for the displayed frame"
+    );
+
+    let mut outcome = ClientShellInput::default();
+    assert!(!state.enter_copy_mode(&mut outcome));
+}
+
+#[test]
+fn popup_drag_autoscroll_scrolls_the_popup_terminal() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.apply_popup_surface_metrics(&popup_surface_metrics(1, 2, 7, 3));
+    state.set_pane_surface(selectable_popup_surface_at_revision(1));
+    state.compose(106, 20).expect("popup frame");
+    let popup = state.hits.popup.as_ref().expect("popup hit").clone();
+
+    state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: popup.inner_rect.x + 1,
+        row: popup.inner_rect.y + 1,
+        modifiers: KeyModifiers::empty(),
+    })]);
+    // Dragging above the popup's first row arms the autoscroll.
+    let drag = state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+        kind: MouseEventKind::Drag(MouseButton::Left),
+        column: popup.inner_rect.x + 1,
+        row: popup.inner_rect.y,
+        modifiers: KeyModifiers::empty(),
+    })]);
+    assert!(drag.repaint);
+    let deadline = state
+        .selection_autoscroll_deadline
+        .expect("popup drag should arm autoscroll");
+
+    let tick = state.tick_selection_autoscroll(deadline);
+    let scrolled = tick.actions.iter().any(|action| {
+        matches!(
+            action,
+            ClientShellAction::Endpoint { request, .. }
+                if matches!(
+                    &request.method,
+                    crate::api::schema::Method::PopupScroll(params)
+                        if params.terminal_id == "terminal-popup"
+                )
+        )
+    });
+    assert!(
+        scrolled,
+        "popup autoscroll must scroll the popup terminal, got {:?}",
+        tick.actions.len()
+    );
+}
+
+/// Snapshots arrive on any agent status change, and the popup terminal is never
+/// one of their panes. A plain membership test therefore pruned the popup's
+/// pending scroll state on every snapshot, which pinned copy mode's offset.
+#[test]
+fn a_popup_scroll_target_survives_an_agent_status_snapshot() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.apply_popup_surface_metrics(&popup_surface_metrics(1, 2, 7, 3));
+    state.set_pane_surface(surface_with_popup());
+    state.compose(106, 20).expect("popup frame");
+
+    let mut outcome = ClientShellInput::default();
+    assert!(state.enter_copy_mode(&mut outcome));
+    state.push_pane_scroll_offset("terminal-popup".into(), 5, &mut outcome);
+    assert!(state.pane_scroll_targets.contains_key("terminal-popup"));
+    assert!(state.pane_scroll_in_flight.contains_key("terminal-popup"));
+
+    // An unrelated agent finishes; the server re-projects and the client gets a
+    // fresh snapshot. Nothing about the popup changed.
+    let mut next = snapshot();
+    next.revision = 2;
+    if let Some(agent) = next.agents.first_mut() {
+        agent.agent_status = crate::api::schema::AgentStatus::Done;
+    }
+    state.set_snapshot(Box::new(next));
+
+    assert!(
+        state.pane_scroll_targets.contains_key("terminal-popup"),
+        "a snapshot must not drop the popup's pending scroll target"
+    );
+    assert!(state.pane_scroll_in_flight.contains_key("terminal-popup"));
+    assert_eq!(state.mode, ClientShellMode::Copy);
+    assert!(state
+        .copy_mode
+        .as_ref()
+        .is_some_and(|copy_mode| copy_mode.popup));
+}
+
+/// The popup's reached scroll target is not in `surface.panes`, so it needs the
+/// same clearing panes get. Left behind it pins the copy-mode offset and
+/// suppresses the copy cursor and highlights permanently.
+#[test]
+fn a_reached_popup_scroll_target_is_cleared() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.apply_popup_surface_metrics(&popup_surface_metrics(1, 2, 7, 3));
+    state.set_pane_surface(selectable_popup_surface_at_revision(1));
+
+    let mut outcome = ClientShellInput::default();
+    state.push_pane_scroll_offset("terminal-popup".into(), 5, &mut outcome);
+    assert!(state.pane_scroll_targets.contains_key("terminal-popup"));
+
+    // The server reports the popup sitting at the requested offset.
+    state.apply_popup_surface_metrics(&popup_surface_metrics(2, 5, 7, 3));
+    state.set_pane_surface(selectable_popup_surface_at_revision(2));
+
+    assert!(
+        !state.pane_scroll_targets.contains_key("terminal-popup"),
+        "a reached popup scroll target must be cleared"
+    );
+}
+
+/// With `copy_on_select` off a popup selection is retained just like a pane's,
+/// so ctrl+c has to reach the shell instead of interrupting the popup process.
+#[test]
+fn the_copy_shortcut_reaches_the_shell_over_a_retained_popup_selection() {
+    let mut config = Config::default();
+    config.ui.copy_on_select = false;
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    state.set_snapshot(Box::new(snapshot()));
+    state.apply_popup_surface_metrics(&popup_surface_metrics(1, 0, 0, 3));
+    state.set_pane_surface(surface_with_selectable_popup());
+    state.compose(106, 20).expect("popup frame");
+    let popup = state.hits.popup.as_ref().expect("popup hit").clone();
+
+    drag_popup_row(&mut state, &popup, 0);
+    assert!(state
+        .selection
+        .as_ref()
+        .is_some_and(crate::selection::Selection::is_visible));
+
+    let copy = state.handle_input_bytes(b"\x03");
+    assert!(
+        copy.requests.is_empty(),
+        "ctrl+c must not reach the popup process, got {:?}",
+        copy.requests
+    );
+    let [ClientShellAction::Endpoint { request, .. }] = &copy.actions[..] else {
+        panic!("ctrl+c should extract the retained popup selection");
+    };
+    assert!(matches!(
+        &request.method,
+        crate::api::schema::Method::PopupSelectionRead(params)
+            if params.terminal_id == "terminal-popup"
+    ));
+}
+
+/// A double click in the popup sends `popup.selection.read`, but the completion
+/// path dropped any reply whose target was absent from `snapshot.panes` — which
+/// the popup terminal always is.
+#[test]
+fn popup_word_selection_completes() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.apply_popup_surface_metrics(&popup_surface_metrics(1, 0, 0, 3));
+    state.set_pane_surface(surface_with_selectable_popup());
+    state.compose(106, 20).expect("popup frame");
+    let popup = state.hits.popup.as_ref().expect("popup hit").clone();
+
+    let mut request = ClientShellInput::default();
+    state.request_word_selection(&popup, 0, 1, &mut request);
+    let [ClientShellAction::Endpoint { request, .. }] = &request.actions[..] else {
+        panic!("a popup word selection should reach the endpoint");
+    };
+    let request_id = request.id.clone();
+    assert!(matches!(
+        &request.method,
+        crate::api::schema::Method::PopupSelectionRead(params)
+            if params.terminal_id == "terminal-popup"
+    ));
+
+    let (repaint, _) = state.handle_endpoint_result(
+        "boot-1",
+        &request_id,
+        Ok(crate::api::schema::ResponseResult::PopupSelection {
+            terminal_id: "terminal-popup".into(),
+            text: "popup-live".into(),
+        }),
+    );
+    assert!(repaint);
+    assert!(
+        state
+            .selection
+            .as_ref()
+            .is_some_and(crate::selection::Selection::is_visible),
+        "the word selection reply must land instead of being discarded"
+    );
+}
+
+/// A popup word-selection reply lands now, so an in-flight one must not arrive
+/// after the user has started a fresh drag and replace it with the word range.
+#[test]
+fn a_new_popup_selection_invalidates_a_pending_word_selection() {
+    // The selection has to survive the release for a late reply to clobber it.
+    let mut config = Config::default();
+    config.ui.copy_on_select = false;
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    state.set_snapshot(Box::new(snapshot()));
+    state.apply_popup_surface_metrics(&popup_surface_metrics(1, 0, 0, 3));
+    state.set_pane_surface(surface_with_selectable_popup());
+    state.compose(106, 20).expect("popup frame");
+    let popup = state.hits.popup.as_ref().expect("popup hit").clone();
+
+    let mut request = ClientShellInput::default();
+    state.request_word_selection(&popup, 0, 1, &mut request);
+    let [ClientShellAction::Endpoint { request, .. }] = &request.actions[..] else {
+        panic!("a popup word selection should reach the endpoint");
+    };
+    let stale_id = request.id.clone();
+    assert!(state.pending_word_selection.is_some());
+
+    // The user gives up on the double click and drags a new selection instead.
+    // With copy-on-select off it stays retained on the screen.
+    drag_popup_row(&mut state, &popup, 0);
+    let dragged = state
+        .selection
+        .as_ref()
+        .map(|selection| selection.ordered_cells())
+        .expect("the drag selection");
+
+    let (_, actions) = state.handle_endpoint_result(
+        "boot-1",
+        &stale_id,
+        Ok(crate::api::schema::ResponseResult::PopupSelection {
+            terminal_id: "terminal-popup".into(),
+            text: "popup-live".into(),
+        }),
+    );
+    assert!(actions.is_empty());
+    assert_eq!(
+        state
+            .selection
+            .as_ref()
+            .map(|selection| selection.ordered_cells()),
+        Some(dragged),
+        "a stale word-selection reply must not replace the drag selection"
+    );
+}
+
+/// A mouse selection in the popup has no `copy_mode` to be restored from, so
+/// the snapshot cleanup has to exempt the popup on its own account.
+#[test]
+fn a_popup_mouse_selection_survives_an_agent_status_snapshot() {
+    let mut config = Config::default();
+    config.ui.copy_on_select = false;
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    state.set_snapshot(Box::new(snapshot()));
+    state.apply_popup_surface_metrics(&popup_surface_metrics(1, 0, 0, 3));
+    state.set_pane_surface(surface_with_selectable_popup());
+    state.compose(106, 20).expect("popup frame");
+    let popup = state.hits.popup.as_ref().expect("popup hit").clone();
+
+    drag_popup_row(&mut state, &popup, 0);
+    let dragged = state
+        .selection
+        .as_ref()
+        .map(|selection| selection.ordered_cells())
+        .expect("the drag selection");
+    assert!(state.copy_mode.is_none(), "a mouse drag opens no copy mode");
+
+    let mut next = snapshot();
+    next.revision = 2;
+    if let Some(agent) = next.agents.first_mut() {
+        agent.agent_status = crate::api::schema::AgentStatus::Done;
+    }
+    state.set_snapshot(Box::new(next));
+
+    assert_eq!(
+        state
+            .selection
+            .as_ref()
+            .map(|selection| selection.ordered_cells()),
+        Some(dragged),
+        "an unrelated snapshot must not wipe the popup's mouse selection"
+    );
+}
+
+/// Typing into the popup ends a retained selection the way it does over a pane.
+/// Otherwise the stale range stays visible and the copy shortcut copies it.
+#[test]
+fn typing_into_the_popup_ends_a_retained_selection() {
+    let mut config = Config::default();
+    config.ui.copy_on_select = false;
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    state.set_snapshot(Box::new(snapshot()));
+    state.apply_popup_surface_metrics(&popup_surface_metrics(1, 0, 0, 3));
+    state.set_pane_surface(surface_with_selectable_popup());
+    state.compose(106, 20).expect("popup frame");
+    let popup = state.hits.popup.as_ref().expect("popup hit").clone();
+
+    drag_popup_row(&mut state, &popup, 0);
+    assert!(state
+        .selection
+        .as_ref()
+        .is_some_and(crate::selection::Selection::is_visible));
+
+    // An ordinary key reaches the popup and clears the selection on the way.
+    let typed = state.handle_input_bytes(b"x");
+    assert!(matches!(
+        &typed.requests[..],
+        [ClientMessage::ClientShellPopupInput { terminal_id, .. }]
+            if terminal_id == "terminal-popup"
+    ));
+    assert!(
+        state.selection.is_none(),
+        "the popup key must end the retained selection"
+    );
+
+    // So the copy shortcut no longer has a stale range to copy.
+    let copy = state.handle_input_bytes(b"\x03");
+    assert!(
+        copy.actions.is_empty(),
+        "nothing is selected, so ctrl+c must not extract anything"
+    );
+    assert!(matches!(
+        &copy.requests[..],
+        [ClientMessage::ClientShellPopupInput { terminal_id, .. }]
+            if terminal_id == "terminal-popup"
+    ));
+}
+
+/// A wheel during a popup drag has to carry the selection's end along with the
+/// viewport; otherwise releasing copies the range from before the scroll.
+#[test]
+fn a_wheel_during_a_popup_drag_moves_the_selection_end() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.apply_popup_surface_metrics(&popup_surface_metrics(1, 4, 7, 3));
+    state.set_pane_surface(surface_with_selectable_popup());
+    state.compose(106, 20).expect("popup frame");
+    let popup = state.hits.popup.as_ref().expect("popup hit").clone();
+
+    state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: popup.inner_rect.x,
+        row: popup.inner_rect.y,
+        modifiers: KeyModifiers::empty(),
+    })]);
+    state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+        kind: MouseEventKind::Drag(MouseButton::Left),
+        column: popup.inner_rect.x + 2,
+        row: popup.inner_rect.y + 1,
+        modifiers: KeyModifiers::empty(),
+    })]);
+    let before = state
+        .selection
+        .as_ref()
+        .map(|selection| selection.ordered_cells())
+        .expect("the drag selection");
+
+    let scrolled =
+        state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: popup.inner_rect.x + 2,
+            row: popup.inner_rect.y + 1,
+            modifiers: KeyModifiers::empty(),
+        })]);
+    assert!(
+        scrolled.actions.iter().any(|action| matches!(
+            action,
+            ClientShellAction::Endpoint { request, .. }
+                if matches!(&request.method, crate::api::schema::Method::PopupScroll(_))
+        )),
+        "the wheel must scroll the popup terminal, got {:?}",
+        scrolled.actions.len()
+    );
+    assert!(
+        scrolled
+            .requests
+            .iter()
+            .all(|request| !matches!(request, ClientMessage::ClientShellPopupInput { .. })),
+        "a wheel during a drag drives the selection, not the popup process"
+    );
+    let after = state
+        .selection
+        .as_ref()
+        .map(|selection| selection.ordered_cells())
+        .expect("the selection survives the scroll");
+    assert_ne!(
+        before, after,
+        "the selection end must follow the scrolled viewport"
+    );
+}
+
+/// A popup that resizes under an in-progress mouse selection invalidates it:
+/// the anchored cells no longer mean what they did.
+#[test]
+fn a_popup_resize_invalidates_a_mouse_selection() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.apply_popup_surface_metrics(&popup_surface_metrics(1, 0, 0, 3));
+    state.set_pane_surface(surface_with_selectable_popup());
+    state.compose(106, 20).expect("popup frame");
+    let popup = state.hits.popup.as_ref().expect("popup hit").clone();
+
+    state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: popup.inner_rect.x,
+        row: popup.inner_rect.y,
+        modifiers: KeyModifiers::empty(),
+    })]);
+    state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+        kind: MouseEventKind::Drag(MouseButton::Left),
+        column: popup.inner_rect.x + 3,
+        row: popup.inner_rect.y,
+        modifiers: KeyModifiers::empty(),
+    })]);
+    assert!(state.selection.is_some());
+
+    // The popup comes back a different size on the next frame.
+    let mut resized = selectable_popup_surface_at_revision(2);
+    if let Some(popup_surface) = resized.popup.as_deref_mut() {
+        let narrower = Buffer::with_lines(["popup", "", ""]);
+        popup_surface.frame = FrameData::from_ratatui_buffer_with_hyperlinks(&narrower, None, &[]);
+    }
+    state.apply_popup_surface_metrics(&popup_surface_metrics(2, 0, 0, 3));
+    state.set_pane_surface(resized);
+
+    assert!(
+        state.selection.is_none(),
+        "a resized popup must drop the selection anchored to the old geometry"
+    );
+}
+
+/// Builds a popup surface whose visible rows read `lines`.
+fn popup_surface_with_lines(surface_revision: u64, lines: [&str; 3]) -> PaneSurfaceFrame {
+    let mut surface = selectable_popup_surface_at_revision(surface_revision);
+    if let Some(popup) = surface.popup.as_deref_mut() {
+        let buffer = Buffer::with_lines(lines);
+        popup.frame = FrameData::from_ratatui_buffer_with_hyperlinks(&buffer, None, &[]);
+    }
+    surface
+}
+
+/// Sets up a popup drag selection over the first row and returns the state.
+fn popup_state_with_drag_selection() -> ClientShellState {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.apply_popup_surface_metrics(&popup_surface_metrics(1, 0, 0, 3));
+    state.set_pane_surface(popup_surface_with_lines(1, ["keep-me", "noise-a", ""]));
+    state.compose(106, 20).expect("popup frame");
+    let popup = state.hits.popup.as_ref().expect("popup hit").clone();
+
+    state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: popup.inner_rect.x,
+        row: popup.inner_rect.y,
+        modifiers: KeyModifiers::empty(),
+    })]);
+    state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+        kind: MouseEventKind::Drag(MouseButton::Left),
+        column: popup.inner_rect.x + 6,
+        row: popup.inner_rect.y,
+        modifiers: KeyModifiers::empty(),
+    })]);
+    assert!(
+        state.selection.is_some(),
+        "the drag should start a selection"
+    );
+    state
+}
+
+/// A popup writes constantly, so output that leaves the selected cells alone
+/// must not cancel a drag the user is still making.
+#[test]
+fn popup_output_outside_the_selection_keeps_the_drag() {
+    let mut state = popup_state_with_drag_selection();
+    assert!(state.config.copy_on_select, "the default path is the risk");
+
+    // Row 2 changes; the selected row 0 does not.
+    let mut metrics = popup_surface_metrics(2, 0, 0, 3);
+    metrics.content_revision = 2;
+    state.apply_popup_surface_metrics(&metrics);
+    state.set_pane_surface(popup_surface_with_lines(2, ["keep-me", "noise-b", ""]));
+
+    assert!(
+        state.selection.is_some(),
+        "output outside the selection must not cancel the drag"
+    );
+}
+
+/// But a write that lands on the selected cells does invalidate it: those rows
+/// no longer say what the user picked.
+#[test]
+fn popup_output_inside_the_selection_drops_it() {
+    let mut state = popup_state_with_drag_selection();
+
+    let mut metrics = popup_surface_metrics(2, 0, 0, 3);
+    metrics.content_revision = 2;
+    state.apply_popup_surface_metrics(&metrics);
+    state.set_pane_surface(popup_surface_with_lines(2, ["changed", "noise-a", ""]));
+
+    assert!(
+        state.selection.is_none(),
+        "a write over the selected cells must drop the selection"
+    );
+}
+
+/// Switching to the alternate screen replaces the buffer without necessarily
+/// resizing the popup, so the selection has to go with it.
+#[test]
+fn a_popup_screen_switch_drops_the_selection() {
+    let mut state = popup_state_with_drag_selection();
+
+    // Same size, same revision, same cells — only the screen changed.
+    let mut metrics = popup_surface_metrics(2, 0, 0, 3);
+    metrics.alternate_screen_active = true;
+    state.apply_popup_surface_metrics(&metrics);
+    state.set_pane_surface(popup_surface_with_lines(2, ["keep-me", "noise-a", ""]));
+
+    assert!(
+        state.selection.is_none(),
+        "an alternate screen switch must drop the selection"
+    );
+}
+
+/// A direct graphics transfer moves the pending frame onto the ordered lane and
+/// frees the render slot, so a second frame is accepted while the first is still
+/// queued. Both reports then arrive ahead of both frames, and the older frame
+/// still has to find its own.
+#[test]
+fn two_staged_popup_reports_each_find_their_frame() {
+    let mut state = popup_state_with_drag_selection();
+
+    // Both reports land before either surface does.
+    let mut first = popup_surface_metrics(2, 0, 0, 3);
+    first.content_revision = 2;
+    let mut second = popup_surface_metrics(3, 4, 7, 3);
+    second.content_revision = 4;
+    state.apply_popup_surface_metrics(&first);
+    state.apply_popup_surface_metrics(&second);
+
+    // The older frame must still be paired with its own report.
+    state.set_pane_surface(popup_surface_with_lines(2, ["keep-me", "noise-b", ""]));
+    assert_eq!(
+        state
+            .popup_metrics_for("terminal-popup")
+            .map(|metrics| metrics.content_revision),
+        Some(2),
+        "the older frame must commit the report stamped for it"
+    );
+    assert!(
+        state.selection.is_some(),
+        "and its selection must survive, since the selected cells did not move"
+    );
+
+    // Then the newer frame commits its own.
+    state.set_pane_surface(popup_surface_with_lines(3, ["keep-me", "noise-b", ""]));
+    assert_eq!(
+        state
+            .popup_metrics_for("terminal-popup")
+            .map(|metrics| metrics.content_revision),
+        Some(4)
+    );
+    assert_eq!(
+        state
+            .popup_metrics_for("terminal-popup")
+            .and_then(|metrics| metrics.scroll)
+            .map(|scroll| scroll.offset_from_bottom),
+        Some(4)
+    );
+}
+
+/// A popup word selection arms a deadline that clears its highlight. Starting a
+/// new drag before it expires has to disarm it, or the tick deletes the
+/// selection while the button is still down and the release copies nothing.
+#[test]
+fn a_new_popup_drag_disarms_the_previous_highlight_deadline() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.apply_popup_surface_metrics(&popup_surface_metrics(1, 0, 0, 3));
+    state.set_pane_surface(popup_surface_with_lines(1, ["keep-me", "noise-a", ""]));
+    state.compose(106, 20).expect("popup frame");
+    let popup = state.hits.popup.as_ref().expect("popup hit").clone();
+
+    // A word selection leaves the highlight armed to clear shortly.
+    let mut request = ClientShellInput::default();
+    state.request_word_selection(&popup, 0, 1, &mut request);
+    let [ClientShellAction::Endpoint { request, .. }] = &request.actions[..] else {
+        panic!("a popup word selection should reach the endpoint");
+    };
+    let request_id = request.id.clone();
+    state.handle_endpoint_result(
+        "boot-1",
+        &request_id,
+        Ok(crate::api::schema::ResponseResult::PopupSelection {
+            terminal_id: "terminal-popup".into(),
+            text: "keep-me".into(),
+        }),
+    );
+    let armed = state
+        .selection_highlight_clear_deadline
+        .expect("the word selection should arm the highlight deadline");
+
+    // The user starts a fresh drag before that deadline.
+    state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: popup.inner_rect.x,
+        row: popup.inner_rect.y,
+        modifiers: KeyModifiers::empty(),
+    })]);
+    state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+        kind: MouseEventKind::Drag(MouseButton::Left),
+        column: popup.inner_rect.x + 4,
+        row: popup.inner_rect.y,
+        modifiers: KeyModifiers::empty(),
+    })]);
+    assert!(
+        state.selection_highlight_clear_deadline.is_none(),
+        "starting a drag must disarm the previous highlight deadline"
+    );
+
+    // The tick that would have fired must leave the live drag alone.
+    state.tick_copy_feedback(armed);
+    assert!(
+        state.selection.is_some(),
+        "the tick must not delete the selection under the pressed button"
+    );
+
+    let release =
+        state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: popup.inner_rect.x + 4,
+            row: popup.inner_rect.y,
+            modifiers: KeyModifiers::empty(),
+        })]);
+    assert!(
+        release.actions.iter().any(|action| matches!(
+            action,
+            ClientShellAction::Endpoint { request, .. }
+                if matches!(&request.method, crate::api::schema::Method::PopupSelectionRead(_))
+        )),
+        "the release must still request the copy"
+    );
+}
+
+/// Copy mode owns the cursor while it is active. A scroll it requested leaves
+/// the frame incoherent until the matching surface lands, and during that gap
+/// the popup process's own cursor must not show at an unrelated position.
+#[test]
+fn a_pending_popup_copy_scroll_hides_the_terminal_cursor() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.apply_popup_surface_metrics(&popup_surface_metrics(1, 4, 7, 3));
+    state.set_pane_surface(surface_with_popup());
+    state.compose(106, 20).expect("popup frame");
+
+    let mut outcome = ClientShellInput::default();
+    assert!(state.enter_copy_mode(&mut outcome));
+    let coherent = state.compose(106, 20).expect("copy mode frame");
+    assert!(
+        coherent.cursor.is_none(),
+        "copy mode replaces the terminal cursor with its own block"
+    );
+
+    // A page-up moves copy mode's own offset and requests the matching scroll.
+    // Until that surface lands the committed metrics still describe the old
+    // viewport, so the frame is incoherent.
+    state
+        .copy_mode
+        .as_mut()
+        .expect("popup copy mode")
+        .offset_from_bottom = 1;
+    assert!(
+        state
+            .hits
+            .popup
+            .as_ref()
+            .and_then(|hit| hit.scroll)
+            .is_some_and(|scroll| scroll.offset_from_bottom != 1),
+        "the committed metrics must still describe the old viewport"
+    );
+    let pending = state.compose(106, 20).expect("pending frame");
+    assert!(
+        pending.cursor.is_none(),
+        "a pending copy scroll must not reveal the popup process's cursor"
+    );
 }

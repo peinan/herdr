@@ -610,6 +610,7 @@ async fn client_shell_attach_seeds_workspace() {
             endpoint_keybindings: false,
             mouse_capture: false,
             surface_active: true,
+            surface_v2: true,
             writer,
         })
     );
@@ -640,6 +641,7 @@ async fn client_shell_endpoint_request_uses_the_selected_connection() {
             endpoint_keybindings: false,
             mouse_capture: false,
             surface_active: true,
+            surface_v2: true,
             writer,
         })
     );
@@ -776,6 +778,7 @@ async fn client_shell_receives_metadata_then_shell_free_pane_surface() {
             endpoint_keybindings: false,
             mouse_capture: false,
             surface_active: true,
+            surface_v2: true,
             writer,
         })
     );
@@ -943,6 +946,7 @@ fn connect_test_shell(
             endpoint_keybindings: false,
             mouse_capture: false,
             surface_active: true,
+            surface_v2: true,
             writer,
         })
     );
@@ -1320,6 +1324,7 @@ async fn client_shell_config_diagnostics_follow_keybinding_ownership() {
             endpoint_keybindings: false,
             mouse_capture: false,
             surface_active: true,
+            surface_v2: true,
             writer: local_writer,
         })
     );
@@ -1344,6 +1349,7 @@ async fn client_shell_config_diagnostics_follow_keybinding_ownership() {
             endpoint_keybindings: true,
             mouse_capture: false,
             surface_active: true,
+            surface_v2: true,
             writer: endpoint_writer,
         })
     );
@@ -2246,6 +2252,7 @@ async fn public_api_focus_replaces_every_client_shell_projection() {
             endpoint_keybindings: false,
             mouse_capture: false,
             surface_active: true,
+            surface_v2: true,
             writer,
         })
     );
@@ -2470,6 +2477,172 @@ async fn client_shell_hidden_pane_rejects_presses_but_accepts_releases() {
 }
 
 #[tokio::test]
+async fn popup_surface_metrics_reach_only_v2_clients() {
+    /// Renders one popup-bearing frame for a single client and returns the popup
+    /// metrics control it received, if any.
+    ///
+    /// One client per server keeps this independent of which client would be
+    /// foreground or own the tab geometry.
+    fn popup_metrics_for_client(
+        surface_v2: bool,
+    ) -> (
+        Option<crate::protocol::endpoint::PopupSurfaceMetrics>,
+        String,
+    ) {
+        let mut server = test_headless_server();
+        let _pane_input = install_focused_test_runtime(&mut server, b"base-pane");
+        let (popup_runtime, _popup_input) =
+            crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
+                40,
+                12,
+                0,
+                b"POPUP_METRICS_LIVE",
+                4,
+            );
+        let (_, popup_terminal_id) = server.app.install_test_popup_runtime(popup_runtime);
+
+        let (writer, control_rx, render_rx) = test_client_writer();
+        assert!(
+            server.handle_server_event(ServerEvent::ClientShellConnected {
+                client_id: 12,
+                surface_cols: 80,
+                surface_rows: 23,
+                cell_width_px: 10,
+                cell_height_px: 20,
+                pixel_mouse: false,
+                direct_graphics: false,
+                endpoint_keybindings: false,
+                mouse_capture: false,
+                surface_active: true,
+                surface_v2,
+                writer,
+            })
+        );
+        let _snapshot = control_rx.recv().expect("shell snapshot");
+
+        server.render_and_stream();
+        let ServerMessage::PaneSurface(surface) =
+            read_server_message(render_rx.recv().expect("popup surface"))
+        else {
+            panic!("expected pane surface");
+        };
+        let popup = surface.popup.as_deref().expect("popup terminal surface");
+        assert_eq!(popup.terminal_id, popup_terminal_id.as_str());
+
+        // A v2 client gets its report promptly; a v1 client must still get none
+        // after a wait long enough for one to have arrived.
+        let timeout = if surface_v2 {
+            Duration::from_secs(5)
+        } else {
+            Duration::from_millis(500)
+        };
+        let metrics = wait_for_popup_metrics(&control_rx, timeout);
+        (metrics, surface.surface_revision.to_string())
+    }
+
+    let (v2_metrics, v2_revision) = popup_metrics_for_client(true);
+    let metrics = v2_metrics.expect("a v2 client receives popup metrics");
+    assert!(metrics.scroll.is_some());
+    assert_eq!(
+        metrics.surface_revision.to_string(),
+        v2_revision,
+        "the metrics must be stamped for the frame they were sent with"
+    );
+
+    let (v1_metrics, _) = popup_metrics_for_client(false);
+    assert!(
+        v1_metrics.is_none(),
+        "a generation-1 client must not receive the v2 popup metrics control"
+    );
+}
+
+/// Waits for the popup metrics control, or gives up at the deadline.
+///
+/// The test writer forwards control messages on a background thread while render
+/// frames bypass the queue entirely, so receiving a surface says nothing about
+/// whether its control has been handed over yet. A non-blocking drain here races
+/// that thread.
+fn wait_for_popup_metrics(
+    control_rx: &std::sync::mpsc::Receiver<Vec<u8>>,
+    timeout: Duration,
+) -> Option<crate::protocol::endpoint::PopupSurfaceMetrics> {
+    let deadline = std::time::Instant::now() + timeout;
+    while let Some(remaining) = deadline.checked_duration_since(std::time::Instant::now()) {
+        let Ok(message) = control_rx.recv_timeout(remaining) else {
+            break;
+        };
+        if let ServerMessage::EndpointControl { kind, data } = read_server_message(message) {
+            if kind == crate::protocol::endpoint::POPUP_SURFACE_METRICS_KIND {
+                return serde_json::from_str(&data).ok();
+            }
+        }
+    }
+    None
+}
+
+/// Pins that the metrics travel with the frame and report the revision the
+/// render saw.
+///
+/// The mid-render race itself — a popup writing while its pixels are collected,
+/// which the odd-marking in `render_popup_surface` exists to reject — is not
+/// covered: nothing can inject a write between the bracketing reads from here.
+#[tokio::test]
+async fn popup_metrics_travel_with_the_frame_and_report_its_revision() {
+    let mut server = test_headless_server();
+    let _pane_input = install_focused_test_runtime(&mut server, b"base-pane");
+    let (popup_runtime, _popup_input) =
+        crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
+            40,
+            12,
+            0,
+            b"POPUP_COHERENT",
+            4,
+        );
+    let (_, popup_terminal_id) = server.app.install_test_popup_runtime(popup_runtime);
+
+    let (writer, control_rx, render_rx) = test_client_writer();
+    assert!(
+        server.handle_server_event(ServerEvent::ClientShellConnected {
+            client_id: 12,
+            surface_cols: 80,
+            surface_rows: 23,
+            cell_width_px: 10,
+            cell_height_px: 20,
+            pixel_mouse: false,
+            direct_graphics: false,
+            endpoint_keybindings: false,
+            mouse_capture: false,
+            surface_active: true,
+            surface_v2: true,
+            writer,
+        })
+    );
+    let _snapshot = control_rx.recv().expect("shell snapshot");
+
+    server.render_and_stream();
+    let _surface = render_rx.recv().expect("popup surface");
+    let metrics =
+        wait_for_popup_metrics(&control_rx, Duration::from_secs(5)).expect("popup metrics");
+    assert_eq!(metrics.terminal_id, popup_terminal_id.as_str());
+    assert!(
+        metrics.content_revision.is_multiple_of(2),
+        "a quiet popup must report a usable, even revision"
+    );
+
+    // The runtime's own revision has to agree with what the frame reported.
+    let live = server
+        .app
+        .terminal_runtimes
+        .get(&popup_terminal_id)
+        .expect("popup runtime")
+        .content_seq();
+    assert_eq!(
+        metrics.content_revision, live,
+        "the reported revision must be the one the render saw"
+    );
+}
+
+#[tokio::test]
 async fn client_shell_streams_and_targets_popup_terminal_content() {
     let mut server = test_headless_server();
     let mut pane_input = install_focused_test_runtime(&mut server, b"base-pane");
@@ -2496,6 +2669,7 @@ async fn client_shell_streams_and_targets_popup_terminal_content() {
             endpoint_keybindings: false,
             mouse_capture: false,
             surface_active: true,
+            surface_v2: true,
             writer,
         })
     );

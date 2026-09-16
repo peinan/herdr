@@ -1829,6 +1829,12 @@ async fn run_client_loop(
                                 debug!(%kind, "ignoring unknown endpoint control message");
                                 continue;
                             }
+                            Ok(endpoint::EndpointControlMessage::PopupMetrics(metrics)) => {
+                                if let Some(shell) = state.shell.as_mut() {
+                                    shell.apply_popup_surface_metrics(&metrics);
+                                }
+                                continue;
+                            }
                             Ok(endpoint::EndpointControlMessage::Snapshot(snapshot)) => snapshot,
                             Err(message)
                                 if federated

@@ -518,7 +518,9 @@ impl HeadlessServer {
             // in a graphics-capable surface message rather than invoking the full renderer.
             let (prepared, graphics_delivery) = if let Some((surface, delivery)) = graphics {
                 (
-                    client.render_state.prepare_pane_surface(surface),
+                    // This fast path bails out while a popup is open, so the
+                    // surface never carries one and needs no popup metrics.
+                    client.render_state.prepare_pane_surface(surface, None),
                     Some(delivery),
                 )
             } else {
