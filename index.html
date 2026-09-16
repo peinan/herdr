@@ -471,6 +471,8 @@ footer{margin-top:110px;border-top:1px solid var(--line-soft)}
 <symbol id="i-brand-github" viewBox="0 0 24 24"><path d="M9 19c-4.3 1.4 -4.3 -2.5 -6 -3m12 5v-3.5c0 -1 .1 -1.4 -.5 -2c2.8 -.3 5.5 -1.4 5.5 -6a4.6 4.6 0 0 0 -1.3 -3.2a4.2 4.2 0 0 0 -.1 -3.2s-1.1 -.3 -3.5 1.3a12.3 12.3 0 0 0 -6.2 0c-2.4 -1.6 -3.5 -1.3 -3.5 -1.3a4.2 4.2 0 0 0 -.1 3.2a4.6 4.6 0 0 0 -1.3 3.2c0 4.6 2.7 5.7 5.5 6c-.6 .6 -.6 1.2 -.5 2v3.5"/></symbol>
 <symbol id="i-bug" viewBox="0 0 24 24"><path d="M9 9v-1a3 3 0 0 1 6 0v1"/><path d="M8 9h8a6 6 0 0 1 1 3v3a5 5 0 0 1 -10 0v-3a6 6 0 0 1 1 -3"/><path d="M3 13l4 0"/><path d="M17 13l4 0"/><path d="M12 20l0 -6"/><path d="M4 19l3.35 -2"/><path d="M20 19l-3.35 -2"/><path d="M4 7l3.75 2.4"/><path d="M20 7l-3.75 2.4"/></symbol>
 <symbol id="i-contrast" viewBox="0 0 24 24"><path d="M12 12m-9 0a9 9 0 1 0 18 0a9 9 0 1 0 -18 0"/><path d="M12 17a5 5 0 0 0 0 -10v10"/></symbol>
+<symbol id="i-copy" viewBox="0 0 24 24"><path d="M8 8m0 2a2 2 0 0 1 2 -2h8a2 2 0 0 1 2 2v8a2 2 0 0 1 -2 2h-8a2 2 0 0 1 -2 -2z"/><path d="M16 8v-2a2 2 0 0 0 -2 -2h-8a2 2 0 0 0 -2 2v8a2 2 0 0 0 2 2h2"/></symbol>
+<symbol id="i-flag" viewBox="0 0 24 24"><path d="M5 5a5 5 0 0 1 7 0a5 5 0 0 0 7 0v9a5 5 0 0 1 -7 0a5 5 0 0 0 -7 0v-9z"/><path d="M5 21v-7"/></symbol>
 <symbol id="i-external-link" viewBox="0 0 24 24"><path d="M12 6h-6a2 2 0 0 0 -2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2 -2v-6"/><path d="M11 13l9 -9"/><path d="M15 4h5v5"/></symbol>
 <symbol id="i-git-merge" viewBox="0 0 24 24"><path d="M7 18m-2 0a2 2 0 1 0 4 0a2 2 0 1 0 -4 0"/><path d="M7 6m-2 0a2 2 0 1 0 4 0a2 2 0 1 0 -4 0"/><path d="M17 12m-2 0a2 2 0 1 0 4 0a2 2 0 1 0 -4 0"/><path d="M7 8l0 8"/><path d="M7 8a4 4 0 0 0 4 4h4"/></symbol>
 <symbol id="i-keyboard" viewBox="0 0 24 24"><path d="M2 6m0 2a2 2 0 0 1 2 -2h16a2 2 0 0 1 2 2v8a2 2 0 0 1 -2 2h-16a2 2 0 0 1 -2 -2z"/><path d="M6 10l0 .01"/><path d="M10 10l0 .01"/><path d="M14 10l0 .01"/><path d="M18 10l0 .01"/><path d="M6 14l0 .01"/><path d="M18 14l0 .01"/><path d="M10 14l4 .01"/></symbol>
@@ -492,6 +494,7 @@ footer{margin-top:110px;border-top:1px solid var(--line-soft)}
       <a href="#features" class="opt">features</a>
       <a href="#popup" class="opt">popup</a>
       <a href="#keys" class="opt">keys</a>
+      <a href="#agents" class="opt">agents</a>
       <a href="#reference" class="opt">reference</a>
       <a href="#install" class="opt">install</a>
       <a href="https://github.com/peinan/herdr"><svg class="i" aria-hidden="true"><use href="#i-brand-github"/></svg> GitHub <svg class="i" aria-hidden="true"><use href="#i-external-link"/></svg></a>
@@ -861,6 +864,15 @@ footer{margin-top:110px;border-top:1px solid var(--line-soft)}
     </div>
 
     <div class="fixnote">
+      <span class="ico"><svg class="i" aria-hidden="true"><use href="#i-copy"/></svg></span>
+      <div>
+        <h3>popup の中でも copy mode が使える</h3>
+        <p>これまで popup はキーをすべて中の端末へ素通ししていたので、<code class="mono">prefix+[</code> が届かず選択もコピーもできませんでした。Terminal モードの prefix キーだけをシェルが受け取るようにして、キーボードの copy mode・検索・マウスドラッグ選択をペインと同じ操作感で使えるようにしています。prefix の二連打は従来どおり中のプログラムへ literal で届くので、<code class="mono">ctrl+a</code> を prefix にしていてもシェルの行頭移動は生きたままです。副作用として、popup を開いたままでも split やタブ切替などの prefix アクションが通ります(tmux の display-popup と同じ挙動)。</p>
+        <span class="prlink">refs: <a href="https://github.com/peinan/herdr/pull/52">#52</a></span>
+      </div>
+    </div>
+
+    <div class="fixnote">
       <span class="ico"><svg class="i" aria-hidden="true"><use href="#i-bug"/></svg></span>
       <div>
         <h3>ついでに: 全角文字が枠線を食う不具合を修正</h3>
@@ -902,6 +914,46 @@ footer{margin-top:110px;border-top:1px solid var(--line-soft)}
 </section>
 
 <!-- ═════════ reference ═════════ -->
+<!-- ═════════ agents ═════════ -->
+<section class="sec" id="agents">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="sec-eyebrow"><svg class="i" aria-hidden="true"><use href="#i-flag"/></svg> [ui] agent mark</p>
+      <h2>「後で戻る」を、見失わない。</h2>
+      <p>複数のエージェントを並行で回していると、先に別のエージェントへ答えて戻ってくる場面が続きます。戻り先に目印を置けるようにしました。</p>
+    </div>
+    <div class="pol">
+      <article>
+        <span class="ico"><svg class="i" aria-hidden="true"><use href="#i-flag"/></svg></span>
+        <p class="pk"># ui.agent_mark_indicator</p>
+        <h3>行頭にマーカー</h3>
+        <p>マークしたエージェントの行頭にグリフが出ます。既存のインデント 1 セルを使うので本文の開始桁は動きません。折りたたみ表示ではマシン頭文字や番号を潰さず、色と太字だけで示します。</p>
+      </article>
+      <article>
+        <span class="ico"><svg class="i" aria-hidden="true"><use href="#i-list-details"/></svg></span>
+        <p class="pk"># agent_panel_sort = "priority"</p>
+        <h3>マーク済みが最上位へ</h3>
+        <p>優先度順のサイドバーでは、マークしたエージェントが先頭に浮きます。複数マシンをまたぐ federated 表示でも同じ並びです。</p>
+      </article>
+      <article>
+        <span class="ico"><svg class="i" aria-hidden="true"><use href="#i-keyboard"/></svg></span>
+        <p class="pk"># keys.toggle_mark</p>
+        <h3>キーでも CLI でも</h3>
+        <p><code class="mono">prefix+m</code>、サイドバー行の右クリックメニュー、<code class="mono">herdr agent mark</code> / <code class="mono">herdr pane mark</code> から切り替えられます。状態はサーバが持つので、どのクライアントから見ても同じです。</p>
+      </article>
+    </div>
+    <div class="fixnote">
+      <span class="ico"><svg class="i" aria-hidden="true"><use href="#i-toggle-right"/></svg></span>
+      <div>
+        <h3>寿命はセッション中だけ</h3>
+        <p>マークは「いま戻りたい先」の目印なので、サーバのプロセス内にだけ持ち、設定やセッションスナップショットには保存しません。herdr を再起動すると消えます。既存の未読フラグやペインごとの右クリック設定と同じ扱いです。</p>
+        <span class="prlink">refs: <a href="https://github.com/peinan/herdr/pull/51">#51</a></span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═════════ reference ═════════ -->
 <section class="sec" id="reference">
   <div class="wrap">
     <div class="sec-head">
@@ -927,6 +979,9 @@ footer{margin-top:110px;border-top:1px solid var(--line-soft)}
           <tr><td class="key">ui.popup_title_format</td><td class="typ">string</td><td class="def">""</td><td>popup 枠タイトルの書式。空なら従来どおり <span class="mono">popup</span></td></tr>
           <tr><td class="key">ui.popup_background</td><td class="typ">enum</td><td class="def">"panel"</td><td>panel=枠と余白 / all=内容の背後まで / transparent=塗らない</td></tr>
           <tr><td class="key">ui.popup_dim_background</td><td class="typ">enum</td><td class="def">"off"</td><td>popup 表示中の背後の減光: off / all / panes</td></tr>
+          <tr><td class="key">ui.agent_mark_indicator</td><td class="typ">string</td><td class="def">"▌"</td><td>マーク済みエージェント行の行頭グリフ(1 セル幅のみ、"" で非表示)</td></tr>
+          <tr><td class="key">ui.agent_mark_color</td><td class="typ">string</td><td class="def">"magenta"</td><td>マークの色。16 進 / 名前 / rgb()。yellow は Working 状態の色と衝突するので避ける</td></tr>
+          <tr><td class="key">keys.toggle_mark</td><td class="typ">binding</td><td class="def">"prefix+m"</td><td>フォーカス中のエージェントのマークを切り替え</td></tr>
           <tr><td class="key">keys.repeat_timeout</td><td class="typ">u64 (ms)</td><td class="def">500</td><td>repeatable バインドがアーム状態を保つ時間</td></tr>
           <tr><td class="key">keys.&lt;action&gt;</td><td class="typ">table</td><td class="def">repeat = false</td><td><span class="mono" style="font-size:12px">{ key, repeat }</span> 形式で bind -r 風の繰り返しを有効化</td></tr>
         </tbody>
