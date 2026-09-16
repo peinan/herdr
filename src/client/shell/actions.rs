@@ -48,6 +48,10 @@ impl ClientShellState {
                     outcome.repaint = true;
                     return;
                 }
+                if action == crate::input::KeybindAction::ToggleAgentMark {
+                    self.toggle_focused_agent_mark(outcome);
+                    return;
+                }
                 if action == crate::input::KeybindAction::Help {
                     self.overlay = Some(ClientShellOverlay::Help(ClientHelpOverlay {
                         query: String::new(),
@@ -392,6 +396,185 @@ impl ClientShellState {
         true
     }
 
+    /// Flip the follow-up mark on the focused pane. Panes that are not hosting
+    /// an agent have nowhere to show a mark, so they are left alone.
+    pub(super) fn toggle_focused_agent_mark(&mut self, outcome: &mut ClientShellInput) {
+        let Some(snapshot) = self.snapshot.as_deref() else {
+            return;
+        };
+        let Some(focused_pane_id) = snapshot.focused_pane_id.as_deref() else {
+            return;
+        };
+        let Some((pane_id, marked)) = snapshot
+            .agents
+            .iter()
+            .find(|agent| agent.pane_id == focused_pane_id)
+            .map(|agent| (agent.pane_id.clone(), agent.marked))
+        else {
+            return;
+        };
+        self.set_agent_mark(pane_id, !marked, outcome);
+    }
+
+    /// Request a mark change and reflect it in the local projection right away.
+    /// Without that, a second toggle raised before the server answers would read
+    /// the same stale value and repeat the first request instead of undoing it.
+    /// The pending request carries the previous value so a refusal can put the
+    /// projection back rather than leaving a mark the server never took.
+    pub(super) fn set_agent_mark(
+        &mut self,
+        pane_id: String,
+        marked: bool,
+        outcome: &mut ClientShellInput,
+    ) {
+        // An overlapping request already wrote the projection, so its baseline
+        // is the last server-confirmed value; reading the projection back here
+        // would capture the optimistic one and restore it on failure.
+        let previous = match self.pending_mark_baseline(&pane_id) {
+            Some(previous) => previous,
+            None => match self.agent_mark(&pane_id) {
+                Some(previous) => previous,
+                None => return,
+            },
+        };
+        let sent = self.push_endpoint_method_with_kind(
+            crate::api::schema::Method::PaneMarkSet(crate::api::schema::PaneMarkSetParams {
+                pane_id: pane_id.clone(),
+                marked,
+            }),
+            PendingEndpointKind::MarkSet {
+                pane_id: pane_id.clone(),
+                requested: marked,
+                previous,
+            },
+            outcome,
+        );
+        if sent {
+            let server = self
+                .pending_agent_marks
+                .get(&pane_id)
+                .and_then(|pending| pending.server);
+            self.pending_agent_marks.insert(
+                pane_id.clone(),
+                PendingAgentMark {
+                    requested: marked,
+                    server,
+                },
+            );
+            outcome.repaint |= self.write_agent_mark(&pane_id, marked);
+        }
+    }
+
+    /// Put the in-flight values back after a snapshot replaced the projection,
+    /// so a toggle raised afterwards still inverts what was last requested,
+    /// remembering the server value being covered up so it is not lost.
+    pub(super) fn reapply_pending_agent_marks(&mut self) {
+        if self.pending_agent_marks.is_empty() {
+            return;
+        }
+        for (pane_id, mut pending) in std::mem::take(&mut self.pending_agent_marks) {
+            pending.server = self.agent_mark(&pane_id).or(pending.server);
+            self.write_agent_mark(&pane_id, pending.requested);
+            self.pending_agent_marks.insert(pane_id, pending);
+        }
+    }
+
+    /// Give the projection back to the server once nothing is in flight for
+    /// this pane: a snapshot seen meanwhile wins over both the optimistic write
+    /// and the rollback baseline.
+    ///
+    /// A snapshot rendered before the server applied our value is
+    /// indistinguishable here from another client's newer change — both arrive
+    /// mid-flight carrying the value we replaced, and nothing in the response
+    /// dates it. Deferring to the snapshot is the recoverable choice: a mark
+    /// that changes server state goes through `request_changes_ui` and
+    /// `emit_pane_updated`, so a stale restore is corrected by the snapshot
+    /// that change publishes, whereas keeping the optimistic value would
+    /// discard another client's change for good. Telling the two apart would
+    /// need the response to carry the revision its change landed in.
+    fn settle_agent_mark(&mut self, pane_id: &str, fallback: Option<bool>) -> bool {
+        let settled = self
+            .pending_agent_marks
+            .remove(pane_id)
+            .and_then(|pending| pending.server)
+            .or(fallback);
+        match settled {
+            Some(marked) => self.write_agent_mark(pane_id, marked),
+            None => false,
+        }
+    }
+
+    fn agent_mark(&self, pane_id: &str) -> Option<bool> {
+        self.snapshot.as_deref().and_then(|snapshot| {
+            snapshot
+                .agents
+                .iter()
+                .find(|agent| agent.pane_id == pane_id)
+                .map(|agent| agent.marked)
+        })
+    }
+
+    /// Writes the active projection and the active endpoint's cached snapshot.
+    /// The multi-machine sidebar renders straight from that cache, so updating
+    /// only the projection would leave its marker and ordering stale.
+    fn write_agent_mark(&mut self, pane_id: &str, marked: bool) -> bool {
+        let active_endpoint_id = self.active_endpoint_id.clone();
+        let mut changed = write_snapshot_agent_mark(self.snapshot.as_deref_mut(), pane_id, marked);
+        if let Some(endpoint) = self
+            .endpoints
+            .iter_mut()
+            .find(|endpoint| endpoint.endpoint_id == active_endpoint_id)
+        {
+            changed |= write_snapshot_agent_mark(endpoint.snapshot.as_deref_mut(), pane_id, marked);
+        }
+        changed
+    }
+
+    /// Whether another `pane.mark.set` for this pane is still in flight. A
+    /// newer request owns the projection, so an older failure must not undo it.
+    fn mark_request_outstanding(&self, pane_id: &str) -> bool {
+        self.pending_requests.values().any(|pending| {
+            matches!(
+                &pending.kind,
+                PendingEndpointKind::MarkSet { pane_id: pending_pane_id, .. }
+                    if pending_pane_id == pane_id
+            )
+        })
+    }
+
+    /// The last server-confirmed mark for this pane as recorded by an
+    /// in-flight `pane.mark.set`. All requests for one pane share the same
+    /// baseline, so any of them answers.
+    fn pending_mark_baseline(&self, pane_id: &str) -> Option<bool> {
+        self.pending_requests
+            .values()
+            .find_map(|pending| match &pending.kind {
+                PendingEndpointKind::MarkSet {
+                    pane_id: pending_pane_id,
+                    previous,
+                    ..
+                } if pending_pane_id == pane_id => Some(*previous),
+                _ => None,
+            })
+    }
+
+    /// Move the shared baseline forward once the server confirms a value, so a
+    /// later failure restores what the server actually holds.
+    fn confirm_pending_mark_baseline(&mut self, pane_id: &str, confirmed: bool) {
+        for pending in self.pending_requests.values_mut() {
+            if let PendingEndpointKind::MarkSet {
+                pane_id: pending_pane_id,
+                previous,
+                ..
+            } = &mut pending.kind
+            {
+                if pending_pane_id == pane_id {
+                    *previous = confirmed;
+                }
+            }
+        }
+    }
+
     pub(super) fn push_endpoint_method_with_kind(
         &mut self,
         method: crate::api::schema::Method,
@@ -577,6 +760,33 @@ impl ClientShellState {
         }
         match pending.kind {
             PendingEndpointKind::Generic => {}
+            PendingEndpointKind::MarkSet {
+                pane_id,
+                requested,
+                previous,
+            } => {
+                let outstanding = self.mark_request_outstanding(&pane_id);
+                return match result {
+                    Ok(_) => {
+                        self.confirm_pending_mark_baseline(&pane_id, requested);
+                        if outstanding {
+                            return (false, Vec::new());
+                        }
+                        // Nothing else is in flight, so hand the pane back to
+                        // the server: a snapshot seen while we held the
+                        // optimistic value is newer than what we asked for.
+                        (self.settle_agent_mark(&pane_id, None), Vec::new())
+                    }
+                    // An error always repaints, matching every other kind: the
+                    // rejection notice was already queued above and an idle UI
+                    // would otherwise never redraw to show it.
+                    Err(_) if outstanding => (true, Vec::new()),
+                    Err(_) => {
+                        self.settle_agent_mark(&pane_id, Some(previous));
+                        (true, Vec::new())
+                    }
+                };
+            }
             PendingEndpointKind::ProductAnnouncementDismiss { version, id } => {
                 return match result {
                     Ok(_) => (false, Vec::new()),
@@ -1171,4 +1381,23 @@ impl ClientShellState {
             _ => None,
         }
     }
+}
+
+fn write_snapshot_agent_mark(
+    snapshot: Option<&mut crate::protocol::ClientShellSnapshot>,
+    pane_id: &str,
+    marked: bool,
+) -> bool {
+    snapshot
+        .and_then(|snapshot| {
+            snapshot
+                .agents
+                .iter_mut()
+                .find(|agent| agent.pane_id == pane_id)
+        })
+        .is_some_and(|agent| {
+            let changed = agent.marked != marked;
+            agent.marked = marked;
+            changed
+        })
 }

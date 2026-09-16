@@ -1138,6 +1138,7 @@ impl App {
             Method::PaneGet(target) => return self.handle_pane_get(request.id, target),
             Method::PaneFocus(target) => return self.handle_pane_focus(request.id, target),
             Method::PaneInputSet(params) => return self.handle_pane_input_set(request.id, params),
+            Method::PaneMarkSet(params) => return self.handle_pane_mark_set(request.id, params),
             Method::PaneLinkActivate(params) => {
                 return self.handle_pane_link_activate(request.id, params);
             }

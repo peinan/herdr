@@ -133,6 +133,8 @@ impl ClientShellConfig {
             agents: config.ui.sidebar.agents.clone(),
             agent_panel_sort: config.ui.agent_panel_sort,
             status_indicators: config.ui.status_indicators,
+            agent_mark_indicator: config.ui.agent_mark_indicator.clone(),
+            agent_mark_color: crate::config::parse_color(&config.ui.agent_mark_color),
             sound_enabled: config.ui.sound.enabled,
             toast_delivery: config.ui.toast.delivery,
             toast_delay_seconds: config.ui.toast.delay_seconds,
@@ -348,6 +350,8 @@ impl ClientShellConfig {
                 self.agents = ui.sidebar.agents.clone();
                 self.agent_panel_sort = ui.agent_panel_sort;
                 self.status_indicators = ui.status_indicators;
+                self.agent_mark_indicator = ui.agent_mark_indicator.clone();
+                self.agent_mark_color = crate::config::parse_color(&ui.agent_mark_color);
                 self.sound_enabled = ui.sound.enabled;
                 self.toast_delivery = ui.toast.delivery;
                 self.toast_delay_seconds = ui.toast.delay_seconds;
@@ -483,6 +487,8 @@ mod tests {
         next.ui.tab_bar_title = true;
         next.ui.agent_panel_sort = crate::config::AgentPanelSortConfig::Priority;
         next.ui.status_indicators = crate::config::StatusIndicatorStyle::Symbols;
+        next.ui.agent_mark_indicator = "*".to_owned();
+        next.ui.agent_mark_color = "red".to_owned();
         next.ui.sidebar.agents = toml::from_str("rows = [[{ token = 'machine', rules = [{ equals = 'Local', bold = true }] }]]\nrow_gap = 2").unwrap();
         next.keys.prefix = "ctrl+a".to_owned();
         next.keys.repeat_timeout = 750;
@@ -503,6 +509,12 @@ mod tests {
         assert_eq!(
             shell.status_indicators,
             crate::config::StatusIndicatorStyle::Symbols
+        );
+        assert_eq!(shell.agent_mark_indicator, "*");
+        assert_eq!(
+            shell.agent_mark_color,
+            crate::config::parse_color("red"),
+            "the mark color must survive a live reload"
         );
         assert_eq!(shell.agents.row_gap, 2);
         assert_eq!(

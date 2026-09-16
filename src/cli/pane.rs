@@ -1,12 +1,12 @@
 use crate::api::schema::{
     Method, OutputMatch, PaneCurrentParams, PaneDirection, PaneEdgesParams,
     PaneFocusDirectionParams, PaneInputSetParams, PaneLayoutParams, PaneListParams,
-    PaneMoveDestination, PaneMoveParams, PaneNeighborParams, PaneProcessInfoParams, PaneReadParams,
-    PaneReleaseAgentParams, PaneRenameParams, PaneReportAgentParams, PaneReportAgentSessionParams,
-    PaneReportMetadataParams, PaneResizeParams, PaneRightClickTarget, PaneSendInputParams,
-    PaneSendKeysParams, PaneSendTextParams, PaneSplitParams, PaneSwapParams, PaneTarget,
-    PaneWaitForOutputParams, PaneZoomMode, PaneZoomParams, ReadFormat, ReadSource, Request,
-    SplitDirection,
+    PaneMarkSetParams, PaneMoveDestination, PaneMoveParams, PaneNeighborParams,
+    PaneProcessInfoParams, PaneReadParams, PaneReleaseAgentParams, PaneRenameParams,
+    PaneReportAgentParams, PaneReportAgentSessionParams, PaneReportMetadataParams,
+    PaneResizeParams, PaneRightClickTarget, PaneSendInputParams, PaneSendKeysParams,
+    PaneSendTextParams, PaneSplitParams, PaneSwapParams, PaneTarget, PaneWaitForOutputParams,
+    PaneZoomMode, PaneZoomParams, ReadFormat, ReadSource, Request, SplitDirection,
 };
 
 pub(super) fn run_pane_command(args: &[String]) -> std::io::Result<i32> {
@@ -29,6 +29,7 @@ pub(super) fn run_pane_command(args: &[String]) -> std::io::Result<i32> {
         "read" => pane_read(&args[1..]),
         "rename" => pane_rename(&args[1..]),
         "input" => pane_input(&args[1..]),
+        "mark" => pane_mark(&args[1..]),
         "split" => pane_split(&args[1..]),
         "swap" => pane_swap(&args[1..]),
         "move" => pane_move(&args[1..]),
@@ -609,6 +610,77 @@ fn parse_pane_input_args(
     Ok(PaneInputSetParams {
         pane_id: pane_id.ok_or(USAGE)?,
         right_click: right_click.ok_or(USAGE)?,
+    })
+}
+
+fn pane_mark(args: &[String]) -> std::io::Result<i32> {
+    let env_pane_id = std::env::var("HERDR_PANE_ID")
+        .ok()
+        .filter(|value| !value.trim().is_empty());
+    let params = match parse_pane_mark_args(args, env_pane_id.as_deref()) {
+        Ok(params) => params,
+        Err(message) => {
+            eprintln!("{message}");
+            return Ok(2);
+        }
+    };
+    super::runtime::pane_mark_set(params)
+}
+
+fn parse_pane_mark_args(
+    args: &[String],
+    env_pane_id: Option<&str>,
+) -> Result<PaneMarkSetParams, String> {
+    const USAGE: &str = "usage: herdr pane mark [<pane_id>|--pane ID|--current] --on|--off";
+
+    let args = super::expand_equals_args(args, &["--pane"]);
+    let mut pane_id = None;
+    let mut marked = None;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--pane" => {
+                if pane_id.is_some() {
+                    return Err("provide only one pane selector".into());
+                }
+                let Some(value) = args.get(index + 1) else {
+                    return Err("missing value for --pane".into());
+                };
+                pane_id = Some(super::normalize_pane_id(value));
+                index += 2;
+            }
+            "--current" => {
+                if pane_id.is_some() {
+                    return Err("provide only one pane selector".into());
+                }
+                pane_id = Some(
+                    env_pane_id
+                        .map(super::normalize_pane_id)
+                        .ok_or("--current requires HERDR_PANE_ID")?,
+                );
+                index += 1;
+            }
+            "--on" | "--off" => {
+                if marked.is_some() {
+                    return Err("provide only one of --on or --off".into());
+                }
+                marked = Some(args[index] == "--on");
+                index += 1;
+            }
+            option if option.starts_with('-') => return Err(format!("unknown option: {option}")),
+            positional => {
+                if pane_id.is_some() {
+                    return Err(format!("unexpected argument: {positional}"));
+                }
+                pane_id = Some(super::normalize_pane_id(positional));
+                index += 1;
+            }
+        }
+    }
+
+    Ok(PaneMarkSetParams {
+        pane_id: pane_id.ok_or(USAGE)?,
+        marked: marked.ok_or(USAGE)?,
     })
 }
 
@@ -1683,6 +1755,7 @@ fn print_pane_help() {
     eprintln!("  herdr pane rename <pane_id> <label>|--clear");
     eprintln!("  herdr pane read <pane_id> [--source visible|recent|recent-unwrapped] [--lines N] [--format text|ansi] [--ansi]");
     eprintln!("  herdr pane input [<pane_id>|--pane ID|--current] --right-click herdr|pane");
+    eprintln!("  herdr pane mark [<pane_id>|--pane ID|--current] --on|--off");
     eprintln!(
         "  herdr pane split [<pane_id>|--pane ID|--current] --direction right|down [--ratio FLOAT] [--cwd PATH] [--env KEY=VALUE] [--right-click herdr|pane] [--focus] [--no-focus]"
     );

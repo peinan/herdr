@@ -132,17 +132,28 @@ pub(crate) fn render_collapsed_sidebar(
         if agent.focused {
             buffer.set_style(rect, Style::default().bg(palette.active_row_bg));
         }
+        // The collapsed strip has no room for a marker glyph, so a mark tints
+        // the index cells and adds weight. Colour alone would be ambiguous
+        // against the status icon beside it, which already carries five status
+        // colours. Same cells, same digits: the row never shifts.
+        let index_style = if agent.marked {
+            Style::default()
+                .fg(config.agent_mark_color)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(if agent.focused {
+                palette.text
+            } else {
+                palette.overlay0
+            })
+        };
         put_text(
             buffer,
             rect.x,
             rect.y,
             rect.width.min(2),
             &format!("{:<2}", index + 1),
-            Style::default().fg(if agent.focused {
-                palette.text
-            } else {
-                palette.overlay0
-            }),
+            index_style,
         );
         put_text(
             buffer,

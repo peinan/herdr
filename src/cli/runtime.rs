@@ -1,8 +1,8 @@
 use crate::api::schema::{
-    EmptyParams, Method, PaneFocusDirectionParams, PaneInputSetParams, PaneMoveParams,
-    PaneRenameParams, PaneResizeParams, PaneSplitParams, PaneSwapParams, PaneTarget,
-    PaneZoomParams, Request, TabCreateParams, TabListParams, TabRenameParams, TabTarget,
-    WorkspaceCloseParams, WorkspaceCreateParams, WorkspaceRenameParams, WorkspaceTarget,
+    EmptyParams, Method, PaneFocusDirectionParams, PaneInputSetParams, PaneMarkSetParams,
+    PaneMoveParams, PaneRenameParams, PaneResizeParams, PaneSplitParams, PaneSwapParams,
+    PaneTarget, PaneZoomParams, Request, TabCreateParams, TabListParams, TabRenameParams,
+    TabTarget, WorkspaceCloseParams, WorkspaceCreateParams, WorkspaceRenameParams, WorkspaceTarget,
     WorktreeCreateParams, WorktreeListParams, WorktreeOpenParams, WorktreeRemoveParams,
 };
 
@@ -104,6 +104,10 @@ pub(super) fn pane_rename(params: PaneRenameParams) -> std::io::Result<i32> {
 
 pub(super) fn pane_input_set(params: PaneInputSetParams) -> std::io::Result<i32> {
     print_method_response("cli:pane:input:set", Method::PaneInputSet(params))
+}
+
+pub(super) fn pane_mark_set(params: PaneMarkSetParams) -> std::io::Result<i32> {
+    print_method_response("cli:pane:mark:set", Method::PaneMarkSet(params))
 }
 
 pub(super) fn pane_split(params: PaneSplitParams) -> std::io::Result<i32> {

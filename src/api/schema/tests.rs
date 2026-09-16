@@ -208,6 +208,23 @@ fn generated_protocol_schema_artifact_is_current() {
 }
 
 #[test]
+fn request_round_trips_for_pane_mark_set() {
+    let request = Request {
+        id: "req_mark".into(),
+        method: Method::PaneMarkSet(PaneMarkSetParams {
+            pane_id: "w1:p1".into(),
+            marked: true,
+        }),
+    };
+
+    let json = serde_json::to_value(&request).unwrap();
+    assert_eq!(json["method"], "pane.mark.set");
+    assert_eq!(json["params"]["marked"], true);
+    let restored: Request = serde_json::from_value(json).unwrap();
+    assert_eq!(restored, request);
+}
+
+#[test]
 fn request_round_trips_for_server_stop() {
     let request = Request {
         id: "req_stop".into(),
@@ -824,6 +841,7 @@ fn worktree_request_and_response_round_trip() {
                 workspace_id: "w_1".into(),
                 tab_id: "w_1:1".into(),
                 focused: true,
+                marked: false,
                 cwd: Some("/worktrees/herdr/worktree-api".into()),
                 foreground_cwd: None,
                 label: None,
@@ -1252,6 +1270,7 @@ fn create_response_round_trips_with_root_pane() {
                 workspace_id: "w_1".into(),
                 tab_id: "w_1:2".into(),
                 focused: false,
+                marked: false,
                 cwd: Some("/tmp/review".into()),
                 foreground_cwd: None,
                 label: None,
