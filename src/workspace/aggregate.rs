@@ -13,6 +13,7 @@ pub struct PaneDetail {
     pub agent_kind_label: Option<String>,
     pub state: AgentState,
     pub seen: bool,
+    pub marked: bool,
     pub last_agent_state_change_seq: Option<u64>,
     pub tokens: HashMap<String, String>,
 }
@@ -39,6 +40,7 @@ impl Tab {
                     agent_kind_label,
                     state: terminal.state,
                     seen: pane.seen,
+                    marked: pane.marked,
                     last_agent_state_change_seq: terminal.last_agent_state_change_seq,
                     tokens: terminal.metadata_tokens.values(),
                 })

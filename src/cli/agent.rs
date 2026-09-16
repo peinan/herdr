@@ -3,7 +3,8 @@ use std::time::{Duration, Instant};
 use crate::api::schema::{
     AgentPromptParams, AgentPromptWaitOptions, AgentReadParams, AgentRenameParams,
     AgentSendKeysParams, AgentStartParams, AgentTarget, AgentWaitParams, EmptyParams, ErrorBody,
-    ErrorResponse, Method, PaneProcessInfoParams, PaneTarget, ReadFormat, ReadSource, Request,
+    ErrorResponse, Method, PaneMarkSetParams, PaneProcessInfoParams, PaneTarget, ReadFormat,
+    ReadSource, Request,
 };
 
 const AGENT_START_POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -23,6 +24,7 @@ pub(super) fn run_agent_command(args: &[String]) -> std::io::Result<i32> {
         "prompt" => agent_prompt(&args[1..]),
         "rename" => agent_rename(&args[1..]),
         "focus" => agent_focus(&args[1..]),
+        "mark" => agent_mark(&args[1..]),
         "wait" => agent_wait(&args[1..]),
         "attach" => agent_attach(&args[1..]),
         "start" => agent_start(&args[1..]),
@@ -483,6 +485,48 @@ fn agent_focus(args: &[String]) -> std::io::Result<i32> {
     })?)
 }
 
+fn agent_mark(args: &[String]) -> std::io::Result<i32> {
+    const USAGE: &str = "usage: herdr agent mark <target> [--on|--off|--toggle]";
+
+    let Some(target) = args.first() else {
+        eprintln!("{USAGE}");
+        return Ok(2);
+    };
+    let mode = match args.get(1).map(String::as_str) {
+        None | Some("--toggle") => None,
+        Some("--on") => Some(true),
+        Some("--off") => Some(false),
+        Some(_) => {
+            eprintln!("{USAGE}");
+            return Ok(2);
+        }
+    };
+    if args.len() > 2 {
+        eprintln!("{USAGE}");
+        return Ok(2);
+    }
+
+    let response = resolve_agent_target(target, "cli:agent:mark:resolve")?;
+    if response.get("error").is_some() {
+        eprintln!("{response}");
+        return Ok(1);
+    }
+    let agent = &response["result"]["agent"];
+    let Some(pane_id) = agent["pane_id"].as_str() else {
+        eprintln!("agent target did not resolve to a pane");
+        return Ok(1);
+    };
+    let marked = mode.unwrap_or_else(|| !agent["marked"].as_bool().unwrap_or(false));
+
+    super::print_response(&super::send_request(&Request {
+        id: "cli:agent:mark".into(),
+        method: Method::PaneMarkSet(PaneMarkSetParams {
+            pane_id: pane_id.to_owned(),
+            marked,
+        }),
+    })?)
+}
+
 fn agent_attach(args: &[String]) -> std::io::Result<i32> {
     let (target, takeover) =
         match super::parse_attach_target(args, "usage: herdr agent attach <target> [--takeover]") {
@@ -932,6 +976,7 @@ fn print_agent_help() {
     eprintln!("  herdr agent prompt <target> <text> [--wait] [--until STATUS]... [--timeout MS]");
     eprintln!("  herdr agent rename <target> <name>|--clear");
     eprintln!("  herdr agent focus <target>");
+    eprintln!("  herdr agent mark <target> [--on|--off|--toggle]");
     eprintln!("  herdr agent wait <target> [--until STATUS]... [--timeout MS]");
     eprintln!("  herdr agent attach <target> [--takeover]");
     eprintln!(
