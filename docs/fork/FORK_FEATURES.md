@@ -34,6 +34,8 @@ git diff upstream/master...main -- src/config/model.rs # 追加した設定フ�
 | popup 内余白 / タイトル書式 | `ui.popup_padding` / `ui.popup_title_format` | popup ペイン(セッションモーダル端末)の枠内余白と枠タイトル書式。pane 側キーとは独立で既定は無効。padding はサーバ(PTY サイズ)とクライアント(blit)が同じ純粋関数に渡して一致させる | 2026-09-11 | [#45](https://github.com/peinan/herdr/pull/45) / [`94b2948`](https://github.com/peinan/herdr/commit/94b2948) |
 | popup 背景の塗り範囲 | `ui.popup_background` | popup に panel 背景をどこまで敷くか。`panel`(既定・枠＋余白)/`all`(内容の背後まで＝不透明)/`transparent`(どこも塗らず端末背景のまま)。プログラムが自前で塗ったセルはどの値でも保持 | 2026-09-11 | [#45](https://github.com/peinan/herdr/pull/45) / [`9de3877`](https://github.com/peinan/herdr/commit/9de3877) |
 | popup 表示中の背景減光 | `ui.popup_dim_background` | popup が開いている間、背後を減光してモーダルらしく見せる。`off`(既定)/`all`(サイドバー・タブバー含む)/`panes`(ペイン面のみ) | 2026-09-11 | [#46](https://github.com/peinan/herdr/pull/46) / [`032524f`](https://github.com/peinan/herdr/commit/032524f) |
+| popup 内の copy mode / 選択 | 常時 | popup ペインでキーボード copy mode(`prefix+[`)とマウスドラッグ選択・コピーを有効化。popup は workspace に属さない `PaneId` を持つため `popup.*` API を新設し、スクロール指標は `shell.surface.v2`(v1 のバイト列は不変、`EndpointControl` サイドカー)で運ぶ。副作用として popup 表示中も prefix アクションが通る | 2026-09-16 | [#52](https://github.com/peinan/herdr/pull/52) / [`a6e08d1`](https://github.com/peinan/herdr/commit/a6e08d1) |
+| エージェントのマーク | `ui.agent_mark_indicator` / `ui.agent_mark_color` / `keys.toggle_mark` | 「後で戻る」エージェントに手動マーク。サイドバー行頭にグリフ、`agent_panel_sort = "priority"` で最上位へ。`prefix+m` / 右クリックメニュー / `herdr agent mark` / `herdr pane mark` から操作。プロセス内寿命で永続化しない | 2026-09-16 | [#51](https://github.com/peinan/herdr/pull/51) / [`075fd3c`](https://github.com/peinan/herdr/commit/075fd3c) |
 | 個人用 Makefile | 新規ファイル | build / install ターゲット | 2026-06-26 | [`38f7787`](https://github.com/peinan/herdr/commit/38f7787) |
 | `CLAUDE.local.md` | 新規ファイル | フォークのブランチ運用・同期・PR 手順 | 2026-06-28 | [`541eb1c`](https://github.com/peinan/herdr/commit/541eb1c), [`926ccc1`](https://github.com/peinan/herdr/commit/926ccc1) |
 
@@ -65,6 +67,9 @@ git diff upstream/master...main -- src/config/model.rs # 追加した設定フ�
 | `ui.popup_title_format` | string | `""` | popup 枠タイトルの書式(`pane_title_format` と同じ構文)。空=従来どおり `popup`。解決できる変数は下の補足参照 |
 | `ui.popup_background` | enum | `"panel"` | popup に panel 背景を敷く範囲。`panel`=枠＋余白(従来) / `all`=内容の背後まで(不透明) / `transparent`=どこも塗らない(端末背景が透ける) |
 | `ui.popup_dim_background` | enum | `"off"` | popup 表示中の背後の減光。`off`=従来どおり減光なし / `all`=popup 以外の全画面 / `panes`=ペイン面のみ |
+| `ui.agent_mark_indicator` | string | `"▌"` | マーク済みエージェント行の行頭グリフ。**1 セル幅のみ有効**(超えると通常インデントに戻る)。`""` で非表示。折りたたみサイドバーの着色はこの値に関係なく出る |
+| `ui.agent_mark_color` | string | `"magenta"` | マークの色。16 進 / 名前 / `rgb(r,g,b)`。**Catppuccin のパレット名(`mauve` 等)は不可**(`parse_color` の表に無く cyan にフォールバック)。`yellow` は Working ステータス色と衝突するので避ける |
+| `keys.toggle_mark` | binding | `"prefix+m"` | フォーカス中のエージェントのマークを切り替える。エージェントでないペインでは no-op |
 | `keys.repeat_timeout` | u64 (ms) | `500` | repeatable バインドがアーム状態を保つ時間。`0` は既定値に丸める |
 | `keys.<action>`(テーブル形式) | `{ key, repeat }` | `repeat = false` | `{ key = "prefix+n", repeat = true }` で tmux `bind -r` 風の繰り返しを有効化。文字列/配列形式は repeat しない |
 
@@ -186,6 +191,36 @@ repeat_timeout = 500
 ## 変更履歴
 
 新しい順。詳細は各表を参照。
+
+### 2026-09-16
+- popup ペインで copy mode とマウス選択を使えるように — [#49](https://github.com/peinan/herdr/issues/49) → [#52](https://github.com/peinan/herdr/pull/52) ([`a6e08d1`](https://github.com/peinan/herdr/commit/a6e08d1) ほか)
+  - popup は全キーを端末へ生転送していたため `prefix+[` が原理的に発火しなかった。Terminal モード時の prefix キーだけを
+    シェルが奪う形にした(prefix 二連打の literal prefix は従来どおり popup へ送る)。副作用として **popup 表示中も
+    split やタブ切替などの prefix アクションが通る**(tmux の display-popup と同じ。全系統で invariants を検証済み)。
+  - popup の `PaneId` はどの workspace にも属さないため `pane.selection.read` 等が解決できなかった。
+    `popup.selection.read` / `popup.copy_motion` / `popup.copy_search` / `popup.scroll` を新設。
+    凍結 fixture は新規 4 キーの追加のみで既存キーの digest は不変。
+  - スクロール指標は `shell.surface.v2` で運ぶ。v1 のバイト列は 1 バイトも変えず、`EndpointControl`(コードベース公認の
+    append-only 拡張点)のサイドカーに載せたので `PROTOCOL_VERSION` は 22 のまま。v1 サーバに繋いだ場合は popup の
+    copy mode とドラッグ選択だけが無効になり、接続と他機能は無傷。
+  - **メトリクスとフレームのコヒーレンスが肝**。指標がフレームより 1 tick ずれると、スクロールバック中の選択が誤った
+    絶対行にマップされ、エラーにならず違うテキストがコピーされる(negative control で 3 行ズレを実測)。ペインレンダラと
+    同じ before/after `content_seq` + 奇数化で挟み、control と surface を 1 回のロックで同時に enqueue し、クライアントは
+    `surface_revision` が一致するフレームでのみコミットする。指標が無いフレームでは copy mode と選択を無効化する
+    (オフセット 0 の仮定はしない)。
+- エージェントに手動マークを付けられるように — [#50](https://github.com/peinan/herdr/issues/50) → [#51](https://github.com/peinan/herdr/pull/51) ([`075fd3c`](https://github.com/peinan/herdr/commit/075fd3c) ほか)
+  - 複数エージェントを回していると「先に別のエージェントに答えて戻る」ときに戻り先を見失う。`PaneState.marked` を
+    サーバ側に持ち、`pane.mark.set` を新設(既存 `pane.input.set` の拡張は凍結 digest に触るため不可)。
+    `PaneInfo` / `AgentInfo` と agent view の filter/sort にも露出し、`pane.updated` でも通知する。
+  - サイドバーは展開側が行頭ガターのグリフ、折りたたみ側が既存 2 セルの着色(**マシン頭文字や番号は潰さない**。
+    federated でマシン識別を失わないため)。`agent_panel_sort = "priority"` ではローカル・federated・サーバ側
+    フォールバックの 3 箇所でマーク済みを最上位にする。
+  - 寿命はプロセス内のみで永続化しない(既存の `seen` / `right_click_passthrough` と対称)。
+  - 楽観更新の扱い: リクエストが拒否されたときはサーバ確定値へ戻す。同一ペインの複数リクエストは baseline を共有し、
+    サーバが値を受理したときだけ前進させる。なお**保留中に届いたスナップショットが「変更前の古いもの」なのか
+    「他クライアントの新しい変更」なのかはクライアント側では区別できない**(応答が適用 revision を返さないため)。
+    スナップショットに従う側に倒してある — マーク変更は必ず新しいスナップショットを発行するので、古い値で一旦
+    戻されても直後に訂正されるのに対し、楽観値を保持すると他クライアントの変更が永久に失われるため。
 
 ### 2026-09-11
 - popup ペインのスタイルを設定可能に。`ui.popup_padding` / `ui.popup_title_format`(pane 側キーとは独立、既定は無効)と

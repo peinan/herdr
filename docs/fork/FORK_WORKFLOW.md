@@ -97,6 +97,26 @@ git config merge.conflictStyle zdiff3   # 共通ベースを表示（古い git 
 同じ系統は CI の macOS ジョブでもたまに落ちる（実例: [#46](https://github.com/peinan/herdr/pull/46) の
 `federated_launch_opens_local_directly_while_saved_ssh_is_unavailable`）。その場合は失敗ジョブを再実行して切り分ける。
 
+### CI でだけ観測されたフレーク
+
+ローカルの上表とは別に、CI で再実行すると通る（＝差分と無関係な）ものとして観測済み。#51 / #52 で遭遇。
+
+| ジョブ | テスト |
+|---|---|
+| `check (macos-latest)` | `cross_area::cross_area_client_and_api_workspace_views_are_consistent` |
+| `check (windows-latest)` | `sound::tests::windows_media_player_reports_invalid_media_without_waiting_for_timeout` |
+
+### 「既知だろう」で流さない
+
+**上のどの一覧にも無い失敗は、必ず `gh run view --job <id> --log-failed` でログを引いて失敗テスト名を特定する。**
+#52 の作業では「同系統の既知フレークだろう」という見立てが 3 回とも外れ、いずれも自分が入れたテストの実バグだった:
+
+- macOS — 1 サーバに 2 クライアントを繋ぐ構成で、どちらが foreground かに依存する順序依存テスト。
+- Windows で 540 秒ハング — テストが `exiting_test_command()` を設定せず実シェルを spawn していた。
+  macOS / Linux では 0.12 秒で返るため表面化せず、**全プラットフォームで実プロセスをリークしていた**。
+- macOS — `ClientWriter::test_channel` は render を直結・control を背景スレッド経由で送るため、
+  `render_rx.recv()` が返っても control の到着は保証されない、というテストハーネスのレース。
+
 ## 1. 機能開発（日常の主作業）
 
 機能ごとに `main` から worktree を切る。
