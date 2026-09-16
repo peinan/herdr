@@ -12,6 +12,21 @@ ZIG_VERSION ?= 0.15.2
 INSTALL_DIR ?= $(HOME)/.local/bin
 BIN         := herdr
 
+# Fork build identity. `Cargo.toml`'s version stays upstream-managed, so the base
+# version follows upstream automatically; HERDR_BUILD_ID counts fork feature
+# generations on top of it. `herdr --version` then reports e.g. 0.9.0-fork.9,
+# which upstream's own binary can never claim.
+#
+# Bump HERDR_BUILD_ID when a fork feature lands, not on an upstream sync: the
+# feature set is what the number describes. The generations are catalogued in
+# docs/fork/FORK_FEATURES.md.
+#
+# These deliberately live here and not in `justfile`: several tests assert on
+# env!("CARGO_PKG_VERSION"), so exporting them for `just check` would fail the
+# suite. Only the build/install path should see them.
+HERDR_BUILD_CHANNEL ?= fork
+HERDR_BUILD_ID      ?= 9
+
 .DEFAULT_GOAL := help
 
 .PHONY: help
@@ -19,12 +34,15 @@ help:
 	@echo "Personal (fork-only) targets:"
 	@echo "  make build    - release build via 'just build' (zig from mise)"
 	@echo "  make install  - build, then install the binary into $(INSTALL_DIR)"
+	@echo ""
+	@echo "Build identity: $(HERDR_BUILD_CHANNEL).$(HERDR_BUILD_ID) (override with make build HERDR_BUILD_ID=N)"
 
 # Release build. Delegates to the upstream justfile recipe so build flags stay
-# in one place; only adds the zig toolchain via mise.
+# in one place; only adds the zig toolchain via mise and the fork build identity.
 .PHONY: build
 build:
-	mise exec zig@$(ZIG_VERSION) -- just build
+	HERDR_BUILD_CHANNEL=$(HERDR_BUILD_CHANNEL) HERDR_BUILD_ID=$(HERDR_BUILD_ID) \
+		mise exec zig@$(ZIG_VERSION) -- just build
 
 # Build, then replace the installed binary. Restart herdr afterwards to apply.
 .PHONY: install

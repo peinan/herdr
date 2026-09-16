@@ -180,27 +180,58 @@ git push origin main
 
 ## 3. バージョン
 
-- バージョンは `Cargo.toml` の `version` をコンパイル時に埋め込むだけ（`build_info::BASE_VERSION = env!("CARGO_PKG_VERSION")`）。git ハッシュ等は入らない。
-- `Cargo.toml` の `version` は **upstream 管理**。upstream のリリースコミットが version を bump し、それが `upstream/master` 経由で merge に相乗りして入る。→ **バージョンは自動で upstream に追従**する（手作業不要）。
-- **`Cargo.toml` の `version` を手で書き換えないこと**。同期のたびに衝突し、版比較もずれる。
-- 副作用: 純正版とフォーク版が同一バージョンを名乗り、バイナリだけでは区別できない（許容）。
+フォーク版は **`0.9.0-fork.9`** のように名乗る。base（`0.9.0`）は upstream 追従、`fork.9` がフォーク機能の世代。
+
+- `Cargo.toml` の `version` は **upstream 管理**。upstream のリリースコミットが bump し、それが `upstream/master` 経由で merge に相乗りして入る → **base は自動で追従**する。
+- **`Cargo.toml` の `version` を手で書き換えないこと**。同期のたびに衝突し、版比較もずれる。上げたいのはフォーク側の世代なら `HERDR_BUILD_ID` を上げる。
+- `fork.N` は `Makefile` の `HERDR_BUILD_ID` が持ち、`HERDR_BUILD_CHANNEL=fork` とともにビルド時に渡る。
+  `src/build_info.rs` の `option_env!` を使うだけなので **Rust ソースの変更はゼロ**（`{BASE_VERSION}-{channel}.{build_id}` を既存コードが組み立てる）。
+- **採番ルール**: 1 まとまったトピック = 1 世代。単調増加で、**upstream sync では上げない**（番号が表すのはフォーク機能の集合なので、base だけ動いたときは据え置き）。世代の定義は [`FORK_FEATURES.md`](./FORK_FEATURES.md) の変更履歴の見出しそのもの。
+- これで 2 軸が独立して読める。`0.9.0-fork.9` と `0.10.0-fork.9` ならフォーク機能は同一で upstream だけ新しく、`0.9.0-fork.8` と `0.9.0-fork.9` なら upstream は同じでフォーク機能が 1 世代進んでいる。
+
+### env をビルド経路の外に出さないこと
+
+`HERDR_BUILD_CHANNEL` / `HERDR_BUILD_ID` は **`Makefile` の `build` / `install` ターゲットだけ**に置く。
+`justfile` に入れたりシェルで export すると、版文字列を `env!("CARGO_PKG_VERSION")` で期待している
+テスト（`tests/api_ping.rs`、`tests/cli/sessions.rs`、`src/app/mod.rs` の release notes 判定）が落ちる。
+`just check` は素の `0.9.0` で走らせる。
+
+### 既知の副作用
+
+| 事象 | 内容 |
+|---|---|
+| 異プラットフォームへの SSH attach | ローカルバイナリでリモートを seed できない（別 OS/arch）場合、`src/remote/attach.rs` が stable manifest から `0.9.0-fork.N` の asset を探して必ず失敗する。同一プラットフォームならローカルバイナリをコピーするので無影響。回避は `HERDR_REMOTE_BINARY` の明示指定 |
+| live handoff | `src/server/handoff.rs` の `expected_version` は文字列完全一致なので、`HERDR_BUILD_ID` が違う新旧バイナリ間の handoff は拒否される（ビルドが違えば拒否されるのはむしろ正しい） |
+| release notes / product announcement | 既読管理が文字列キー照合なので再表示されうる。update 無効化運用なので実害は薄い |
+| `herdr status` の `server_binary_stale` | `N` を上げてサーバ再起動前は `true` になる（意図どおり） |
+
+**無影響**: `update.rs` の版比較（`Version::current()` は suffix を含まない `BASE_VERSION` を使う）、endpoint handshake（版ではなく codec を交渉する）、`is_preview()` 分岐（`fork` は preview 扱いにならない）。
 
 ## 4. フォークバイナリの更新（＝再ビルド）
 
 `herdr update` は**使わない**。アップデータは upstream（herdr.dev）を見るので、実行すると upstream の公式バイナリでフォークが上書きされ、フォーク機能が消える。取り込み後にローカルでビルドし直す:
 
 ```bash
-ZIG=~/.local/share/herdr-fork/zig mise exec -- just build   # → target/release/herdr（§0 の zig ラッパ前提）
+# フォーク機能に変化があったなら、まず Makefile の HERDR_BUILD_ID を上げて
+# FORK_FEATURES.md に対応する世代の見出しを足す（→ §3 の採番ルール）
+HERDR_BUILD_CHANNEL=fork HERDR_BUILD_ID=9 \
+  ZIG=~/.local/share/herdr-fork/zig mise exec -- just build   # → target/release/herdr（§0 の zig ラッパ前提）
 cp ~/.local/bin/herdr ~/.local/bin/herdr.prev                  # 現行を退避
 install -m 0755 target/release/herdr ~/.local/bin/herdr        # 入れ替え（`herdr server stop` → 再起動で反映）
+herdr --version                                                # → herdr 0.9.0-fork.9
 ```
 
-`make build` / `make install` は `mise exec zig@0.15.2 -- just build` を呼ぶため、§0 の xcrun シムが PATH に無いと
+`make build` / `make install` は上の env を自分で渡すので `HERDR_BUILD_ID` を書く必要はない
+（`Makefile` が持つ。`make build HERDR_BUILD_ID=10` で一時上書きも可）。ただし
+`mise exec zig@0.15.2 -- just build` を呼ぶため、§0 の xcrun シムが PATH に無いと
 macOS 26 の SDK 問題でリンクに失敗する。当面は上記のように `ZIG` にラッパを渡す。
+
+env を付けずにビルドすると素の `0.9.0` になり、upstream のバイナリと見分けが付かなくなる。
 
 ## 5. 自動アップデート通知
 
 - アップデータは `herdr.dev/latest.json`（stable）/ `herdr.dev/preview.json`（preview）を参照＝**upstream 向き**。フォークのバージョン < upstream 最新 で「update ready」通知が点灯する。
+- `-fork.N` を付けても**この判定は変わらない**。`update.rs` の `Version::current()` は suffix を含まない `BASE_VERSION`（= `0.9.0`）を使うため、採番の導入前後で挙動は同一。
 - 通知は**通知のみ**（自動インストールはしない）。ただし紛らわしく、誤って `herdr update` すると危険。
 - 停止設定（ユーザ config = dotfiles 側の `~/.config/herdr/config.toml`）:
   ```toml
@@ -217,7 +248,7 @@ macOS 26 の SDK 問題でリンクに失敗する。当面は上記のように
 | 方法 | 手順 | 備考 |
 |---|---|---|
 | **A. fork release** | ①`git push origin main:master` で `master` をリリース点へ進める → ②`preview.yml`（or `release.yml`）を手動 dispatch（**master 参照**でビルド）→ ③`peinan/herdr` の Release にバイナリが添付される。相手は自分の OS/arch を DL → `chmod +x` → PATH。| 非開発者向けに楽。全プラットフォーム添付の実績あり。⚠️ macOS 未署名 → Gatekeeper（`xattr -d com.apple.quarantine ./herdr`）。ワークフローの upstream 前提の副作用（`website/preview.json` 等）は手で触らない。|
-| **B. ソースビルド** | `cargo install --git https://github.com/peinan/herdr --branch main herdr`（Rust + Zig 必要。`zig` が PATH に無ければ `ZIG=<path>` 前置）| 開発者向け・こちら側のインフラ不要。|
+| **B. ソースビルド** | `cargo install --git https://github.com/peinan/herdr --branch main herdr`（Rust + Zig 必要。`zig` が PATH に無ければ `ZIG=<path>` 前置）| 開発者向け・こちら側のインフラ不要。⚠️ この経路は `Makefile` を通らないので `HERDR_BUILD_ID` が渡らず、素の `0.9.0` を名乗る（`HERDR_BUILD_CHANNEL=fork HERDR_BUILD_ID=N` を前置すれば付く）。|
 | **C. バイナリ直渡し** | `target/release/herdr` を渡す | 1 人・同一 OS/arch・即席。macOS は同様に Gatekeeper 対応。|
 
 **配る相手にも必ず伝える**: `version_check = false` を設定する / `herdr update` を実行しない（さもないと upstream バイナリで上書きされる）。ライセンスは root の `LICENSE` の条件下で再配布可（配布物に同梱）。
@@ -226,7 +257,7 @@ macOS 26 の SDK 問題でリンクに失敗する。当面は上記のように
 
 - `master` にリリース反映（`main:master` push）以外の個人開発を直接積む／混同する（`master` はリリース源専用）。
 - `main` の rebase（公開済み・worktree が積まれている）。
-- `Cargo.toml` の `version` を手で書き換え。
+- `Cargo.toml` の `version` を手で書き換え（上げたいのがフォーク側の世代なら `Makefile` の `HERDR_BUILD_ID`）。
 - "Sync fork" ボタン / `herdr update`。
 - **PR 経由での upstream 取り込み**（ブラウザ conflict 解決になり詰む）。
 - upstream 管理ファイル（`AGENTS.md`, `README`, `config/model.rs` の既定など）への個人変更。

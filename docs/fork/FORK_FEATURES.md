@@ -16,7 +16,22 @@ git diff --stat upstream/master...main                 # 変更ファイル一�
 git diff upstream/master...main -- src/config/model.rs # 追加した設定フィールド
 ```
 
-最終更新: 2026-09-11
+### フォーク版の採番 (`fork.N`)
+
+バイナリは `0.9.0-fork.9` のように名乗る。`0.9.0` は upstream 追従の base 版（`Cargo.toml` のまま、
+手で触らない）、`fork.9` がフォーク機能の世代。番号は `Makefile` の `HERDR_BUILD_ID` が持ち、
+ビルド時に `HERDR_BUILD_CHANNEL=fork` とともに渡される。
+
+- **1 まとまったトピック = 1 世代。** 「fork.N とは何か」に一言で答えられる単位で切る。
+  1 PR が 1 トピックのこともあれば、関連する数 PR で 1 トピックのこともある
+- **単調増加。upstream sync では上げない。** base が上がっても番号は据え置き
+  （`0.9.0-fork.9` → sync → `0.10.0-fork.9`）。番号が表すのはフォーク機能の集合だから
+- 下の変更履歴の見出しが世代の定義そのもの。新しい世代を足したら `HERDR_BUILD_ID` も上げる
+
+これで 2 軸が独立して読める。`0.9.0-fork.9` と `0.10.0-fork.9` ならフォーク機能は同一で upstream だけ新しく、
+`0.9.0-fork.8` と `0.9.0-fork.9` なら upstream は同じでフォーク機能が 1 世代進んでいる。
+
+最終更新: 2026-09-16 (fork.9)
 
 ## 機能一覧
 
@@ -36,7 +51,8 @@ git diff upstream/master...main -- src/config/model.rs # 追加した設定フ�
 | popup 表示中の背景減光 | `ui.popup_dim_background` | popup が開いている間、背後を減光してモーダルらしく見せる。`off`(既定)/`all`(サイドバー・タブバー含む)/`panes`(ペイン面のみ) | 2026-09-11 | [#46](https://github.com/peinan/herdr/pull/46) / [`032524f`](https://github.com/peinan/herdr/commit/032524f) |
 | popup 内の copy mode / 選択 | 常時 | popup ペインでキーボード copy mode(`prefix+[`)とマウスドラッグ選択・コピーを有効化。popup は workspace に属さない `PaneId` を持つため `popup.*` API を新設し、スクロール指標は `shell.surface.v2`(v1 のバイト列は不変、`EndpointControl` サイドカー)で運ぶ。副作用として popup 表示中も prefix アクションが通る | 2026-09-16 | [#52](https://github.com/peinan/herdr/pull/52) / [`a6e08d1`](https://github.com/peinan/herdr/commit/a6e08d1) |
 | エージェントのマーク | `ui.agent_mark_indicator` / `ui.agent_mark_color` / `keys.toggle_mark` | 「後で戻る」エージェントに手動マーク。サイドバー行頭にグリフ、`agent_panel_sort = "priority"` で最上位へ。`prefix+m` / 右クリックメニュー / `herdr agent mark` / `herdr pane mark` から操作。プロセス内寿命で永続化しない | 2026-09-16 | [#51](https://github.com/peinan/herdr/pull/51) / [`075fd3c`](https://github.com/peinan/herdr/commit/075fd3c) |
-| 個人用 Makefile | 新規ファイル | build / install ターゲット | 2026-06-26 | [`38f7787`](https://github.com/peinan/herdr/commit/38f7787) |
+| フォーク版の採番 | `Makefile` の `HERDR_BUILD_ID` | `herdr --version` が `0.9.0-fork.9` を名乗る。base は upstream 追従のまま、`fork.N` がフォーク機能の世代。Rust 側の変更は無く、既存の `HERDR_BUILD_CHANNEL` / `HERDR_BUILD_ID`(`src/build_info.rs`)にビルド時の値を渡すだけ | 2026-09-16 | — |
+| 個人用 Makefile | 新規ファイル | build / install ターゲット。フォーク版の採番もここが持つ | 2026-06-26 | [`38f7787`](https://github.com/peinan/herdr/commit/38f7787) |
 | `CLAUDE.local.md` | 新規ファイル | フォークのブランチ運用・同期・PR 手順 | 2026-06-28 | [`541eb1c`](https://github.com/peinan/herdr/commit/541eb1c), [`926ccc1`](https://github.com/peinan/herdr/commit/926ccc1) |
 
 **「切替」列の読み方**: 設定キーが書かれた機能は `config.toml` で切替可能(設定ファイル経由)。
@@ -192,7 +208,7 @@ repeat_timeout = 500
 
 新しい順。詳細は各表を参照。
 
-### 2026-09-16
+### fork.9 — popup 内の copy mode と選択 (2026-09-16, base 0.9.0)
 - popup ペインで copy mode とマウス選択を使えるように — [#49](https://github.com/peinan/herdr/issues/49) → [#52](https://github.com/peinan/herdr/pull/52) ([`a6e08d1`](https://github.com/peinan/herdr/commit/a6e08d1) ほか)
   - popup は全キーを端末へ生転送していたため `prefix+[` が原理的に発火しなかった。Terminal モード時の prefix キーだけを
     シェルが奪う形にした(prefix 二連打の literal prefix は従来どおり popup へ送る)。副作用として **popup 表示中も
@@ -208,6 +224,7 @@ repeat_timeout = 500
     同じ before/after `content_seq` + 奇数化で挟み、control と surface を 1 回のロックで同時に enqueue し、クライアントは
     `surface_revision` が一致するフレームでのみコミットする。指標が無いフレームでは copy mode と選択を無効化する
     (オフセット 0 の仮定はしない)。
+### fork.8 — エージェントのマーク (2026-09-16, base 0.9.0)
 - エージェントに手動マークを付けられるように — [#50](https://github.com/peinan/herdr/issues/50) → [#51](https://github.com/peinan/herdr/pull/51) ([`075fd3c`](https://github.com/peinan/herdr/commit/075fd3c) ほか)
   - 複数エージェントを回していると「先に別のエージェントに答えて戻る」ときに戻り先を見失う。`PaneState.marked` を
     サーバ側に持ち、`pane.mark.set` を新設(既存 `pane.input.set` の拡張は凍結 digest に触るため不可)。
@@ -222,7 +239,7 @@ repeat_timeout = 500
     スナップショットに従う側に倒してある — マーク変更は必ず新しいスナップショットを発行するので、古い値で一旦
     戻されても直後に訂正されるのに対し、楽観値を保持すると他クライアントの変更が永久に失われるため。
 
-### 2026-09-11
+### fork.7 — popup のスタイルと表示 (2026-09-11, base 0.9.0)
 - popup ペインのスタイルを設定可能に。`ui.popup_padding` / `ui.popup_title_format`(pane 側キーとは独立、既定は無効)と
   `ui.popup_background`(`panel` 既定 / `all` / `transparent`)を追加 — [#43](https://github.com/peinan/herdr/issues/43) → [#45](https://github.com/peinan/herdr/pull/45) ([`94b2948`](https://github.com/peinan/herdr/commit/94b2948), [`9de3877`](https://github.com/peinan/herdr/commit/9de3877))
   - padding は PTY サイズ(サーバ)と blit 矩形(クライアント)が同じ純粋関数に自分の設定値を渡して一致させる。
@@ -247,7 +264,7 @@ repeat_timeout = 500
     release notes / product announcement / worktree 3 種 / 両メニュー)、通知トースト、エンドポイント通知バナー、
     クリップボードトースト、config 診断行、および `blit_pane_surface`(クリップコピーの鏡像ケース)。
 
-### 2026-09-10
+### fork.6 — 0.9.0 sync とクライアントシェル再実装 (2026-09-10, base 0.9.0)
 - upstream v0.9.0(+14 commits、`120c6820`)まで段階マージ(v0.8.0 → v0.8.2 → master)で取り込み — [`69321a3`](https://github.com/peinan/herdr/commit/69321a3), [`d7a381f`](https://github.com/peinan/herdr/commit/d7a381f), [`f48d90e`](https://github.com/peinan/herdr/commit/f48d90e)
   - upstream [#3487](https://github.com/ogulcancelik/herdr/pull/3487) で shell(タブバー・サイドバー・モードバー・prefix・キー配送)がクライアント側描画へ移行。
   - **廃止**: `single_pane_border`(upstream `pane_borders = "always"` で代替)、フォーク独自 `tab_bar_position`(upstream 同名キーに統一、既定 `top`)、タブバー上下配置・モードバー相乗りの独自実装。
@@ -259,39 +276,35 @@ repeat_timeout = 500
   - repeatable prefix(`repeat = true` / `repeat_timeout`)を `route_key_press` のアーム状態と `prefix_repeat_deadline` タイマーで再実装。判定は実行後の状態(mode / overlay)由来 — [#37](https://github.com/peinan/herdr/pull/37) ([`b9e047d`](https://github.com/peinan/herdr/commit/b9e047d))
   - `keyboard.mdx` の fork 独自セクション(repeatable prefix)を ja / zh-cn に翻訳し、docs 翻訳パリティ検査を通した。
 
-### 2026-07-08
+### fork.5 — opt-in 方針への整理 (2026-07-08, base 0.7.3)
 - フォーク独自 UI を「既定 off/opt-in・素の起動時はアップストリーム相当の見た目」に整理(統合 [#16](https://github.com/peinan/herdr/issues/16))。
 - `dim_inactive_panes` を既定 `false` に(opt-in 化)。既定でアップストリーム挙動(prefix/コマンド時のみ減光)に一致 — [#22](https://github.com/peinan/herdr/pull/22) ([`84a52ef`](https://github.com/peinan/herdr/commit/84a52ef))
 - `show_pane_focus_marker` 追加(既定 `true`)。focused ペイン枠頭の `▌` マーカーを復活し、既定でアップストリーム挙動。`false` で色/太字のみ — [#23](https://github.com/peinan/herdr/pull/23) ([`fbcc969`](https://github.com/peinan/herdr/commit/fbcc969))
 - タブバーをスタイル選択制に(`tab_bar_style` `classic`/`minimal`、既定 `classic`)。`classic` はアップストリーム上部テキストタブを復元、`minimal` は従来グリフ帯を `position`/`align`/`title` でパラメータ化 — [#24](https://github.com/peinan/herdr/pull/24) ([`68fe136`](https://github.com/peinan/herdr/commit/68fe136))
 - `zoom_indicator_position` 追加(`tab`/`pane`/`both`/`none`、既定 `tab`)。ズームマーカーの表示位置を制御し、既定でタブに表示(アップストリーム的)。`pane`/`both` でペイン枠に。`pane_title_format` の `$zoom` も position に従う — [#25](https://github.com/peinan/herdr/pull/25) ([`da3dbd8`](https://github.com/peinan/herdr/commit/da3dbd8))
 
-### 2026-07-07
+### fork.4 — ペイン内余白と減光の詰め (2026-07-07, base 0.7.1)
 - `ui.pane_padding` 追加。ペイン枠(または端)と端末内容の間に上下左右セル単位の余白を挿入(省略辺 0・既定は余白なし)。inner_rect を border の内側・scrollbar gutter の手前で縮めるため PTY サイズと描画が一致し、scrollbar は余白の内側に寄る。狭いペインは内容 1x1 を残しクランプ — [#15](https://github.com/peinan/herdr/pull/15) ([`b23578e`](https://github.com/peinan/herdr/commit/b23578e))
 - `dim_inactive_panes` の減光を retained レンダリングの fast path でも再適用。フルレンダリングは
   非フォーカスペインを 2 パス目で減光するが、dirty patch の fast path は素の ghostty セルを減光せず
   描いていたため、忙しい非フォーカスペインが tick ごとに明滅(flicker)していた。両パスが一致するよう
   fast path でも `Modifier::DIM` を再適用 — [#14](https://github.com/peinan/herdr/pull/14) ([`76fa31b`](https://github.com/peinan/herdr/commit/76fa31b))
 
-### 2026-07-05
+### fork.3 — ペインタイトル書式 (2026-06-30〜07-05, base 0.7.1)
 - `pane_title_format` の cwd/git status 追従を修正。`$dir`/`$cwd` と per-pane git ルックアップが
   OSC 7 非依存で実 cwd を追う(git と同じ syscall 解決を約1.5秒 tick で同期)。作業ツリーのみの
   変化でも `$git_status` マークが約1.5秒で再描画されるように — [#13](https://github.com/peinan/herdr/pull/13) ([`5b64b53`](https://github.com/peinan/herdr/commit/5b64b53))
-
-### 2026-06-30
 - `pane_title_format` 追加(starship 風のペインタイトル書式)。真のフォアグラウンドプロセス名・
   per-pane git(branch/ahead-behind/ワーキングツリー状態)を herdr ネイティブ検出から描画。
   シェルフック不要・`git checkout` 追従 — [`cccf16b`](https://github.com/peinan/herdr/commit/cccf16b), [`5f082c6`](https://github.com/peinan/herdr/commit/5f082c6), [`6c7cf39`](https://github.com/peinan/herdr/commit/6c7cf39)
 
-### 2026-06-28
+### fork.2 — タブバー・prefix 表示とフォーク運用ルール (2026-06-27〜06-28, base 0.7.1)
 - `CLAUDE.local.md`(フォーク運用ルール)を追加・日本語化 — [`541eb1c`](https://github.com/peinan/herdr/commit/541eb1c), [`926ccc1`](https://github.com/peinan/herdr/commit/926ccc1)
-
-### 2026-06-27
 - `single_pane_border` 追加 — [#11](https://github.com/peinan/herdr/pull/11) ([`47a97f9`](https://github.com/peinan/herdr/commit/47a97f9))
 - タブバーを下端・右寄せのマーカーストリップに再設計 — [#10](https://github.com/peinan/herdr/pull/10) ([`c19f18b`](https://github.com/peinan/herdr/commit/c19f18b))
 - `prefix_indicator` 追加 — [#5](https://github.com/peinan/herdr/pull/5) ([`aa108e7`](https://github.com/peinan/herdr/commit/aa108e7))
 
-### 2026-06-26
+### fork.1 — 最初の UI スイッチ群 (2026-06-26, base 0.7.1)
 - `zoom_indicator` 追加(ズームマーカーをタブ→ペイン枠タイトルへ移動)— [#4](https://github.com/peinan/herdr/pull/4) ([`ffcdab9`](https://github.com/peinan/herdr/commit/ffcdab9))
 - `sidebar_divider` 追加 — [#3](https://github.com/peinan/herdr/pull/3) ([`46a8de6`](https://github.com/peinan/herdr/commit/46a8de6))
 - `dim_inactive_panes` 追加(既定 `true`)— [#2](https://github.com/peinan/herdr/pull/2) ([`321db15`](https://github.com/peinan/herdr/commit/321db15))
