@@ -859,6 +859,18 @@ impl ClientShellState {
                 return;
             }
         }
+        // A press of the button a gesture holds can only follow a release the
+        // host never delivered. End the stale gesture where it was last seen, as
+        // focus loss does, and handle the press normally. Replayed link-click
+        // events never count, and other buttons stay swallowed so chords work.
+        if !self.replaying_url_click
+            && self
+                .pane_mouse_gesture
+                .as_ref()
+                .is_some_and(|gesture| mouse.kind == MouseEventKind::Down(gesture.button))
+        {
+            self.release_pane_mouse_gesture(outcome);
+        }
         if let Some(gesture) = self.pane_mouse_gesture.as_ref() {
             let gesture_event = matches!(
                 mouse.kind,
@@ -2355,6 +2367,44 @@ impl ClientShellState {
         } else {
             cell
         }
+    }
+
+    pub(super) fn release_pane_mouse_gesture(&mut self, outcome: &mut ClientShellInput) {
+        let Some(gesture) = self.pane_mouse_gesture.take() else {
+            return;
+        };
+        let modifiers = gesture
+            .last_event
+            .modifiers
+            .difference(gesture.stripped_modifiers);
+        let geometry = matches!(
+            gesture.last_position,
+            crate::protocol::ClientMousePosition::Pixels { .. }
+        )
+        .then_some(crate::protocol::ClientMouseGeometry {
+            cols: gesture.hit.inner_rect.width,
+            rows: gesture.hit.inner_rect.height,
+            width_px: gesture.hit.pixel_width,
+            height_px: gesture.hit.pixel_height,
+        });
+        let target = if gesture.hit.popup {
+            ClientInputTarget::Popup(gesture.hit.pane_id)
+        } else {
+            ClientInputTarget::Pane(gesture.hit.pane_id)
+        };
+        super::push_target_event(
+            target,
+            ClientPaneInputEvent::Mouse {
+                kind: crate::protocol::ClientMouseKind::Up(
+                    crate::protocol::ClientMouseButton::from_crossterm(gesture.button),
+                ),
+                position: gesture.last_position,
+                geometry,
+                modifiers: modifiers.bits(),
+                lines: self.config.mouse_scroll_lines.min(u16::MAX as usize) as u16,
+            },
+            outcome,
+        );
     }
 
     pub(super) fn push_pane_mouse_event(
