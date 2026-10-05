@@ -356,40 +356,7 @@ impl ClientShellState {
                 outcome,
             );
         }
-        if let Some(gesture) = self.pane_mouse_gesture.take() {
-            let modifiers = gesture
-                .last_event
-                .modifiers
-                .difference(gesture.stripped_modifiers);
-            let geometry = matches!(
-                gesture.last_position,
-                crate::protocol::ClientMousePosition::Pixels { .. }
-            )
-            .then_some(crate::protocol::ClientMouseGeometry {
-                cols: gesture.hit.inner_rect.width,
-                rows: gesture.hit.inner_rect.height,
-                width_px: gesture.hit.pixel_width,
-                height_px: gesture.hit.pixel_height,
-            });
-            let target = if gesture.hit.popup {
-                ClientInputTarget::Popup(gesture.hit.pane_id)
-            } else {
-                ClientInputTarget::Pane(gesture.hit.pane_id)
-            };
-            super::push_target_event(
-                target,
-                ClientPaneInputEvent::Mouse {
-                    kind: crate::protocol::ClientMouseKind::Up(
-                        crate::protocol::ClientMouseButton::from_crossterm(gesture.button),
-                    ),
-                    position: gesture.last_position,
-                    geometry,
-                    modifiers: modifiers.bits(),
-                    lines: self.config.mouse_scroll_lines.min(u16::MAX as usize) as u16,
-                },
-                outcome,
-            );
-        }
+        self.release_pane_mouse_gesture(outcome);
         self.copy_input_queue.clear();
     }
 

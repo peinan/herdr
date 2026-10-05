@@ -25,17 +25,23 @@ impl ClientShellState {
     /// Content revision for a pane, or for the popup the revision that rides
     /// beside the surface.
     pub(super) fn target_content_revision(&self, id: &str) -> Option<u64> {
+        self.target_content_state(id).map(|(revision, _)| revision)
+    }
+
+    /// Content revision and alternate-screen flag for a pane, or for the popup
+    /// the values that ride beside the surface.
+    pub(super) fn target_content_state(&self, id: &str) -> Option<(u64, bool)> {
         if self.is_popup_target(id) {
             return self
                 .popup_metrics_for(id)
-                .map(|metrics| metrics.content_revision);
+                .map(|metrics| (metrics.content_revision, metrics.alternate_screen_active));
         }
         self.pane_surface
             .as_ref()?
             .panes
             .iter()
             .find(|pane| pane.pane_id == id)
-            .map(|pane| pane.content_revision)
+            .map(|pane| (pane.content_revision, pane.alternate_screen_active))
     }
 
     /// Hit geometry for a pane or for the popup.
@@ -124,12 +130,25 @@ impl ClientShellState {
         self.stop_selection_autoscroll();
         self.selection_highlight_clear_deadline = None;
         self.reset_copy_pipeline();
-        let content_revision = self.target_content_revision(&pane_id).unwrap_or(0);
+        let (content_revision, alternate_screen_active) =
+            self.target_content_state(&pane_id).unwrap_or((0, false));
+        // The resync compares a popup against its own frame, which can lag the
+        // area the client resolved for it, so record the frame's size here too.
+        let geometry = self
+            .pane_surface
+            .as_ref()
+            .and_then(|surface| surface.popup.as_deref())
+            .filter(|popup_surface| popup && popup_surface.terminal_id == pane_id)
+            .map_or(
+                (hit.inner_rect.width, hit.inner_rect.height),
+                |popup_surface| (popup_surface.frame.width, popup_surface.frame.height),
+            );
         self.copy_mode = Some(ClientCopyModeState {
             pane_id,
             popup,
             content_revision,
-            geometry: (hit.inner_rect.width, hit.inner_rect.height),
+            geometry,
+            alternate_screen_active,
             cursor,
             offset_from_bottom: metrics.offset_from_bottom,
             max_offset_from_bottom: metrics.max_offset_from_bottom,
@@ -901,12 +920,11 @@ impl ClientShellState {
     }
 
     pub(super) fn exit_copy_mode(&mut self, copy: bool, outcome: &mut ClientShellInput) {
-        if copy
-            && !self
-                .selection
-                .as_ref()
-                .is_some_and(crate::selection::Selection::is_visible)
-        {
+        let live_selection = self
+            .selection
+            .as_ref()
+            .is_some_and(crate::selection::Selection::is_visible);
+        if copy && !live_selection {
             if let Some((pane_id, text_match)) = self.copy_mode.as_ref().and_then(|copy_mode| {
                 copy_mode
                     .search_current
@@ -930,7 +948,9 @@ impl ClientShellState {
                 .as_ref()
                 .is_some_and(crate::selection::Selection::is_visible)
         {
-            self.request_selection_copy(outcome, false);
+            // A visible explicit selection is live. If the fallback above supplied
+            // a search match, retain the revision that established its boundaries.
+            self.request_selection_copy(outcome, live_selection);
         }
         self.selection = None;
         self.selection_highlight_clear_deadline = None;
