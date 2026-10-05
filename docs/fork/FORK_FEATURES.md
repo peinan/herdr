@@ -216,6 +216,12 @@ repeat_timeout = 500
   - 同じボタンの Down は離した後にしか来ない。そこで、その時点でフォーカス喪失時と同じく最後の位置に Up を合成して gesture を閉じ、
     新しい押下は通常どおり処理する。他のボタン（和音操作）と Ctrl+クリックの再生は対象外。upstream にも同じ実装が残っている。
   - 残課題：右・中ボタンのパススルーで Up が欠けた場合と、SGR ピクセルモード中にウィンドウ外で離した場合（その離すが捨てられる）。
+  - 実環境で「離す」が欠ける主な原因は、macOS 版 Ghostty 1.3.1 の不具合と見られる（[ghostty-org/ghostty#10974](https://github.com/ghostty-org/ghostty/discussions/10974)：
+    ウィンドウを切り替えた後にマウス移動を受け取らなくなり、押下に古い位置を使う。未修正）。fork.10 でも「離した後も選択が続く」が
+    Claude Code とシェルの両方で残ったが、同じ herdr を Terminal.app で使うと起きず、Ghostty の再起動で解消した（2026-10-05）。
+    ハーネスでも、正常な入力なら fork.10 は問題なく、「離す」が欠けてボタンを押したままの扱いの移動が届いたときだけ同じ症状になった。
+    この入力は本物のドラッグと同じ形なので、herdr 側では見分けられない。再発したら Ghostty を再起動する（herdr のサーバとペインは残る）か、
+    別の Space に切り替えて戻す。
 - **fix**: 出力が続くペインで herdr の選択がすぐ消え、コピーもされない不具合を修正。upstream 963f78f4（ogulcancelik/herdr#4193）を移植し、popup にも適用した — [#54](https://github.com/peinan/herdr/issues/54) → [#57](https://github.com/peinan/herdr/pull/57) ([`e158af5`](https://github.com/peinan/herdr/commit/e158af5), [`c07d8e1`](https://github.com/peinan/herdr/commit/c07d8e1))
   - 明示的な選択はバッファ上の範囲として保持し、破棄するのはサイズ変更と normal/alternate 画面の切替のときだけにした
     （popup は、対応するメトリクスが付いていないフレームが来たときも破棄する）。マウスで離したときのコピーは、revision を付けずに今の範囲を読む。
