@@ -331,10 +331,13 @@ fn client_double_click_selects_and_copies_endpoint_row_word() {
             panic!("auto-copy should read the selected word");
         };
         let copy_request_id = request.id.clone();
+        // The word bounds came from one revision, so the copy keeps its guard.
         assert!(matches!(
             &request.method,
             crate::api::schema::Method::PaneSelectionRead(params)
-                if params.anchor.col == 0 && params.cursor.col == 3
+                if params.anchor.col == 0
+                    && params.cursor.col == 3
+                    && params.content_revision == Some(0)
         ));
         let (_, actions) = state.handle_endpoint_result(
             "boot-1",

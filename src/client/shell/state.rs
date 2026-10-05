@@ -1803,7 +1803,9 @@ impl ClientShellState {
             self.popup_pending_deadline = None;
         }
         // Explicit selections are live buffer ranges: output keeps them, and only
-        // a resize or a screen switch moves the coordinates under them.
+        // a resize or a screen switch moves the coordinates under them. A popup
+        // frame that arrives without its paired report drops them too, since it
+        // cannot rule either out.
         let selection_invalidated = self.selection.as_ref().is_some_and(|selection| {
             let Some(previous_surface) = self.pane_surface.as_ref() else {
                 return false;

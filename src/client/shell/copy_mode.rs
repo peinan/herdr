@@ -132,11 +132,22 @@ impl ClientShellState {
         self.reset_copy_pipeline();
         let (content_revision, alternate_screen_active) =
             self.target_content_state(&pane_id).unwrap_or((0, false));
+        // The resync compares a popup against its own frame, which can lag the
+        // area the client resolved for it, so record the frame's size here too.
+        let geometry = self
+            .pane_surface
+            .as_ref()
+            .and_then(|surface| surface.popup.as_deref())
+            .filter(|popup_surface| popup && popup_surface.terminal_id == pane_id)
+            .map_or(
+                (hit.inner_rect.width, hit.inner_rect.height),
+                |popup_surface| (popup_surface.frame.width, popup_surface.frame.height),
+            );
         self.copy_mode = Some(ClientCopyModeState {
             pane_id,
             popup,
             content_revision,
-            geometry: (hit.inner_rect.width, hit.inner_rect.height),
+            geometry,
             alternate_screen_active,
             cursor,
             offset_from_bottom: metrics.offset_from_bottom,

@@ -570,6 +570,42 @@ fn keyboard_selection_does_not_return_after_resize_or_screen_switch() {
     }
 }
 
+/// Copy mode records which screen it entered on, so output on that same
+/// alternate screen is not mistaken for a screen switch.
+#[test]
+fn keyboard_selection_on_the_alternate_screen_survives_output() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    let mut pane_surface = surface();
+    pane_surface.panes[0].alternate_screen_active = true;
+    pane_surface.panes[0].scroll = Some(crate::protocol::PaneSurfaceScrollMetrics {
+        offset_from_bottom: 0,
+        max_offset_from_bottom: 0,
+        viewport_rows: 2,
+    });
+    state.set_pane_surface(pane_surface.clone());
+    state.compose(106, 20).expect("composed frame");
+    state.handle_input_bytes(b"\x02[");
+    state.handle_input_bytes(b"vk");
+    let range = state
+        .selection
+        .as_ref()
+        .expect("selected range")
+        .ordered_cells();
+
+    pane_surface.surface_revision += 1;
+    pane_surface.panes[0].content_revision += 2;
+    state.set_pane_surface(pane_surface);
+    assert!(state.copy_mode.as_ref().unwrap().selection.is_some());
+    assert_eq!(
+        state
+            .selection
+            .as_ref()
+            .map(crate::selection::Selection::ordered_cells),
+        Some(range)
+    );
+}
+
 #[test]
 fn keyboard_copy_mode_content_motion_is_endpoint_backed_and_stale_safe() {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
@@ -2237,12 +2273,11 @@ fn popup_state_with_drag_selection() -> ClientShellState {
     state
 }
 
-/// A popup writes constantly, so output that leaves the selected cells alone
-/// must not cancel a drag the user is still making.
+/// A popup writes constantly, and its output must not cancel a drag the user
+/// is still making: the selection is a live buffer range.
 #[test]
 fn popup_output_outside_the_selection_keeps_the_drag() {
     let mut state = popup_state_with_drag_selection();
-    assert!(state.config.copy_on_select, "the default path is the risk");
 
     // Row 2 changes; the selected row 0 does not.
     let mut metrics = popup_surface_metrics(2, 0, 0, 3);
@@ -2386,30 +2421,17 @@ fn two_staged_popup_reports_each_find_their_frame() {
     );
 }
 
-/// The popup fixture sized so its 10x3 frame fills the terminal area the
-/// client resolves for it, as the server sizes a real popup terminal.
-fn surface_with_fitted_popup(surface_revision: u64) -> PaneSurfaceFrame {
-    let mut surface = PaneSurfaceFrame {
-        surface_revision,
-        ..surface_with_popup()
-    };
-    if let Some(popup) = surface.popup.as_deref_mut() {
-        // The border and the reserved spacer column take three of the 13 cells.
-        popup.width = Some(crate::protocol::ClientShellPopupSize::Cells(13));
-    }
-    surface
-}
-
-/// Opens copy mode on a popup whose frame fills its hit geometry, so a later
-/// frame of the same size does not read as a resize.
+/// Opens copy mode on the popup fixture. Its 10-column frame is a column wider
+/// than the area the client resolves for it, as while a resized frame is still
+/// on its way, so a later frame of the same size must not read as a resize.
 fn popup_state_in_copy_mode() -> ClientShellState {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
     state.set_snapshot(Box::new(snapshot()));
     state.apply_popup_surface_metrics(&popup_surface_metrics(1, 0, 0, 3));
-    state.set_pane_surface(surface_with_fitted_popup(1));
+    state.set_pane_surface(surface_with_popup());
     state.compose(106, 20).expect("popup frame");
     let popup = state.hits.popup.as_ref().expect("popup hit");
-    assert_eq!((popup.inner_rect.width, popup.inner_rect.height), (10, 3));
+    assert_eq!((popup.inner_rect.width, popup.inner_rect.height), (9, 3));
     let mut outcome = ClientShellInput::default();
     assert!(state.enter_copy_mode(&mut outcome));
     state
@@ -2431,7 +2453,10 @@ fn popup_keyboard_selections_survive_output_and_copy_live_ranges() {
         // Output rewrites a selected cell.
         let mut metrics = popup_surface_metrics(2, 0, 0, 3);
         metrics.content_revision = 2;
-        let mut output = surface_with_fitted_popup(2);
+        let mut output = PaneSurfaceFrame {
+            surface_revision: 2,
+            ..surface_with_popup()
+        };
         if let Some(popup) = output.popup.as_deref_mut() {
             popup.frame.cells[2].symbol = "X".into();
         }
@@ -2512,7 +2537,10 @@ fn popup_keyboard_selection_does_not_return_after_resize_or_screen_switch() {
         assert!(state.selection.is_some());
         let mut metrics = popup_surface_metrics(2, 0, 0, 3);
         metrics.content_revision = 2;
-        let mut changed = surface_with_fitted_popup(2);
+        let mut changed = PaneSurfaceFrame {
+            surface_revision: 2,
+            ..surface_with_popup()
+        };
         if screen_switch {
             metrics.alternate_screen_active = true;
         } else if let Some(popup) = changed.popup.as_deref_mut() {
@@ -2530,6 +2558,90 @@ fn popup_keyboard_selection_does_not_return_after_resize_or_screen_switch() {
             "movement must not resurrect the old anchor"
         );
     }
+}
+
+/// A popup frame can lag the area the client resolved for it, after a sidebar
+/// toggle or a terminal resize. When the resized frame lands, a selection made
+/// on the old frame has to go in copy mode too, or the next key restores the
+/// pre-reflow anchor and `y` copies the wrong range.
+#[test]
+fn popup_copy_selection_drops_when_a_lagging_frame_catches_up() {
+    let mut state = popup_state_in_copy_mode();
+    state.handle_input_bytes(b"vk");
+    assert!(state.selection.is_some());
+
+    // The frame catches up to the nine columns the client resolved, reflowed.
+    let mut metrics = popup_surface_metrics(2, 0, 0, 3);
+    metrics.content_revision = 2;
+    let mut caught_up = PaneSurfaceFrame {
+        surface_revision: 2,
+        ..surface_with_popup()
+    };
+    if let Some(popup) = caught_up.popup.as_deref_mut() {
+        let reflowed = Buffer::with_lines(["popup-liv", "e", ""]);
+        popup.frame = FrameData::from_ratatui_buffer_with_hyperlinks(&reflowed, None, &[]);
+    }
+    state.apply_popup_surface_metrics(&metrics);
+    state.set_pane_surface(caught_up);
+    assert!(state.selection.is_none());
+    assert!(
+        state.copy_mode.as_ref().unwrap().selection.is_none(),
+        "the copy-mode anchor belongs to the old frame"
+    );
+
+    state.compose(106, 20).expect("caught-up frame");
+    state.handle_input_bytes(b"l");
+    assert!(
+        state.selection.is_none(),
+        "movement must not restore the pre-reflow anchor"
+    );
+    let copied = state.handle_input_bytes(b"y");
+    assert!(
+        !copied.actions.iter().any(|action| matches!(
+            action,
+            ClientShellAction::Endpoint { request, .. }
+                if matches!(&request.method, crate::api::schema::Method::PopupSelectionRead(_))
+        )),
+        "nothing selected on the new frame, so nothing may be copied"
+    );
+}
+
+/// Copy mode records which screen it entered on, so output on that same
+/// alternate screen is not mistaken for a screen switch.
+#[test]
+fn popup_keyboard_selection_on_the_alternate_screen_survives_output() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    let mut metrics = popup_surface_metrics(1, 0, 0, 3);
+    metrics.alternate_screen_active = true;
+    state.apply_popup_surface_metrics(&metrics);
+    state.set_pane_surface(surface_with_popup());
+    state.compose(106, 20).expect("popup frame");
+    let mut outcome = ClientShellInput::default();
+    assert!(state.enter_copy_mode(&mut outcome));
+    state.handle_input_bytes(b"vk");
+    let range = state
+        .selection
+        .as_ref()
+        .expect("selected range")
+        .ordered_cells();
+
+    let mut output = popup_surface_metrics(2, 0, 0, 3);
+    output.alternate_screen_active = true;
+    output.content_revision = 2;
+    state.apply_popup_surface_metrics(&output);
+    state.set_pane_surface(PaneSurfaceFrame {
+        surface_revision: 2,
+        ..surface_with_popup()
+    });
+    assert!(state.copy_mode.as_ref().unwrap().selection.is_some());
+    assert_eq!(
+        state
+            .selection
+            .as_ref()
+            .map(crate::selection::Selection::ordered_cells),
+        Some(range)
+    );
 }
 
 /// A popup word selection arms a deadline that clears its highlight. Starting a
