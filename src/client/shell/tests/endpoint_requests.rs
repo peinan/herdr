@@ -279,6 +279,7 @@ fn dispatcher_cancels_worktree_requests_on_frozen_surface_or_failed_send() {
             &mut endpoints,
             Some(&mut state),
             &mut Vec::new(),
+            &crate::client::clipboard_writer::ClipboardWriter::inert(),
             &tx,
         )
         .unwrap();
