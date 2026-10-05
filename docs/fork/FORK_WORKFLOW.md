@@ -73,8 +73,21 @@ git config merge.conflictStyle zdiff3   # 共通ベースを表示（古い git 
   mise exec -- just check
   ```
   15.4 SDK が CLT から消えたら、`arm64-macos` を含む別 SDK を指す。
+- **2026-09-28 の CLT 更新で MacOSX15.4.sdk は削除された。** 残る 26.5 / 27.0 SDK はどちらも `libSystem.tbd` が arm64e だけで、
+  この Mac には zig 0.15.2 がリンクできる SDK が無い（上のラッパも、`Makefile` の既定の `ZIG` も動かない）。
+  vendored libghostty-vt を変えていない間は、main チェックアウトにあるビルド済みの `vendor/libghostty-vt/zig-out` を流用する。
+  `build.rs` は `$ZIG build` が 0 で返れば `zig-out/lib/libghostty-vt.a` をリンクするので、`ZIG` には何もしないコマンドを渡せばよい:
+  ```bash
+  # worktree ごとに一度（vendored ソースが a5c69bea から変わっていないことを確かめてから）
+  git -C <worktree> diff --quiet a5c69bea HEAD -- vendor/libghostty-vt && \
+    /bin/cp -c -R <main>/vendor/libghostty-vt/zig-out <worktree>/vendor/libghostty-vt/
+  env -u HERDR_ENV ... ZIG=/usr/bin/true mise exec -- cargo nextest run --manifest-path <worktree>/Cargo.toml --no-fail-fast
+  make install ZIG=/usr/bin/true   # main で導入するとき
+  ```
+  upstream v0.9.3 以降は、ビルドスクリプトが `crates/ghostty-vt/build.rs`（出力先は `$OUT_DIR`）へ移り、zig 0.16 が必須になる。
+  そのため、この回避策は次の upstream 同期では使えない（zig 0.16 がこれらの SDK でリンクできるかは未確認）。
 - herdr セッションの中でテストを走らせるときは `HERDR_*` 環境変数を全部外す（PTY 系テストが誤動作する）:
-  `env -u HERDR_ENV -u HERDR_PANE_ID -u HERDR_SOCKET_PATH -u HERDR_CLIENT_SOCKET_PATH -u HERDR_TAB_ID -u HERDR_WORKSPACE_ID ZIG="$HOME/.local/share/herdr-fork/zig" mise exec -- just check`
+  `env -u HERDR_ENV -u HERDR_PANE_ID -u HERDR_SOCKET_PATH -u HERDR_CLIENT_SOCKET_PATH -u HERDR_TAB_ID -u HERDR_WORKSPACE_ID -u HERDR_BIN_PATH -u HERDR_STARTUP_CWD ZIG="$HOME/.local/share/herdr-fork/zig" mise exec -- just check`
   `env` を前置する形では `ZIG=~/...` のチルダが展開されない（`env` の引数になるため）ので `$HOME` で書く。
 
 ### 既知の環境依存テスト失敗（macOS 26.6）

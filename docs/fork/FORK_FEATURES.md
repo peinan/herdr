@@ -31,7 +31,7 @@ git diff upstream/master...main -- src/config/model.rs # 追加した設定フ�
 これで 2 軸が独立して読める。`0.9.0-fork.9` と `0.10.0-fork.9` ならフォーク機能は同一で upstream だけ新しく、
 `0.9.0-fork.8` と `0.9.0-fork.9` なら upstream は同じでフォーク機能が 1 世代進んでいる。
 
-最終更新: 2026-09-16 (fork.9)
+最終更新: 2026-10-05 (fork.10)
 
 ## 機能一覧
 
@@ -207,6 +207,29 @@ repeat_timeout = 500
 ## 変更履歴
 
 新しい順。詳細は各表を参照。
+
+### fork.10 — マウス周りの修正 (2026-10-05, base 0.9.0)
+- **fix**: マウスを捕捉するペインで「離す」が届かなかった押下が残り、次のクリックが無視されたり、ドラッグが古いペインへ流れたりする不具合を修正 — [#53](https://github.com/peinan/herdr/issues/53) → [#56](https://github.com/peinan/herdr/pull/56) ([`08aa896`](https://github.com/peinan/herdr/commit/08aa896))
+  - Claude Code の全画面モードや lazygit など、マウスを捕捉するペインで Up が欠けると `pane_mouse_gesture` が残り続ける。
+    その結果、次の Down は捨てられ、Drag/Up は古いペインへ古い座標系で転送されていた。
+    症状は「1 回目のクリックが効かない」「選択範囲が前回の押下位置から伸びてずれ、違う範囲がコピーされる」「別のペインが反応してコピーと toast が出る」。
+  - 同じボタンの Down は離した後にしか来ない。そこで、その時点でフォーカス喪失時と同じく最後の位置に Up を合成して gesture を閉じ、
+    新しい押下は通常どおり処理する。他のボタン（和音操作）と Ctrl+クリックの再生は対象外。upstream にも同じ実装が残っている。
+  - 残課題：右・中ボタンのパススルーで Up が欠けた場合と、SGR ピクセルモード中にウィンドウ外で離した場合（その離すが捨てられる）。
+- **fix**: 出力が続くペインで herdr の選択がすぐ消え、コピーもされない不具合を修正。upstream 963f78f4（ogulcancelik/herdr#4193）を移植し、popup にも適用した — [#54](https://github.com/peinan/herdr/issues/54) → [#57](https://github.com/peinan/herdr/pull/57) ([`e158af5`](https://github.com/peinan/herdr/commit/e158af5), [`c07d8e1`](https://github.com/peinan/herdr/commit/c07d8e1))
+  - 明示的な選択はバッファ上の範囲として保持し、破棄するのはサイズ変更と normal/alternate 画面の切替のときだけにした
+    （popup は、対応するメトリクスが付いていないフレームが来たときも破棄する）。マウスで離したときのコピーは、revision を付けずに今の範囲を読む。
+  - フォーク独自の popup 選択と popup copy mode にも同じ方針を当て、fork.9 の `ed84d04b`（popup のセル比較）を巻き戻した。
+    あわせて、popup copy mode が入場時の大きさを popup フレームから取るようにした（独立レビューで見つかった取りこぼし）。
+  - 次の upstream 同期では、ペイン側は upstream 版を、popup 側はフォーク版を採る。
+  - 残課題（未修正、詳細は #57）：スクロールバックが上限に達した状態で出力が続くと、live 範囲は行の追い出し分だけずれる（upstream が受け入れたトレードオフ）。
+    出力しながら遡っているペインで端までドラッグすると、自動スクロールが古いオフセットを使う（upstream も同じ）。
+- **perf**: コピーのたびに client のイベントループが pbcopy などの終了を待っていたのを解消 — [#55](https://github.com/peinan/herdr/issues/55) → [#58](https://github.com/peinan/herdr/pull/58) ([`2d28e61`](https://github.com/peinan/herdr/commit/2d28e61), [`14a4532`](https://github.com/peinan/herdr/commit/14a4532))
+  - ネイティブのクリップボード書き込みを専用ワーカー（1 本、FIFO）へ移し、溜まった書き込みは最新の 1 件にまとめる。
+    失敗したときはループに戻して OSC 52 で書く。失敗分が残っている間は後続もそちらに並べ、古いコピーが最後に残る逆転を防ぐ。
+    SSH / WSL / VS Code のセッションは、従来どおりループ上で OSC 52 を書く。終了時はキューを最大 500ms 待つ。
+  - 次の upstream 同期では eef19143（同じ内容なら書かず、toast も出さない）と衝突する。toast を書き込み完了後に出すかを、そのとき決める。
+  - 残課題：ネイティブのツールが固まると、以後のコピーはセッション中ずっと黙って待つ（以前は client 全体が固まっていた）。
 
 ### fork.9 — popup 内の copy mode と選択 (2026-09-16, base 0.9.0)
 - popup ペインで copy mode とマウス選択を使えるように — [#49](https://github.com/peinan/herdr/issues/49) → [#52](https://github.com/peinan/herdr/pull/52) ([`a6e08d1`](https://github.com/peinan/herdr/commit/a6e08d1) ほか)
