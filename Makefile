@@ -33,7 +33,7 @@ ZIG         ?= $(wildcard $(ZIG_WRAPPER))
 # env!("CARGO_PKG_VERSION"), so exporting them for `just check` would fail the
 # suite. Only the build/install path should see them.
 HERDR_BUILD_CHANNEL ?= fork
-HERDR_BUILD_ID      ?= 9
+HERDR_BUILD_ID      ?= 10
 
 .DEFAULT_GOAL := help
 
