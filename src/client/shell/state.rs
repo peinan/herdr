@@ -4,125 +4,6 @@ pub(super) const MIN_TAB_WIDTH: u16 = 8;
 pub(super) const NEW_TAB_WIDTH: u16 = 3;
 pub(super) const WORKSPACE_HEADER_ROWS: u16 = 2;
 
-fn pane_surface_row<'a>(
-    surface: &'a PaneSurfaceFrame,
-    pane: &crate::protocol::PaneSurfacePane,
-    absolute_row: u32,
-) -> Option<&'a [crate::protocol::CellData]> {
-    let viewport_top = pane
-        .scroll
-        .map(|scroll| {
-            scroll
-                .max_offset_from_bottom
-                .saturating_sub(scroll.offset_from_bottom) as u32
-        })
-        .unwrap_or(0);
-    let viewport_row = u16::try_from(absolute_row.checked_sub(viewport_top)?).ok()?;
-    if viewport_row >= pane.inner_rect.height {
-        return None;
-    }
-    let start = (usize::from(pane.inner_rect.y) + usize::from(viewport_row))
-        * usize::from(surface.frame.width)
-        + usize::from(pane.inner_rect.x);
-    surface
-        .frame
-        .cells
-        .get(start..start + usize::from(pane.inner_rect.width))
-}
-
-/// Cells of one absolute scrollback row as the popup currently shows it.
-///
-/// The popup renders its own frame at the origin, so unlike a pane its rows are
-/// not offset into the surface buffer.
-fn popup_surface_row(
-    popup: &crate::protocol::ClientShellPopupSurface,
-    scroll: Option<crate::protocol::PaneSurfaceScrollMetrics>,
-    absolute_row: u32,
-) -> Option<&[crate::protocol::CellData]> {
-    let viewport_top = scroll
-        .map(|scroll| {
-            scroll
-                .max_offset_from_bottom
-                .saturating_sub(scroll.offset_from_bottom) as u32
-        })
-        .unwrap_or(0);
-    let viewport_row = u16::try_from(absolute_row.checked_sub(viewport_top)?).ok()?;
-    if viewport_row >= popup.frame.height {
-        return None;
-    }
-    let start = usize::from(viewport_row) * usize::from(popup.frame.width);
-    popup
-        .frame
-        .cells
-        .get(start..start + usize::from(popup.frame.width))
-}
-
-/// Whether the selected cells still read the same in the popup.
-///
-/// The popup writes constantly in normal use, so a bare content revision change
-/// is not evidence that the selection moved; only the selected cells are.
-fn popup_selection_cells_unchanged(
-    selection: &crate::selection::Selection<String>,
-    previous_popup: &crate::protocol::ClientShellPopupSurface,
-    previous_scroll: Option<crate::protocol::PaneSurfaceScrollMetrics>,
-    next_popup: &crate::protocol::ClientShellPopupSurface,
-    next_scroll: Option<crate::protocol::PaneSurfaceScrollMetrics>,
-) -> bool {
-    let ((start_row, start_col), (end_row, end_col)) = selection.ordered_cells();
-    (start_row..=end_row).all(|row| {
-        let first_col = if row == start_row { start_col } else { 0 };
-        let last_col = if row == end_row {
-            end_col
-        } else {
-            previous_popup.frame.width.saturating_sub(1)
-        };
-        popup_surface_row(previous_popup, previous_scroll, row)
-            .zip(popup_surface_row(next_popup, next_scroll, row))
-            .and_then(|(previous, next)| {
-                previous
-                    .get(usize::from(first_col)..=usize::from(last_col))
-                    .zip(next.get(usize::from(first_col)..=usize::from(last_col)))
-            })
-            .is_some_and(|(previous, next)| {
-                previous
-                    .iter()
-                    .zip(next)
-                    .all(|(previous, next)| previous.symbol == next.symbol)
-            })
-    })
-}
-
-fn selection_cells_unchanged(
-    selection: &crate::selection::Selection<String>,
-    previous_surface: &PaneSurfaceFrame,
-    previous_pane: &crate::protocol::PaneSurfacePane,
-    next_surface: &PaneSurfaceFrame,
-    next_pane: &crate::protocol::PaneSurfacePane,
-) -> bool {
-    let ((start_row, start_col), (end_row, end_col)) = selection.ordered_cells();
-    (start_row..=end_row).all(|row| {
-        let first_col = if row == start_row { start_col } else { 0 };
-        let last_col = if row == end_row {
-            end_col
-        } else {
-            previous_pane.inner_rect.width.saturating_sub(1)
-        };
-        pane_surface_row(previous_surface, previous_pane, row)
-            .zip(pane_surface_row(next_surface, next_pane, row))
-            .and_then(|(previous, next)| {
-                previous
-                    .get(usize::from(first_col)..=usize::from(last_col))
-                    .zip(next.get(usize::from(first_col)..=usize::from(last_col)))
-            })
-            .is_some_and(|(previous, next)| {
-                previous
-                    .iter()
-                    .zip(next)
-                    .all(|(previous, next)| previous.symbol == next.symbol)
-            })
-    })
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ClientShellKeybindingSource {
     Local,
@@ -996,6 +877,7 @@ pub(super) struct ClientCopyModeState {
     pub(super) popup: bool,
     pub(super) content_revision: u64,
     pub(super) geometry: (u16, u16),
+    pub(super) alternate_screen_active: bool,
     pub(super) cursor: crate::api::schema::PaneTextPoint,
     pub(super) offset_from_bottom: usize,
     pub(super) max_offset_from_bottom: usize,
@@ -1920,13 +1802,17 @@ impl ClientShellState {
             self.popup_pending = false;
             self.popup_pending_deadline = None;
         }
-        let selection_content_changed = self.selection.as_ref().is_some_and(|selection| {
+        // Explicit selections are live buffer ranges: output keeps them, and only
+        // a resize or a screen switch moves the coordinates under them. A popup
+        // frame that arrives without its paired report drops them too, since it
+        // cannot rule either out.
+        let selection_invalidated = self.selection.as_ref().is_some_and(|selection| {
             let Some(previous_surface) = self.pane_surface.as_ref() else {
                 return false;
             };
             // The popup is not one of the panes, so its selection would never be
             // checked here. Its geometry is the frame it renders into, and its
-            // content revision rides beside the surface.
+            // screen state rides beside the surface.
             if self.is_popup_target(&selection.pane_id) {
                 let previous_popup = previous_surface
                     .popup
@@ -1956,21 +1842,7 @@ impl ClientShellState {
                 // Swapping screens replaces the buffer under the same geometry.
                 let screen_switched = previous_metrics.alternate_screen_active
                     != next_metrics.alternate_screen_active;
-                // A popup writes constantly in normal use, so a revision change on
-                // its own says nothing about the selected rows. Only invalidate
-                // when those cells actually moved, as a pane does.
-                let content_moved = self.config.copy_on_select
-                    && next_metrics.content_revision != previous_metrics.content_revision
-                    && (!previous_metrics.content_revision.is_multiple_of(2)
-                        || !next_metrics.content_revision.is_multiple_of(2)
-                        || !popup_selection_cells_unchanged(
-                            selection,
-                            previous_popup,
-                            previous_metrics.scroll,
-                            next_popup,
-                            next_metrics.scroll,
-                        ));
-                return resized || screen_switched || content_moved;
+                return resized || screen_switched;
             }
             let previous = previous_surface
                 .panes
@@ -1986,20 +1858,8 @@ impl ClientShellState {
             previous.inner_rect.width != next.inner_rect.width
                 || previous.inner_rect.height != next.inner_rect.height
                 || previous.alternate_screen_active != next.alternate_screen_active
-                // Manual mouse selections track a live buffer range, not a content revision.
-                || (self.config.copy_on_select
-                && previous.content_revision != next.content_revision
-                && (!previous.content_revision.is_multiple_of(2)
-                    || !next.content_revision.is_multiple_of(2)
-                    || !selection_cells_unchanged(
-                        selection,
-                        previous_surface,
-                        previous,
-                        &surface,
-                        next,
-                    )))
         });
-        if selection_content_changed {
+        if selection_invalidated {
             self.selection = None;
             self.stop_selection_autoscroll();
             self.selection_highlight_clear_deadline = None;
@@ -2055,6 +1915,7 @@ impl ClientShellState {
                             (popup.frame.width, popup.frame.height),
                             metrics.content_revision,
                             metrics.scroll,
+                            metrics.alternate_screen_active,
                         )
                     })
             } else {
@@ -2067,22 +1928,27 @@ impl ClientShellState {
                             (pane.inner_rect.width, pane.inner_rect.height),
                             pane.content_revision,
                             pane.scroll,
+                            pane.alternate_screen_active,
                         )
                     })
             };
-            if let Some((geometry, content_revision, scroll)) = target {
-                if copy_mode.content_revision != content_revision || copy_mode.geometry != geometry
-                {
+            if let Some((geometry, content_revision, scroll, alternate_screen_active)) = target {
+                let coordinates_changed = copy_mode.geometry != geometry
+                    || copy_mode.alternate_screen_active != alternate_screen_active;
+                if copy_mode.content_revision != content_revision || coordinates_changed {
                     copy_mode.content_revision = content_revision;
                     copy_mode.geometry = geometry;
-                    copy_mode.selection = None;
+                    copy_mode.alternate_screen_active = alternate_screen_active;
+                    if coordinates_changed {
+                        copy_mode.selection = None;
+                        invalidated_copy_pane = Some(copy_mode.pane_id.clone());
+                    }
                     copy_mode.search_matches.clear();
                     copy_mode.search_total = 0;
                     copy_mode.search_current = None;
                     copy_mode.search_current_global = None;
                     copy_mode.search_generation = copy_mode.search_generation.saturating_add(1);
                     copy_mode.copy_after_search = false;
-                    invalidated_copy_pane = Some(copy_mode.pane_id.clone());
                 }
                 if let Some(scroll) = scroll {
                     let actual_offset =

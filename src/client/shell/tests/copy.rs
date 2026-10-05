@@ -22,6 +22,7 @@ fn pasted_help_and_copy_queries_strip_control_characters() {
         popup: false,
         content_revision: 0,
         geometry: (80, 24),
+        alternate_screen_active: false,
         cursor: crate::api::schema::PaneTextPoint { row: 0, col: 0 },
         offset_from_bottom: 0,
         max_offset_from_bottom: 0,
@@ -116,6 +117,7 @@ fn client_mouse_selection_highlights_and_copies_through_endpoint_extraction() {
             if params.pane_id == "pane_1"
                 && params.anchor == crate::api::schema::PaneTextPoint { row: 0, col: 0 }
                 && params.cursor == crate::api::schema::PaneTextPoint { row: 0, col: 2 }
+                && params.content_revision.is_none()
     ));
 
     let (repaint, actions) = state.handle_endpoint_result(
@@ -428,7 +430,7 @@ fn keyboard_copy_mode_owns_cursor_selection_copy_and_scroll_restore() {
         action,
         ClientShellAction::Endpoint { request, .. }
             if matches!(&request.method, crate::api::schema::Method::PaneSelectionRead(params)
-                if params.content_revision == Some(0))
+                if params.content_revision.is_none())
     )));
     assert!(copy.actions.iter().any(|action| matches!(
         action,
@@ -439,6 +441,169 @@ fn keyboard_copy_mode_owns_cursor_selection_copy_and_scroll_restore() {
                     if params.offset_from_bottom == 0
             )
     )));
+}
+
+#[test]
+fn keyboard_selections_survive_output_and_copy_live_ranges() {
+    // Character and linewise selections have distinct anchor/range projections.
+    for selection_key in [b"v", b"V"] {
+        let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+        state.set_snapshot(Box::new(snapshot()));
+        let mut pane_surface = surface();
+        pane_surface.panes[0].scroll = Some(crate::protocol::PaneSurfaceScrollMetrics {
+            offset_from_bottom: 0,
+            max_offset_from_bottom: 0,
+            viewport_rows: 2,
+        });
+        state.set_pane_surface(pane_surface.clone());
+        state.compose(106, 20).expect("composed frame");
+        state.handle_input_bytes(b"\x02[");
+        state.handle_input_bytes(selection_key);
+        state.handle_input_bytes(b"k");
+        let range = state
+            .selection
+            .as_ref()
+            .expect("selected range")
+            .ordered_cells();
+
+        pane_surface.surface_revision += 1;
+        pane_surface.panes[0].content_revision += 2;
+        pane_surface.frame.cells[0].symbol = "X".into();
+        state.set_pane_surface(pane_surface);
+        assert_eq!(state.mode, ClientShellMode::Copy);
+        assert!(state.copy_mode.as_ref().unwrap().selection.is_some());
+        assert_eq!(
+            state
+                .selection
+                .as_ref()
+                .expect("retained range")
+                .ordered_cells(),
+            range
+        );
+
+        let copied = state.handle_input_bytes(b"y");
+        assert!(copied.actions.iter().any(|action| matches!(
+            action,
+            ClientShellAction::Endpoint { request, .. }
+                if matches!(&request.method, crate::api::schema::Method::PaneSelectionRead(params)
+                    if params.content_revision.is_none()
+                        && (params.anchor.row, params.anchor.col) == range.0
+                        && (params.cursor.row, params.cursor.col) == range.1)
+        )));
+        assert_eq!(state.mode, ClientShellMode::Terminal);
+        assert!(state.selection.is_none());
+        assert!(state.copy_mode.is_none());
+    }
+}
+
+#[test]
+fn empty_keyboard_anchor_keeps_search_fallback_revision_guard() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    let mut pane_surface = surface();
+    pane_surface.panes[0].scroll = Some(crate::protocol::PaneSurfaceScrollMetrics {
+        offset_from_bottom: 0,
+        max_offset_from_bottom: 0,
+        viewport_rows: 2,
+    });
+    state.set_pane_surface(pane_surface);
+    state.compose(106, 20).expect("composed frame");
+    state.handle_input_bytes(b"\x02[");
+    let search = state.handle_input_bytes(b"/LIVE\r");
+    let [ClientShellAction::Endpoint { request, .. }] = &search.actions[..] else {
+        panic!("search request");
+    };
+    let found = crate::api::schema::PaneTextRange {
+        start: crate::api::schema::PaneTextPoint { row: 0, col: 0 },
+        end: crate::api::schema::PaneTextPoint { row: 0, col: 3 },
+    };
+    state.handle_endpoint_result(
+        "boot-1",
+        &request.id,
+        Ok(copy_search_result(vec![found], Some(0))),
+    );
+    state.handle_input_bytes(b"v");
+    assert!(!state.selection.as_ref().unwrap().is_visible());
+    let copy = state.handle_input_bytes(b"y");
+    assert!(copy.actions.iter().any(|action| matches!(
+        action,
+        ClientShellAction::Endpoint { request, .. }
+            if matches!(&request.method, crate::api::schema::Method::PaneSelectionRead(params)
+                if params.anchor == found.start
+                    && params.cursor == found.end
+                    && params.content_revision == Some(0))
+    )));
+}
+
+#[test]
+fn keyboard_selection_does_not_return_after_resize_or_screen_switch() {
+    for screen_switch in [false, true] {
+        let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+        state.set_snapshot(Box::new(snapshot()));
+        let mut pane_surface = surface();
+        pane_surface.panes[0].scroll = Some(crate::protocol::PaneSurfaceScrollMetrics {
+            offset_from_bottom: 0,
+            max_offset_from_bottom: 0,
+            viewport_rows: 2,
+        });
+        state.set_pane_surface(pane_surface.clone());
+        state.compose(106, 20).expect("composed frame");
+        state.handle_input_bytes(b"\x02[");
+        state.handle_input_bytes(b"vk");
+        assert!(state.selection.is_some());
+        pane_surface.surface_revision += 1;
+        pane_surface.panes[0].content_revision += 2;
+        if screen_switch {
+            pane_surface.panes[0].alternate_screen_active = true;
+        } else {
+            pane_surface.panes[0].inner_rect.width -= 1;
+        }
+        state.set_pane_surface(pane_surface);
+        assert!(state.selection.is_none());
+        assert!(state.copy_mode.as_ref().unwrap().selection.is_none());
+        state.compose(106, 20).expect("changed frame");
+        state.handle_input_bytes(b"l");
+        assert!(
+            state.selection.is_none(),
+            "movement must not resurrect the old anchor"
+        );
+    }
+}
+
+/// Copy mode records which screen it entered on, so output on that same
+/// alternate screen is not mistaken for a screen switch.
+#[test]
+fn keyboard_selection_on_the_alternate_screen_survives_output() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    let mut pane_surface = surface();
+    pane_surface.panes[0].alternate_screen_active = true;
+    pane_surface.panes[0].scroll = Some(crate::protocol::PaneSurfaceScrollMetrics {
+        offset_from_bottom: 0,
+        max_offset_from_bottom: 0,
+        viewport_rows: 2,
+    });
+    state.set_pane_surface(pane_surface.clone());
+    state.compose(106, 20).expect("composed frame");
+    state.handle_input_bytes(b"\x02[");
+    state.handle_input_bytes(b"vk");
+    let range = state
+        .selection
+        .as_ref()
+        .expect("selected range")
+        .ordered_cells();
+
+    pane_surface.surface_revision += 1;
+    pane_surface.panes[0].content_revision += 2;
+    state.set_pane_surface(pane_surface);
+    assert!(state.copy_mode.as_ref().unwrap().selection.is_some());
+    assert_eq!(
+        state
+            .selection
+            .as_ref()
+            .map(crate::selection::Selection::ordered_cells),
+        Some(range)
+    );
 }
 
 #[test]
@@ -1431,6 +1596,7 @@ fn popup_selection_copies_through_endpoint_extraction() {
             if params.terminal_id == "terminal-popup"
                 && params.anchor == crate::api::schema::PaneTextPoint { row: 0, col: 0 }
                 && params.cursor == crate::api::schema::PaneTextPoint { row: 0, col: 4 }
+                && params.content_revision.is_none()
     ));
 
     let (_, actions) = state.handle_endpoint_result(
@@ -2107,12 +2273,11 @@ fn popup_state_with_drag_selection() -> ClientShellState {
     state
 }
 
-/// A popup writes constantly, so output that leaves the selected cells alone
-/// must not cancel a drag the user is still making.
+/// A popup writes constantly, and its output must not cancel a drag the user
+/// is still making: the selection is a live buffer range.
 #[test]
 fn popup_output_outside_the_selection_keeps_the_drag() {
     let mut state = popup_state_with_drag_selection();
-    assert!(state.config.copy_on_select, "the default path is the risk");
 
     // Row 2 changes; the selected row 0 does not.
     let mut metrics = popup_surface_metrics(2, 0, 0, 3);
@@ -2126,21 +2291,53 @@ fn popup_output_outside_the_selection_keeps_the_drag() {
     );
 }
 
-/// But a write that lands on the selected cells does invalidate it: those rows
-/// no longer say what the user picked.
+/// A write that lands on the selected cells keeps the selection too: it is a
+/// live buffer range, and the release copies the text the range holds then.
+/// That includes a frame taken mid-update, at an odd revision.
 #[test]
-fn popup_output_inside_the_selection_drops_it() {
-    let mut state = popup_state_with_drag_selection();
+fn popup_output_inside_the_selection_keeps_the_live_range() {
+    for content_revision in [2, 3] {
+        let mut state = popup_state_with_drag_selection();
+        let range = state
+            .selection
+            .as_ref()
+            .expect("drag selection")
+            .ordered_cells();
 
-    let mut metrics = popup_surface_metrics(2, 0, 0, 3);
-    metrics.content_revision = 2;
-    state.apply_popup_surface_metrics(&metrics);
-    state.set_pane_surface(popup_surface_with_lines(2, ["changed", "noise-a", ""]));
+        let mut metrics = popup_surface_metrics(2, 0, 0, 3);
+        metrics.content_revision = content_revision;
+        state.apply_popup_surface_metrics(&metrics);
+        state.set_pane_surface(popup_surface_with_lines(2, ["changed", "noise-a", ""]));
+        assert_eq!(
+            state
+                .selection
+                .as_ref()
+                .map(crate::selection::Selection::ordered_cells),
+            Some(range),
+            "a write over the selected cells must keep the range (revision {content_revision})"
+        );
 
-    assert!(
-        state.selection.is_none(),
-        "a write over the selected cells must drop the selection"
-    );
+        state.compose(106, 20).expect("updated popup frame");
+        let popup = state.hits.popup.as_ref().expect("popup hit").clone();
+        let release =
+            state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+                kind: MouseEventKind::Up(MouseButton::Left),
+                column: popup.inner_rect.x + 6,
+                row: popup.inner_rect.y,
+                modifiers: KeyModifiers::empty(),
+            })]);
+        assert!(
+            release.actions.iter().any(|action| matches!(
+                action,
+                ClientShellAction::Endpoint { request, .. }
+                    if matches!(&request.method, crate::api::schema::Method::PopupSelectionRead(params)
+                        if (params.anchor.row, params.anchor.col) == range.0
+                            && (params.cursor.row, params.cursor.col) == range.1
+                            && params.content_revision.is_none())
+            )),
+            "the release must read the live range (revision {content_revision})"
+        );
+    }
 }
 
 /// Switching to the alternate screen replaces the buffer without necessarily
@@ -2158,6 +2355,22 @@ fn a_popup_screen_switch_drops_the_selection() {
     assert!(
         state.selection.is_none(),
         "an alternate screen switch must drop the selection"
+    );
+}
+
+/// A frame without its paired report cannot show that the popup kept its size
+/// and screen, so the selection goes rather than resolve through an unknown
+/// offset.
+#[test]
+fn a_popup_frame_without_its_report_drops_the_selection() {
+    let mut state = popup_state_with_drag_selection();
+
+    // No report is staged for this frame.
+    state.set_pane_surface(popup_surface_with_lines(2, ["keep-me", "noise-a", ""]));
+
+    assert!(
+        state.selection.is_none(),
+        "a frame without its report must drop the selection"
     );
 }
 
@@ -2188,7 +2401,7 @@ fn two_staged_popup_reports_each_find_their_frame() {
     );
     assert!(
         state.selection.is_some(),
-        "and its selection must survive, since the selected cells did not move"
+        "and its selection must survive, since the frame found the report it pairs with"
     );
 
     // Then the newer frame commits its own.
@@ -2205,6 +2418,229 @@ fn two_staged_popup_reports_each_find_their_frame() {
             .and_then(|metrics| metrics.scroll)
             .map(|scroll| scroll.offset_from_bottom),
         Some(4)
+    );
+}
+
+/// Opens copy mode on the popup fixture. Its 10-column frame is a column wider
+/// than the area the client resolves for it, as while a resized frame is still
+/// on its way, so a later frame of the same size must not read as a resize.
+fn popup_state_in_copy_mode() -> ClientShellState {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.apply_popup_surface_metrics(&popup_surface_metrics(1, 0, 0, 3));
+    state.set_pane_surface(surface_with_popup());
+    state.compose(106, 20).expect("popup frame");
+    let popup = state.hits.popup.as_ref().expect("popup hit");
+    assert_eq!((popup.inner_rect.width, popup.inner_rect.height), (9, 3));
+    let mut outcome = ClientShellInput::default();
+    assert!(state.enter_copy_mode(&mut outcome));
+    state
+}
+
+#[test]
+fn popup_keyboard_selections_survive_output_and_copy_live_ranges() {
+    // Character and linewise selections have distinct anchor/range projections.
+    for selection_key in [b"v", b"V"] {
+        let mut state = popup_state_in_copy_mode();
+        state.handle_input_bytes(selection_key);
+        state.handle_input_bytes(b"k");
+        let range = state
+            .selection
+            .as_ref()
+            .expect("selected range")
+            .ordered_cells();
+
+        // Output rewrites a selected cell.
+        let mut metrics = popup_surface_metrics(2, 0, 0, 3);
+        metrics.content_revision = 2;
+        let mut output = PaneSurfaceFrame {
+            surface_revision: 2,
+            ..surface_with_popup()
+        };
+        if let Some(popup) = output.popup.as_deref_mut() {
+            popup.frame.cells[2].symbol = "X".into();
+        }
+        state.apply_popup_surface_metrics(&metrics);
+        state.set_pane_surface(output);
+        assert_eq!(state.mode, ClientShellMode::Copy);
+        assert!(state.copy_mode.as_ref().unwrap().selection.is_some());
+        assert_eq!(
+            state
+                .selection
+                .as_ref()
+                .expect("retained range")
+                .ordered_cells(),
+            range
+        );
+
+        let copied = state.handle_input_bytes(b"y");
+        assert!(copied.actions.iter().any(|action| matches!(
+            action,
+            ClientShellAction::Endpoint { request, .. }
+                if matches!(&request.method, crate::api::schema::Method::PopupSelectionRead(params)
+                    if params.terminal_id == "terminal-popup"
+                        && params.content_revision.is_none()
+                        && (params.anchor.row, params.anchor.col) == range.0
+                        && (params.cursor.row, params.cursor.col) == range.1)
+        )));
+        assert_eq!(state.mode, ClientShellMode::Terminal);
+        assert!(state.selection.is_none());
+        assert!(state.copy_mode.is_none());
+    }
+}
+
+#[test]
+fn popup_empty_keyboard_anchor_keeps_search_fallback_revision_guard() {
+    let mut state = popup_state_in_copy_mode();
+    let search = state.handle_input_bytes(b"/popup\r");
+    let [ClientShellAction::Endpoint { request, .. }] = &search.actions[..] else {
+        panic!("popup search request");
+    };
+    assert!(matches!(
+        &request.method,
+        crate::api::schema::Method::PopupCopySearch(_)
+    ));
+    let found = crate::api::schema::PaneTextRange {
+        start: crate::api::schema::PaneTextPoint { row: 0, col: 0 },
+        end: crate::api::schema::PaneTextPoint { row: 0, col: 4 },
+    };
+    state.handle_endpoint_result(
+        "boot-1",
+        &request.id,
+        Ok(crate::api::schema::ResponseResult::PopupCopySearch {
+            terminal_id: "terminal-popup".into(),
+            content_revision: 0,
+            matches: vec![found],
+            total: 1,
+            current: Some(0),
+            current_global: Some(0),
+        }),
+    );
+    state.handle_input_bytes(b"v");
+    assert!(!state.selection.as_ref().unwrap().is_visible());
+    let copy = state.handle_input_bytes(b"y");
+    assert!(copy.actions.iter().any(|action| matches!(
+        action,
+        ClientShellAction::Endpoint { request, .. }
+            if matches!(&request.method, crate::api::schema::Method::PopupSelectionRead(params)
+                if params.anchor == found.start
+                    && params.cursor == found.end
+                    && params.content_revision == Some(0))
+    )));
+}
+
+#[test]
+fn popup_keyboard_selection_does_not_return_after_resize_or_screen_switch() {
+    for screen_switch in [false, true] {
+        let mut state = popup_state_in_copy_mode();
+        state.handle_input_bytes(b"vk");
+        assert!(state.selection.is_some());
+        let mut metrics = popup_surface_metrics(2, 0, 0, 3);
+        metrics.content_revision = 2;
+        let mut changed = PaneSurfaceFrame {
+            surface_revision: 2,
+            ..surface_with_popup()
+        };
+        if screen_switch {
+            metrics.alternate_screen_active = true;
+        } else if let Some(popup) = changed.popup.as_deref_mut() {
+            let narrower = Buffer::with_lines(["popup", "", ""]);
+            popup.frame = FrameData::from_ratatui_buffer_with_hyperlinks(&narrower, None, &[]);
+        }
+        state.apply_popup_surface_metrics(&metrics);
+        state.set_pane_surface(changed);
+        assert!(state.selection.is_none());
+        assert!(state.copy_mode.as_ref().unwrap().selection.is_none());
+        state.compose(106, 20).expect("changed frame");
+        state.handle_input_bytes(b"l");
+        assert!(
+            state.selection.is_none(),
+            "movement must not resurrect the old anchor"
+        );
+    }
+}
+
+/// A popup frame can lag the area the client resolved for it, after a sidebar
+/// toggle or a terminal resize. When the resized frame lands, a selection made
+/// on the old frame has to go in copy mode too, or the next key restores the
+/// pre-reflow anchor and `y` copies the wrong range.
+#[test]
+fn popup_copy_selection_drops_when_a_lagging_frame_catches_up() {
+    let mut state = popup_state_in_copy_mode();
+    state.handle_input_bytes(b"vk");
+    assert!(state.selection.is_some());
+
+    // The frame catches up to the nine columns the client resolved, reflowed.
+    let mut metrics = popup_surface_metrics(2, 0, 0, 3);
+    metrics.content_revision = 2;
+    let mut caught_up = PaneSurfaceFrame {
+        surface_revision: 2,
+        ..surface_with_popup()
+    };
+    if let Some(popup) = caught_up.popup.as_deref_mut() {
+        let reflowed = Buffer::with_lines(["popup-liv", "e", ""]);
+        popup.frame = FrameData::from_ratatui_buffer_with_hyperlinks(&reflowed, None, &[]);
+    }
+    state.apply_popup_surface_metrics(&metrics);
+    state.set_pane_surface(caught_up);
+    assert!(state.selection.is_none());
+    assert!(
+        state.copy_mode.as_ref().unwrap().selection.is_none(),
+        "the copy-mode anchor belongs to the old frame"
+    );
+
+    state.compose(106, 20).expect("caught-up frame");
+    state.handle_input_bytes(b"l");
+    assert!(
+        state.selection.is_none(),
+        "movement must not restore the pre-reflow anchor"
+    );
+    let copied = state.handle_input_bytes(b"y");
+    assert!(
+        !copied.actions.iter().any(|action| matches!(
+            action,
+            ClientShellAction::Endpoint { request, .. }
+                if matches!(&request.method, crate::api::schema::Method::PopupSelectionRead(_))
+        )),
+        "nothing selected on the new frame, so nothing may be copied"
+    );
+}
+
+/// Copy mode records which screen it entered on, so output on that same
+/// alternate screen is not mistaken for a screen switch.
+#[test]
+fn popup_keyboard_selection_on_the_alternate_screen_survives_output() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    let mut metrics = popup_surface_metrics(1, 0, 0, 3);
+    metrics.alternate_screen_active = true;
+    state.apply_popup_surface_metrics(&metrics);
+    state.set_pane_surface(surface_with_popup());
+    state.compose(106, 20).expect("popup frame");
+    let mut outcome = ClientShellInput::default();
+    assert!(state.enter_copy_mode(&mut outcome));
+    state.handle_input_bytes(b"vk");
+    let range = state
+        .selection
+        .as_ref()
+        .expect("selected range")
+        .ordered_cells();
+
+    let mut output = popup_surface_metrics(2, 0, 0, 3);
+    output.alternate_screen_active = true;
+    output.content_revision = 2;
+    state.apply_popup_surface_metrics(&output);
+    state.set_pane_surface(PaneSurfaceFrame {
+        surface_revision: 2,
+        ..surface_with_popup()
+    });
+    assert!(state.copy_mode.as_ref().unwrap().selection.is_some());
+    assert_eq!(
+        state
+            .selection
+            .as_ref()
+            .map(crate::selection::Selection::ordered_cells),
+        Some(range)
     );
 }
 

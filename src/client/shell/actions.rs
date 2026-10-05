@@ -297,7 +297,7 @@ impl ClientShellState {
         let pane_id = selection.pane_id.clone();
         let content_revision = self
             .target_content_revision(&pane_id)
-            // Read a manual mouse selection atomically from the live terminal. Output
+            // Read an explicit selection atomically from the live terminal. Output
             // between the displayed frame and this request must not reject the copy.
             .filter(|_| !live);
         let (anchor, cursor) = selection.ordered_cells();
