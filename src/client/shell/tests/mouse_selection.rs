@@ -796,3 +796,291 @@ fn context_menu_keyboard_and_outside_click_are_client_owned() {
     assert!(outside.repaint);
     assert!(state.overlay.is_none());
 }
+
+#[test]
+fn pressing_the_held_button_on_another_pane_releases_the_stale_gesture_first() {
+    let mut projected = snapshot();
+    let mut second_pane = projected.panes[0].clone();
+    second_pane.pane_id = "pane_2".into();
+    second_pane.focused = false;
+    projected.panes.push(second_pane);
+    let mut pane_surface = surface();
+    pane_surface.panes[0].mouse_reporting = true;
+    let mut second_surface_pane = pane_surface.panes[0].clone();
+    second_surface_pane.pane_id = "pane_2".into();
+    second_surface_pane.focused = false;
+    second_surface_pane.rect.x = 4;
+    second_surface_pane.inner_rect.x = 4;
+    pane_surface.panes.push(second_surface_pane);
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(projected));
+    state.set_pane_surface(pane_surface);
+    state.compose(106, 20).expect("two pane frame");
+    let first = state.hits.panes[0].clone();
+    let second = state.hits.panes[1].clone();
+    assert_eq!(second.pane_id, "pane_2");
+    let mouse = |kind, column, row| {
+        RawInputEvent::Mouse(crossterm::event::MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::empty(),
+        })
+    };
+
+    state.handle_raw_events(vec![
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            first.inner_rect.x + 1,
+            first.inner_rect.y,
+        ),
+        mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            first.inner_rect.x + 2,
+            first.inner_rect.y + 1,
+        ),
+    ]);
+    // The host never reports the release, so the next press arrives while the
+    // first pane still holds the gesture.
+    let press = state.handle_raw_events(vec![mouse(
+        MouseEventKind::Down(MouseButton::Left),
+        second.inner_rect.x + 1,
+        second.inner_rect.y,
+    )]);
+    assert!(
+        matches!(
+            &press.requests[..],
+            [
+                ClientMessage::ClientShellPaneInput {
+                    pane_id: released_pane,
+                    events: released,
+                },
+                ClientMessage::ClientShellPaneInput {
+                    pane_id: pressed_pane,
+                    events: pressed,
+                },
+            ] if released_pane == "pane_1"
+                && matches!(
+                    &released[..],
+                    [ClientPaneInputEvent::Mouse {
+                        kind: crate::protocol::ClientMouseKind::Up(
+                            crate::protocol::ClientMouseButton::Left
+                        ),
+                        position: ClientMousePosition::Cell { column: 2, row: 1 },
+                        ..
+                    }]
+                )
+                && pressed_pane == "pane_2"
+                && matches!(
+                    &pressed[..],
+                    [ClientPaneInputEvent::Mouse {
+                        kind: crate::protocol::ClientMouseKind::Down(
+                            crate::protocol::ClientMouseButton::Left
+                        ),
+                        position: ClientMousePosition::Cell { column: 1, row: 0 },
+                        ..
+                    }]
+                )
+        ),
+        "the stale gesture must end on its own pane before the press, got {:?}",
+        press.requests
+    );
+    assert!(press.actions.iter().any(|action| matches!(
+        action,
+        ClientShellAction::Endpoint { request, .. }
+            if matches!(
+                &request.method,
+                crate::api::schema::Method::PaneFocus(target) if target.pane_id == "pane_2"
+            )
+    )));
+    assert!(state
+        .pane_mouse_gesture
+        .as_ref()
+        .is_some_and(|gesture| gesture.hit.pane_id == "pane_2"));
+
+    let release = state.handle_raw_events(vec![mouse(
+        MouseEventKind::Up(MouseButton::Left),
+        second.inner_rect.x + 1,
+        second.inner_rect.y,
+    )]);
+    assert!(matches!(
+        &release.requests[..],
+        [ClientMessage::ClientShellPaneInput { pane_id, events }]
+            if pane_id == "pane_2"
+                && matches!(
+                    &events[..],
+                    [ClientPaneInputEvent::Mouse {
+                        kind: crate::protocol::ClientMouseKind::Up(
+                            crate::protocol::ClientMouseButton::Left
+                        ),
+                        ..
+                    }]
+                )
+    ));
+    assert!(state.pane_mouse_gesture.is_none());
+}
+
+#[test]
+fn pressing_the_held_button_again_in_the_same_pane_releases_then_presses() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    let mut pane_surface = surface();
+    pane_surface.panes[0].mouse_reporting = true;
+    state.set_pane_surface(pane_surface);
+    state.compose(106, 20).expect("composed frame");
+    let pane = state.hits.panes[0].clone();
+    let mouse = |kind, column, row| {
+        RawInputEvent::Mouse(crossterm::event::MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::empty(),
+        })
+    };
+
+    state.handle_raw_events(vec![
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            pane.inner_rect.x,
+            pane.inner_rect.y,
+        ),
+        mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            pane.inner_rect.x + 1,
+            pane.inner_rect.y,
+        ),
+    ]);
+    let press = state.handle_raw_events(vec![mouse(
+        MouseEventKind::Down(MouseButton::Left),
+        pane.inner_rect.x + 3,
+        pane.inner_rect.y + 1,
+    )]);
+    assert!(
+        matches!(
+            &press.requests[..],
+            [ClientMessage::ClientShellPaneInput { pane_id, events }]
+                if pane_id == "pane_1"
+                    && matches!(
+                        &events[..],
+                        [
+                            ClientPaneInputEvent::Mouse {
+                                kind: crate::protocol::ClientMouseKind::Up(
+                                    crate::protocol::ClientMouseButton::Left
+                                ),
+                                position: ClientMousePosition::Cell { column: 1, row: 0 },
+                                ..
+                            },
+                            ClientPaneInputEvent::Mouse {
+                                kind: crate::protocol::ClientMouseKind::Down(
+                                    crate::protocol::ClientMouseButton::Left
+                                ),
+                                position: ClientMousePosition::Cell { column: 3, row: 1 },
+                                ..
+                            },
+                        ]
+                    )
+        ),
+        "the release and the new press must reach the pane in order, got {:?}",
+        press.requests
+    );
+    assert!(state.pane_mouse_gesture.as_ref().is_some_and(|gesture| {
+        gesture.last_position == ClientMousePosition::Cell { column: 3, row: 1 }
+    }));
+}
+
+#[test]
+fn pressing_the_held_button_again_in_the_popup_releases_then_presses() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface_with_popup());
+    state.compose(106, 20).expect("popup frame");
+    let popup = state.hits.popup.clone().expect("popup hit");
+    let mouse = |kind, column, row| {
+        RawInputEvent::Mouse(crossterm::event::MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::empty(),
+        })
+    };
+
+    state.handle_raw_events(vec![
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            popup.inner_rect.x + 1,
+            popup.inner_rect.y,
+        ),
+        mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            popup.inner_rect.x + 2,
+            popup.inner_rect.y + 1,
+        ),
+    ]);
+    let press = state.handle_raw_events(vec![mouse(
+        MouseEventKind::Down(MouseButton::Left),
+        popup.inner_rect.x + 4,
+        popup.inner_rect.y + 2,
+    )]);
+    assert!(
+        matches!(
+            &press.requests[..],
+            [ClientMessage::ClientShellPopupInput { terminal_id, events }]
+                if terminal_id == "terminal-popup"
+                    && matches!(
+                        &events[..],
+                        [
+                            ClientPaneInputEvent::Mouse {
+                                kind: crate::protocol::ClientMouseKind::Up(
+                                    crate::protocol::ClientMouseButton::Left
+                                ),
+                                position: ClientMousePosition::Cell { column: 2, row: 1 },
+                                ..
+                            },
+                            ClientPaneInputEvent::Mouse {
+                                kind: crate::protocol::ClientMouseKind::Down(
+                                    crate::protocol::ClientMouseButton::Left
+                                ),
+                                position: ClientMousePosition::Cell { column: 4, row: 2 },
+                                ..
+                            },
+                        ]
+                    )
+        ),
+        "the popup must see the release before the new press, got {:?}",
+        press.requests
+    );
+    assert!(state
+        .pane_mouse_gesture
+        .as_ref()
+        .is_some_and(|gesture| gesture.hit.popup));
+}
+
+#[test]
+fn a_replayed_link_click_press_leaves_the_held_gesture_alone() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    let mut pane_surface = surface();
+    pane_surface.panes[0].mouse_reporting = true;
+    state.set_pane_surface(pane_surface);
+    state.compose(106, 20).expect("composed frame");
+    let pane = state.hits.panes[0].clone();
+    state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: pane.inner_rect.x + 1,
+        row: pane.inner_rect.y + 1,
+        modifiers: KeyModifiers::empty(),
+    })]);
+
+    let replay = state.replay_mouse_events(vec![crossterm::event::MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: pane.inner_rect.x + 2,
+        row: pane.inner_rect.y,
+        modifiers: KeyModifiers::CONTROL,
+    }]);
+    assert!(replay.requests.is_empty());
+    assert!(replay.actions.is_empty());
+    assert!(state.pane_mouse_gesture.as_ref().is_some_and(|gesture| {
+        gesture.hit.pane_id == "pane_1"
+            && gesture.last_position == ClientMousePosition::Cell { column: 1, row: 1 }
+    }));
+}
