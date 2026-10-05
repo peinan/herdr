@@ -6,6 +6,7 @@ pub(super) fn dispatch_client_shell_actions(
     endpoints: &mut endpoint::EndpointRegistry,
     mut shell: Option<&mut shell::ClientShellState>,
     detached_process_children: &mut Vec<std::process::Child>,
+    clipboard: &clipboard_writer::ClipboardWriter,
     event_tx: &tokio::sync::mpsc::Sender<ClientLoopEvent>,
 ) -> Result<(Vec<crossterm::event::MouseEvent>, bool), ClientError> {
     let mut replay_mouse = Vec::new();
@@ -26,7 +27,7 @@ pub(super) fn dispatch_client_shell_actions(
                 }
             }
             shell::ClientShellAction::ClipboardWrite(bytes) => {
-                crate::selection::write_osc52_bytes(&bytes);
+                clipboard.write(bytes);
             }
             shell::ClientShellAction::ActivateEndpoint {
                 endpoint_id,
@@ -212,6 +213,7 @@ pub(super) fn begin_endpoint_activation(
                 endpoints,
                 Some(shell),
                 &mut state.detached_process_children,
+                &state.clipboard,
                 event_tx,
             )?;
             if repaint {
@@ -658,6 +660,7 @@ pub(super) fn finish_client_shell_input(
         endpoints,
         state.shell.as_mut(),
         &mut state.detached_process_children,
+        &state.clipboard,
         event_tx,
     )?;
     let frame = if dispatch_repaint {

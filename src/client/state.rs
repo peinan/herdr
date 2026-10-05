@@ -40,6 +40,7 @@ pub(super) struct ClientState {
     pub(super) presentation_frozen: bool,
     pub(super) draw_host_cursor: bool,
     pub(super) detached_process_children: Vec<std::process::Child>,
+    pub(super) clipboard: clipboard_writer::ClipboardWriter,
     pub(super) shell: Option<shell::ClientShellState>,
 }
 

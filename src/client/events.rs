@@ -30,5 +30,7 @@ pub(super) enum ClientLoopEvent {
         /// latest target have the same identity after restoration.
         force: bool,
     },
+    /// A copy the clipboard worker could not write natively; the loop writes it as OSC 52.
+    ClipboardFallback(Vec<u8>),
     Timer,
 }

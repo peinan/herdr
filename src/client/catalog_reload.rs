@@ -143,6 +143,7 @@ mod tests {
             presentation_frozen: false,
             draw_host_cursor: false,
             detached_process_children: Vec::new(),
+            clipboard: clipboard_writer::ClipboardWriter::inert(),
             shell: Some(shell::ClientShellState::new(
                 shell::ClientShellConfig::from_config(&crate::config::Config::default()),
             )),

@@ -16,6 +16,7 @@ mod attach;
 mod catalog_reload;
 mod clipboard_forwarding;
 mod clipboard_images;
+mod clipboard_writer;
 mod config_reload;
 #[cfg(unix)]
 mod direct_graphics;
@@ -373,6 +374,9 @@ async fn run_client_loop(
     let is_remote_client = is_remote_client_process();
     let local_unavailable = initial.is_none();
 
+    // Channel for events from the resize and server reader threads.
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<ClientLoopEvent>(256);
+
     let mut state = ClientState {
         blit_encoder: render_ansi::BlitEncoder::new(),
         mouse_capture_active: config.mouse_capture_active,
@@ -405,6 +409,7 @@ async fn run_client_loop(
         presentation_frozen: false,
         draw_host_cursor,
         detached_process_children: Vec::new(),
+        clipboard: clipboard_writer::ClipboardWriter::spawn(event_tx.clone()),
         shell: config.shell_config.map(shell::ClientShellState::new),
     };
     let mut federated = endpoint_catalog.has_enabled_ssh();
@@ -430,8 +435,6 @@ async fn run_client_loop(
     let reported_cell_size = Arc::new(AtomicU64::new(0));
     let host_sgr_pixels_active = Arc::new(AtomicBool::new(false));
 
-    // Channel for events from the resize and server reader threads.
-    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<ClientLoopEvent>(256);
     let (supervisor_tx, mut supervisor_rx) =
         tokio::sync::mpsc::channel::<endpoint::EndpointSupervisorEvent>(64);
     // Keep Windows console draining independent of server-frame backpressure.
@@ -1683,6 +1686,7 @@ async fn run_client_loop(
                             &mut write_stream,
                             state.shell.as_mut(),
                             &mut state.detached_process_children,
+                            &state.clipboard,
                             &event_tx,
                         )?;
                         let repaint = repaint || dispatch_repaint;
@@ -1722,7 +1726,7 @@ async fn run_client_loop(
                         }
                     }
                     ServerMessage::Clipboard { data } => {
-                        if forward_clipboard(&data) {
+                        if forward_clipboard(&state.clipboard, &data) {
                             let (width, height) = state.reported_size;
                             let frame = state.shell.as_mut().and_then(|shell| {
                                 shell
@@ -1936,6 +1940,7 @@ async fn run_client_loop(
                     io::Error::new(io::ErrorKind::UnexpectedEof, "connection was lost"),
                 );
             }
+            ClientLoopEvent::ClipboardFallback(bytes) => state.clipboard.write_fallback(&bytes),
             ClientLoopEvent::Timer => {
                 client_timer.fired();
                 #[cfg(unix)]
