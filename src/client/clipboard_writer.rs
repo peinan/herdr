@@ -2,8 +2,10 @@
 //!
 //! Native clipboard tools (pbcopy, wl-copy, xclip) are separate processes, so
 //! waiting for them stalls the loop. Native writes run in order on one worker
-//! thread instead. OSC 52 goes to stdout, which only the loop writes, so a
-//! failed native write returns to the loop to be written as OSC 52.
+//! thread instead, and writes that queue up behind a slow one collapse to the
+//! newest, since only the newest copy matters to the clipboard. OSC 52 goes to
+//! stdout, which only the loop writes, so a failed native write returns to the
+//! loop to be written as OSC 52.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc};
@@ -55,10 +57,14 @@ impl ClipboardWriter {
             None
         } else {
             let (jobs, queue) = mpsc::channel();
-            let worker_pending = pending_fallbacks.clone();
+            let worker = Worker {
+                native,
+                pending_fallbacks: pending_fallbacks.clone(),
+                events,
+            };
             match std::thread::Builder::new()
                 .name("clipboard-writer".into())
-                .spawn(move || run_worker(queue, native, worker_pending, events))
+                .spawn(move || worker.run(queue))
             {
                 Ok(_) => Some(jobs),
                 Err(err) => {
@@ -93,8 +99,10 @@ impl ClipboardWriter {
         release_pending(&self.pending_fallbacks);
     }
 
-    /// Waits for every write queued so far. Returns false on timeout.
-    fn flush(&self, timeout: Duration) -> bool {
+    /// Waits until every write queued so far has been tried natively, handed
+    /// back to the loop as a fallback, or superseded by a newer write. It does
+    /// not wait for the loop to write fallbacks. Returns false on timeout.
+    pub(super) fn flush(&self, timeout: Duration) -> bool {
         let Some(jobs) = &self.jobs else {
             return true;
         };
@@ -123,41 +131,67 @@ impl Drop for ClipboardWriter {
         if !self.flush(FLUSH_TIMEOUT) {
             warn!("clipboard writes were still queued at shutdown");
         }
+        let unwritten = self.pending_fallbacks.load(Ordering::Acquire);
+        if unwritten > 0 {
+            warn!(
+                copies = unwritten,
+                "clipboard fallbacks will not be written; the client loop is stopping"
+            );
+        }
     }
 }
 
-fn run_worker(
-    jobs: mpsc::Receiver<Job>,
+struct Worker {
     native: NativeWrite,
     pending_fallbacks: Arc<AtomicUsize>,
     events: tokio::sync::mpsc::Sender<ClientLoopEvent>,
-) {
-    for job in jobs {
-        let bytes = match job {
-            Job::Write(bytes) => bytes,
-            Job::Flush(done) => {
-                let _ = done.send(());
-                continue;
+}
+
+impl Worker {
+    fn run(self, jobs: mpsc::Receiver<Job>) {
+        while let Ok(first) = jobs.recv() {
+            // Only the newest copy matters to the clipboard, so writes that
+            // queued up behind a slow one collapse to the last of them. A
+            // flush first writes the newest write queued before it.
+            let batch: Vec<Job> = std::iter::once(first).chain(jobs.try_iter()).collect();
+            let mut latest = None;
+            for job in batch {
+                match job {
+                    Job::Write(bytes) => latest = Some(bytes),
+                    Job::Flush(done) => {
+                        if let Some(bytes) = latest.take() {
+                            self.write(bytes);
+                        }
+                        let _ = done.send(());
+                    }
+                }
             }
-        };
+            if let Some(bytes) = latest {
+                self.write(bytes);
+            }
+        }
+    }
+
+    fn write(&self, bytes: Vec<u8>) {
         // While an older copy waits for OSC 52, a native write would land
         // first and then be overwritten, so this one queues behind it instead.
         // Native is tried again once the loop has written every fallback.
-        if pending_fallbacks.load(Ordering::Acquire) == 0 {
-            if native(&bytes) {
-                continue;
+        if self.pending_fallbacks.load(Ordering::Acquire) == 0 {
+            if (self.native)(&bytes) {
+                return;
             }
             debug!(
                 bytes = bytes.len(),
                 "native clipboard write failed; falling back to OSC 52"
             );
         }
-        pending_fallbacks.fetch_add(1, Ordering::AcqRel);
-        if events
+        self.pending_fallbacks.fetch_add(1, Ordering::AcqRel);
+        if self
+            .events
             .blocking_send(ClientLoopEvent::ClipboardFallback(bytes))
             .is_err()
         {
-            release_pending(&pending_fallbacks);
+            release_pending(&self.pending_fallbacks);
             warn!("client loop stopped; dropping a clipboard write");
         }
     }
@@ -175,7 +209,6 @@ mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
     use std::sync::atomic::AtomicBool;
-    use std::time::Instant;
 
     const WAIT: Duration = Duration::from_secs(5);
 
@@ -210,8 +243,9 @@ mod tests {
 
         for text in ["one", "two", "three"] {
             writer.write(text.as_bytes().to_vec());
+            // Writes queued together would collapse to the newest.
+            assert!(writer.flush(WAIT));
         }
-        assert!(writer.flush(WAIT));
 
         let worker = Some("clipboard-writer".to_owned());
         assert_eq!(
@@ -227,6 +261,44 @@ mod tests {
     }
 
     #[test]
+    fn writes_queued_behind_a_slow_native_write_collapse_to_the_newest() {
+        let (calls, recorded) = mpsc::channel();
+        let (started, first_started) = mpsc::channel();
+        let (release, released) = mpsc::channel::<()>();
+        let native: NativeWrite = Box::new(move |bytes: &[u8]| {
+            let _ = calls.send(bytes.to_vec());
+            if bytes == b"first" {
+                let _ = started.send(());
+                let _ = released.recv();
+            }
+            true
+        });
+        let (osc52, _) = osc52_recorder();
+        let (events_tx, _events) = tokio::sync::mpsc::channel(8);
+        let writer = ClipboardWriter::new(false, native, osc52, events_tx);
+
+        writer.write(b"first".to_vec());
+        first_started
+            .recv_timeout(WAIT)
+            .expect("first write reaches native");
+        for text in ["second", "third", "fourth", "fifth"] {
+            writer.write(text.as_bytes().to_vec());
+        }
+        // Queue the flush behind the burst before releasing, as a detach in
+        // the middle of a burst would: it must still write the newest copy.
+        let (done, completion) = mpsc::channel();
+        let jobs = writer.jobs.as_ref().expect("worker is running");
+        jobs.send(Job::Flush(done)).expect("worker is running");
+        release.send(()).expect("first write is waiting");
+        completion.recv_timeout(WAIT).expect("flush completes");
+
+        assert_eq!(
+            recorded.try_iter().collect::<Vec<_>>(),
+            vec![b"first".to_vec(), b"fifth".to_vec()]
+        );
+    }
+
+    #[test]
     fn failed_native_write_holds_later_writes_until_its_fallback_is_written() {
         let (calls, recorded) = mpsc::channel();
         let native: NativeWrite = Box::new(move |bytes: &[u8]| {
@@ -238,6 +310,7 @@ mod tests {
         let writer = ClipboardWriter::new(false, native, osc52, events_tx);
 
         writer.write(b"busy".to_vec());
+        assert!(writer.flush(WAIT));
         writer.write(b"second".to_vec());
         assert!(writer.flush(WAIT));
         assert_eq!(
@@ -291,7 +364,7 @@ mod tests {
     }
 
     #[test]
-    fn dropping_the_writer_waits_for_a_slow_native_write() {
+    fn flush_waits_for_a_slow_native_write() {
         let landed = Arc::new(AtomicBool::new(false));
         let worker_landed = landed.clone();
         let native: NativeWrite = Box::new(move |_: &[u8]| {
@@ -303,13 +376,13 @@ mod tests {
         let (events_tx, _events) = tokio::sync::mpsc::channel(8);
         let writer = ClipboardWriter::new(false, native, osc52, events_tx);
 
-        writer.write(b"detach".to_vec());
-        drop(writer);
+        writer.write(b"slow".to_vec());
+        assert!(writer.flush(WAIT));
         assert!(landed.load(Ordering::Acquire));
     }
 
     #[test]
-    fn dropping_the_writer_stops_waiting_for_a_hung_native_write() {
+    fn flush_times_out_on_a_hung_native_write() {
         let (release, released) = mpsc::channel::<()>();
         let native: NativeWrite = Box::new(move |_: &[u8]| {
             let _ = released.recv();
@@ -320,11 +393,8 @@ mod tests {
         let writer = ClipboardWriter::new(false, native, osc52, events_tx);
 
         writer.write(b"hung".to_vec());
-        let started = Instant::now();
-        drop(writer);
-        let waited = started.elapsed();
-        assert!(waited >= FLUSH_TIMEOUT);
-        assert!(waited < WAIT);
-        drop(release);
+        assert!(!writer.flush(Duration::from_millis(50)));
+        release.send(()).expect("hung write is waiting");
+        assert!(writer.flush(WAIT));
     }
 }

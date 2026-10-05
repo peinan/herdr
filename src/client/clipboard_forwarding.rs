@@ -20,6 +20,8 @@ mod tests {
     use super::*;
     use clipboard_writer::ClipboardWriter;
 
+    const WAIT: Duration = Duration::from_secs(5);
+
     fn recording_writer() -> (ClipboardWriter, std::sync::mpsc::Receiver<Vec<u8>>) {
         let (calls, recorded) = std::sync::mpsc::channel();
         let (events, _) = tokio::sync::mpsc::channel(1);
@@ -36,8 +38,7 @@ mod tests {
     fn forwarded_clipboard_is_decoded_and_queued() {
         let (writer, recorded) = recording_writer();
         assert!(forward_clipboard(&writer, "dGVzdA=="));
-        // Dropping the writer waits for its queued writes.
-        drop(writer);
+        assert!(writer.flush(WAIT));
         assert_eq!(
             recorded.try_iter().collect::<Vec<_>>(),
             vec![b"test".to_vec()]
@@ -48,7 +49,7 @@ mod tests {
     fn invalid_clipboard_payload_writes_nothing() {
         let (writer, recorded) = recording_writer();
         assert!(!forward_clipboard(&writer, "not base64"));
-        drop(writer);
+        assert!(writer.flush(WAIT));
         assert!(recorded.try_recv().is_err());
     }
 }
