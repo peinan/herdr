@@ -102,6 +102,29 @@ fn windows_virtual_terminal_input_mode_sets_only_vti_bit() {
     assert_eq!(windows_virtual_terminal_input_mode(0x03f0), 0x03f0);
 }
 
+#[test]
+fn windows_win32_input_mode_defaults_to_vt_and_honors_probe() {
+    let _guard = env_lock().lock().unwrap();
+    let _removed =
+        EnvVarsRemovedGuard::new(&["HERDR_WINDOWS_INPUT_PROBE", "SSH_CONNECTION", "SSH_TTY"]);
+
+    assert!(!windows_win32_input_mode_enabled());
+    {
+        let _ssh = EnvVarGuard::set("SSH_CONNECTION", "1 2 3 4");
+        assert!(!windows_win32_input_mode_enabled());
+        let _probe = EnvVarGuard::set("HERDR_WINDOWS_INPUT_PROBE", "WiN32");
+        assert!(windows_win32_input_mode_enabled());
+    }
+    {
+        let _ssh = EnvVarGuard::set("SSH_TTY", "terminal");
+        assert!(!windows_win32_input_mode_enabled());
+        let _probe = EnvVarGuard::set("HERDR_WINDOWS_INPUT_PROBE", "vT");
+        assert!(!windows_win32_input_mode_enabled());
+    }
+    let _probe = EnvVarGuard::set("HERDR_WINDOWS_INPUT_PROBE", "win32");
+    assert!(windows_win32_input_mode_enabled());
+}
+
 struct EnvVarsRemovedGuard {
     previous: Vec<(&'static str, Option<OsString>)>,
 }
@@ -218,10 +241,12 @@ fn clipboard_image_paste_bridge_triggers_on_configured_key_and_empty_paste() {
     ));
 }
 
+#[cfg(unix)]
 struct TempImageFile {
     path: std::path::PathBuf,
 }
 
+#[cfg(unix)]
 impl TempImageFile {
     fn new(extension: &str, bytes: &[u8]) -> Self {
         Self::with_name_fragment("test", extension, bytes)
@@ -241,6 +266,7 @@ impl TempImageFile {
     }
 }
 
+#[cfg(unix)]
 impl Drop for TempImageFile {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.path);
@@ -863,4 +889,16 @@ fn terminal_control_scroll_command_maps_to_attach_scroll() {
     assert_eq!(source, AttachScrollSource::Wheel);
     assert_eq!(direction, AttachScrollDirection::Up);
     assert_eq!(lines, 3);
+}
+
+#[test]
+fn forward_clipboard_uses_local_clipboard_path() {
+    let _guard = env_lock().lock().unwrap();
+    let _ssh = EnvVarGuard::set("SSH_CONNECTION", "1 2 3 4");
+    // Under SSH the writer prefers OSC 52, so copies go to the local terminal
+    // inline and never reach a native clipboard tool or the worker thread.
+    let (events, _events_rx) = tokio::sync::mpsc::channel(1);
+    let clipboard = clipboard_writer::ClipboardWriter::spawn(events);
+    assert!(forward_clipboard(&clipboard, "dGVzdA=="));
+    assert!(!forward_clipboard(&clipboard, "not base64"));
 }

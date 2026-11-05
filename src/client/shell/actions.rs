@@ -54,7 +54,7 @@ impl ClientShellState {
                 }
                 if action == crate::input::KeybindAction::Help {
                     self.overlay = Some(ClientShellOverlay::Help(ClientHelpOverlay {
-                        query: String::new(),
+                        query: TextEditor::default(),
                         search_focused: false,
                         scroll: 0,
                     }));
@@ -196,9 +196,8 @@ impl ClientShellState {
                         .then(|| candidate.command_id.clone())
                 });
                 let Some(command_id) = command_id else {
-                    self.endpoint_error = Some(
-                        "custom command is not available on this endpoint; reload configuration"
-                            .to_owned(),
+                    self.set_endpoint_error(
+                        "custom command is not available on this endpoint; reload configuration",
                     );
                     outcome.repaint = true;
                     return;
@@ -265,7 +264,7 @@ impl ClientShellState {
     }
 
     /// Builds a selection read for a pane or for the popup terminal.
-    fn selection_read_method(
+    pub(super) fn selection_read_method(
         &self,
         id: String,
         anchor: crate::api::schema::PaneTextPoint,
@@ -314,43 +313,6 @@ impl ClientShellState {
             PendingEndpointKind::SelectionCopy,
             outcome,
         );
-    }
-
-    pub(super) fn request_word_selection(
-        &mut self,
-        hit: &PaneHit,
-        viewport_row: u16,
-        col: u16,
-        outcome: &mut ClientShellInput,
-    ) {
-        let absolute_row = crate::selection::absolute_row_for_viewport(viewport_row, hit.scroll);
-        let content_revision = self.target_content_revision(&hit.pane_id);
-        self.word_selection_generation = self.word_selection_generation.saturating_add(1);
-        let generation = self.word_selection_generation;
-        self.pending_word_selection = Some(generation);
-        if !self.push_endpoint_method_with_kind(
-            self.selection_read_method(
-                hit.pane_id.clone(),
-                crate::api::schema::PaneTextPoint {
-                    row: absolute_row,
-                    col: 0,
-                },
-                crate::api::schema::PaneTextPoint {
-                    row: absolute_row,
-                    col: hit.inner_rect.width.saturating_sub(1),
-                },
-                content_revision,
-            ),
-            PendingEndpointKind::WordSelection {
-                pane_id: hit.pane_id.clone(),
-                absolute_row,
-                col,
-                generation,
-            },
-            outcome,
-        ) {
-            self.pending_word_selection = None;
-        }
     }
 
     pub(super) fn push_endpoint_method(
@@ -723,6 +685,9 @@ impl ClientShellState {
         {
             return (false, Vec::new());
         }
+        if let PendingEndpointKind::PaneLinkResolve { target } = pending.kind {
+            return self.complete_link_hover(target, result);
+        }
         if result.is_ok() {
             let timeout_key = ClientEndpointNoticeKey {
                 boot_id: boot_id.to_owned(),
@@ -795,6 +760,7 @@ impl ClientShellState {
                     }
                 };
             }
+            PendingEndpointKind::PaneLinkResolve { .. } => unreachable!("handled above"),
             PendingEndpointKind::ProductAnnouncementDismiss { version, id } => {
                 return match result {
                     Ok(_) => (false, Vec::new()),
@@ -874,8 +840,7 @@ impl ClientShellState {
                         (false, Vec::new())
                     }
                     Ok(_) => {
-                        self.endpoint_error =
-                            Some("endpoint returned an unexpected selection result".to_owned());
+                        self.set_endpoint_error("endpoint returned an unexpected selection result");
                         (true, Vec::new())
                     }
                     Err(_) => (true, Vec::new()),
@@ -884,61 +849,9 @@ impl ClientShellState {
             PendingEndpointKind::WordSelection {
                 pane_id,
                 absolute_row,
-                col,
                 generation,
             } => {
-                // The popup terminal is never in `snapshot.panes`, so it needs its
-                // own liveness test. Matching the current popup id also keeps a
-                // reply for a popup that has since been replaced from landing.
-                let target_is_live = self.is_popup_target(&pane_id)
-                    || self.snapshot.as_deref().is_some_and(|snapshot| {
-                        snapshot.panes.iter().any(|pane| pane.pane_id == pane_id)
-                    });
-                if self.pending_word_selection != Some(generation) || !target_is_live {
-                    return (false, Vec::new());
-                }
-                self.pending_word_selection = None;
-                let row_text = match result {
-                    Ok(crate::api::schema::ResponseResult::PaneSelection {
-                        pane_id: returned_pane_id,
-                        text,
-                    }) if returned_pane_id == pane_id => text,
-                    Ok(crate::api::schema::ResponseResult::PaneSelection { .. }) => {
-                        return (false, Vec::new())
-                    }
-                    Ok(_) => {
-                        self.endpoint_error = Some(
-                            "endpoint returned an unexpected word-selection result".to_owned(),
-                        );
-                        return (true, Vec::new());
-                    }
-                    Err(_) => return (true, Vec::new()),
-                };
-                let Some((start_col, end_col)) =
-                    crate::app::actions::word_bounds_at_column(&row_text, col)
-                else {
-                    self.selection = None;
-                    return (true, Vec::new());
-                };
-                let mut selection = crate::selection::Selection::absolute_range(
-                    pane_id,
-                    (absolute_row, start_col),
-                    (absolute_row, end_col),
-                );
-                if !selection.finish() {
-                    return (false, Vec::new());
-                }
-                self.selection = Some(selection);
-                self.selection_autoscroll = None;
-                self.selection_autoscroll_deadline = None;
-                if !self.config.copy_on_select {
-                    return (true, Vec::new());
-                }
-                self.selection_highlight_clear_deadline =
-                    Some(std::time::Instant::now() + std::time::Duration::from_millis(500));
-                let mut outcome = ClientShellInput::default();
-                self.request_selection_copy(&mut outcome, false);
-                return (true, outcome.actions);
+                return self.complete_word_selection_row(pane_id, absolute_row, generation, result);
             }
             PendingEndpointKind::PaneLinkActivate {
                 pane_id,
@@ -985,8 +898,7 @@ impl ClientShellState {
                         (false, replay_action(replay))
                     }
                     Ok(_) => {
-                        self.endpoint_error =
-                            Some("endpoint returned an unexpected link result".to_owned());
+                        self.set_endpoint_error("endpoint returned an unexpected link result");
                         (true, replay_action(replay))
                     }
                     Err(error)
@@ -1024,8 +936,9 @@ impl ClientShellState {
                     ),
                     Ok(crate::api::schema::ResponseResult::PaneCopyMotion { .. }) => (false, false),
                     Ok(_) => {
-                        self.endpoint_error =
-                            Some("endpoint returned an unexpected copy-motion result".to_owned());
+                        self.set_endpoint_error(
+                            "endpoint returned an unexpected copy-motion result",
+                        );
                         (true, false)
                     }
                     Err(_) => (true, false),
@@ -1079,8 +992,9 @@ impl ClientShellState {
                     }
                     Ok(_) => {
                         self.cancel_deferred_copy_after_search(generation);
-                        self.endpoint_error =
-                            Some("endpoint returned an unexpected copy-search result".to_owned());
+                        self.set_endpoint_error(
+                            "endpoint returned an unexpected copy-search result",
+                        );
                         (true, false)
                     }
                     Err(_) => {
@@ -1095,8 +1009,9 @@ impl ClientShellState {
                 let repaint = match result {
                     Ok(crate::api::schema::ResponseResult::ConfigReload { .. }) => false,
                     Ok(_) => {
-                        self.endpoint_error =
-                            Some("endpoint returned an unexpected config reload result".to_owned());
+                        self.set_endpoint_error(
+                            "endpoint returned an unexpected config reload result",
+                        );
                         true
                     }
                     Err(_) => true,

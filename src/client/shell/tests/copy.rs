@@ -1,10 +1,10 @@
 use super::*;
 
 #[test]
-fn pasted_help_and_copy_queries_strip_control_characters() {
+fn pasted_help_and_copy_queries_normalize_single_line_text() {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
     state.overlay = Some(ClientShellOverlay::Help(ClientHelpOverlay {
-        query: String::new(),
+        query: TextEditor::default(),
         search_focused: true,
         scroll: 0,
     }));
@@ -13,10 +13,11 @@ fn pasted_help_and_copy_queries_strip_control_characters() {
     assert!(matches!(
         state.overlay,
         Some(ClientShellOverlay::Help(ClientHelpOverlay { ref query, .. }))
-            if query == "workspace"
+            if query.as_str() == "work space"
     ));
 
     state.overlay = None;
+    state.mode = ClientShellMode::Copy;
     state.copy_mode = Some(ClientCopyModeState {
         pane_id: "pane_1".into(),
         popup: false,
@@ -30,7 +31,7 @@ fn pasted_help_and_copy_queries_strip_control_characters() {
         selection: None,
         search_prompt: Some(ClientCopySearchPrompt {
             direction: crate::api::schema::PaneCopySearchDirection::Forward,
-            query: String::new(),
+            query: TextEditor::default(),
         }),
         search_query: String::new(),
         search_direction: None,
@@ -49,8 +50,86 @@ fn pasted_help_and_copy_queries_strip_control_characters() {
             .as_ref()
             .and_then(|copy_mode| copy_mode.search_prompt.as_ref())
             .map(|prompt| prompt.query.as_str()),
-        Some("needle")
+        Some("needle ")
     );
+}
+
+#[test]
+fn client_selection_uses_host_background_and_repaints_when_it_changes() {
+    use crate::terminal_theme::{DefaultColorKind, HostAppearance, RgbColor};
+    use ratatui::style::Color;
+
+    for explicit_appearance in [false, true] {
+        let mut config = ClientShellConfig::from_config(&Config::default());
+        config.palette = Palette::terminal();
+        config.theme_runtime.auto_switch = false;
+        let mut state = ClientShellState::new(config);
+        state.set_snapshot(Box::new(snapshot()));
+        state.set_pane_surface(surface());
+        state.compose(106, 20).expect("composed frame");
+        let pane = state.hits.panes[0].clone();
+        for (kind, column) in [
+            (MouseEventKind::Down(MouseButton::Left), pane.inner_rect.x),
+            (
+                MouseEventKind::Drag(MouseButton::Left),
+                pane.inner_rect.x + 2,
+            ),
+        ] {
+            state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+                kind,
+                column,
+                row: pane.inner_rect.y,
+                modifiers: KeyModifiers::empty(),
+            })]);
+        }
+        let cell_index = usize::from(pane.inner_rect.y) * 106 + usize::from(pane.inner_rect.x);
+        let fallback = state.compose(106, 20).expect("fallback frame");
+        assert_eq!(
+            fallback.cells[cell_index].bg,
+            crate::protocol::color_to_u32(Color::DarkGray)
+        );
+        if explicit_appearance {
+            state.handle_raw_events(vec![RawInputEvent::HostColorSchemeChanged(
+                HostAppearance::Light,
+            )]);
+        }
+        for (background, selected_bg, selected_fg) in [
+            ((237, 237, 234), (171, 171, 168), (0, 0, 0)),
+            ((26, 27, 38), (90, 91, 99), (255, 255, 255)),
+        ] {
+            let (r, g, b) = background;
+            let outcome = state.handle_raw_events(vec![RawInputEvent::HostDefaultColor {
+                kind: DefaultColorKind::Background,
+                color: RgbColor { r, g, b },
+            }]);
+            assert!(outcome
+                .requests
+                .iter()
+                .any(|request| matches!(request, ClientMessage::ClientShellHostTheme { .. })));
+            let frame = state.compose(106, 20).expect("host-colored selection");
+            let cell = &frame.cells[cell_index];
+            assert_eq!(
+                cell.bg,
+                crate::protocol::color_to_u32(Color::Rgb(
+                    selected_bg.0,
+                    selected_bg.1,
+                    selected_bg.2
+                ))
+            );
+            assert_eq!(
+                cell.fg,
+                crate::protocol::color_to_u32(Color::Rgb(
+                    selected_fg.0,
+                    selected_fg.1,
+                    selected_fg.2
+                ))
+            );
+            assert!(
+                outcome.repaint,
+                "host background changes must repaint selection"
+            );
+        }
+    }
 }
 
 #[test]
@@ -86,7 +165,7 @@ fn client_mouse_selection_highlights_and_copies_through_endpoint_extraction() {
         row: pane.inner_rect.y,
         modifiers: KeyModifiers::empty(),
     })]);
-    assert!(drag.repaint);
+    assert!(drag.repaint || state.selection_repaint_deadline.is_some());
     assert!(state
         .selection
         .as_ref()
@@ -2020,7 +2099,7 @@ fn a_new_popup_selection_invalidates_a_pending_word_selection() {
         panic!("a popup word selection should reach the endpoint");
     };
     let stale_id = request.id.clone();
-    assert!(state.pending_word_selection.is_some());
+    assert!(state.word_selection_gesture.is_some());
 
     // The user gives up on the double click and drags a new selection instead.
     // With copy-on-select off it stays retained on the screen.
@@ -2086,6 +2165,152 @@ fn a_popup_mouse_selection_survives_an_agent_status_snapshot() {
         Some(dragged),
         "an unrelated snapshot must not wipe the popup's mouse selection"
     );
+}
+
+/// Sends one mouse event at a cell of the composed popup's inner area.
+fn popup_mouse(
+    state: &mut ClientShellState,
+    kind: MouseEventKind,
+    viewport_row: u16,
+    col: u16,
+) -> ClientShellInput {
+    let popup = state.hits.popup.clone().expect("popup hit");
+    state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+        kind,
+        column: popup.inner_rect.x + col,
+        row: popup.inner_rect.y + viewport_row,
+        modifiers: KeyModifiers::empty(),
+    })])
+}
+
+/// The snapshot cleanup also cancels a gesture still in progress, and the popup
+/// terminal is never a snapshot pane nor the focused one. A snapshot landing
+/// while the button is held must leave the popup drag running.
+#[test]
+fn a_popup_drag_survives_a_snapshot_arriving_mid_gesture() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.apply_popup_surface_metrics(&popup_surface_metrics(1, 0, 0, 3));
+    state.set_pane_surface(surface_with_selectable_popup());
+    state.compose(106, 20).expect("popup frame");
+
+    popup_mouse(&mut state, MouseEventKind::Down(MouseButton::Left), 0, 0);
+    popup_mouse(&mut state, MouseEventKind::Drag(MouseButton::Left), 0, 2);
+    state.set_snapshot(Box::new(snapshot()));
+    assert!(
+        state
+            .selection
+            .as_ref()
+            .is_some_and(crate::selection::Selection::is_in_progress),
+        "a snapshot must not cancel the popup drag under the held button"
+    );
+
+    popup_mouse(&mut state, MouseEventKind::Drag(MouseButton::Left), 0, 4);
+    let release = popup_mouse(&mut state, MouseEventKind::Up(MouseButton::Left), 0, 4);
+    assert!(matches!(
+        &release.actions[..],
+        [ClientShellAction::Endpoint { request, .. }]
+            if matches!(
+                &request.method,
+                crate::api::schema::Method::PopupSelectionRead(params)
+                    if params.terminal_id == "terminal-popup"
+                        && params.anchor == crate::api::schema::PaneTextPoint { row: 0, col: 0 }
+                        && params.cursor == crate::api::schema::PaneTextPoint { row: 0, col: 4 }
+            )
+    ));
+}
+
+/// The same holds for a held double click, both while its anchor row is in
+/// flight and once the word is on screen. Its row reads go through the popup
+/// method, and the release copies the word range from the popup terminal.
+#[test]
+fn a_popup_word_selection_survives_snapshots_arriving_mid_gesture() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.apply_popup_surface_metrics(&popup_surface_metrics(1, 0, 0, 3));
+    state.set_pane_surface(surface_with_selectable_popup());
+    state.compose(106, 20).expect("popup frame");
+
+    popup_mouse(&mut state, MouseEventKind::Down(MouseButton::Left), 0, 6);
+    popup_mouse(&mut state, MouseEventKind::Up(MouseButton::Left), 0, 6);
+    let second = popup_mouse(&mut state, MouseEventKind::Down(MouseButton::Left), 0, 6);
+    let anchor_read = second
+        .actions
+        .iter()
+        .find_map(|action| match action {
+            ClientShellAction::Endpoint { request, .. }
+                if matches!(
+                    &request.method,
+                    crate::api::schema::Method::PopupSelectionRead(params)
+                        if params.terminal_id == "terminal-popup" && params.anchor.row == 0
+                ) =>
+            {
+                Some(request.id.clone())
+            }
+            _ => None,
+        })
+        .expect("the held double click should read its row from the popup");
+
+    state.set_snapshot(Box::new(snapshot()));
+    assert!(
+        state.word_selection_gesture.is_some(),
+        "a snapshot must not cancel the gesture while its row is in flight"
+    );
+    let (repaint, actions) = state.handle_endpoint_result(
+        "boot-1",
+        &anchor_read,
+        Ok(crate::api::schema::ResponseResult::PopupSelection {
+            terminal_id: "terminal-popup".into(),
+            text: "red green".into(),
+        }),
+    );
+    assert!(
+        repaint && actions.is_empty(),
+        "holding the press must not copy"
+    );
+    assert_eq!(
+        state
+            .selection
+            .as_ref()
+            .map(crate::selection::Selection::ordered_cells),
+        Some(((0, 4), (0, 8)))
+    );
+
+    state.set_snapshot(Box::new(snapshot()));
+    popup_mouse(&mut state, MouseEventKind::Drag(MouseButton::Left), 0, 1);
+    assert_eq!(
+        state
+            .selection
+            .as_ref()
+            .map(crate::selection::Selection::ordered_cells),
+        Some(((0, 0), (0, 8))),
+        "the drag should extend the word selection that survived the snapshot"
+    );
+
+    let release = popup_mouse(&mut state, MouseEventKind::Up(MouseButton::Left), 0, 1);
+    let [ClientShellAction::Endpoint { request, .. }] = &release.actions[..] else {
+        panic!("releasing the word selection should request its copy");
+    };
+    let copy_id = request.id.clone();
+    assert!(matches!(
+        &request.method,
+        crate::api::schema::Method::PopupSelectionRead(params)
+            if params.terminal_id == "terminal-popup"
+                && params.anchor == crate::api::schema::PaneTextPoint { row: 0, col: 0 }
+                && params.cursor == crate::api::schema::PaneTextPoint { row: 0, col: 8 }
+    ));
+    let (_, copied) = state.handle_endpoint_result(
+        "boot-1",
+        &copy_id,
+        Ok(crate::api::schema::ResponseResult::PopupSelection {
+            terminal_id: "terminal-popup".into(),
+            text: "red green".into(),
+        }),
+    );
+    assert!(matches!(
+        &copied[..],
+        [ClientShellAction::ClipboardWrite(bytes)] if bytes == b"red green"
+    ));
 }
 
 /// Typing into the popup ends a retained selection the way it does over a pane.
@@ -2437,6 +2662,38 @@ fn popup_state_in_copy_mode() -> ClientShellState {
     state
 }
 
+/// The popup's copy-search prompt is a shell text field, so a pasted query has
+/// to land in it even though an open popup otherwise owns typed text.
+#[test]
+fn the_popup_copy_search_prompt_takes_pasted_text() {
+    for shortcut in [false, true] {
+        let mut state = popup_state_in_copy_mode();
+        state.handle_input_bytes(b"/");
+        let outcome = if shortcut {
+            let mut outcome = ClientShellInput::default();
+            assert!(state.handle_modal_paste_shortcut_with(
+                &crate::input::TerminalKey::new(KeyCode::Char('v'), KeyModifiers::CONTROL),
+                &mut outcome,
+                || Some("needle".into()),
+            ));
+            outcome
+        } else {
+            state.handle_raw_events(vec![RawInputEvent::Paste("needle".into())])
+        };
+        assert!(outcome.repaint, "shortcut {shortcut}");
+        assert!(outcome.actions.is_empty(), "shortcut {shortcut}");
+        assert_eq!(
+            state
+                .copy_mode
+                .as_ref()
+                .and_then(|copy_mode| copy_mode.search_prompt.as_ref())
+                .map(|prompt| prompt.query.as_str()),
+            Some("needle"),
+            "shortcut {shortcut}"
+        );
+    }
+}
+
 #[test]
 fn popup_keyboard_selections_survive_output_and_copy_live_ranges() {
     // Character and linewise selections have distinct anchor/range projections.
@@ -2644,9 +2901,9 @@ fn popup_keyboard_selection_on_the_alternate_screen_survives_output() {
     );
 }
 
-/// A popup word selection arms a deadline that clears its highlight. Starting a
-/// new drag before it expires has to disarm it, or the tick deletes the
-/// selection while the button is still down and the release copies nothing.
+/// A released popup word selection arms a deadline that clears its highlight.
+/// Starting a new drag before it expires has to disarm it, or the tick deletes
+/// the selection while the button is still down and the release copies nothing.
 #[test]
 fn a_new_popup_drag_disarms_the_previous_highlight_deadline() {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
@@ -2671,6 +2928,14 @@ fn a_new_popup_drag_disarms_the_previous_highlight_deadline() {
             text: "keep-me".into(),
         }),
     );
+    // The held second press only shows the word; its release copies it and
+    // arms the deadline.
+    state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column: popup.inner_rect.x + 1,
+        row: popup.inner_rect.y,
+        modifiers: KeyModifiers::empty(),
+    })]);
     let armed = state
         .selection_highlight_clear_deadline
         .expect("the word selection should arm the highlight deadline");

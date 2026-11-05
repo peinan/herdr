@@ -259,6 +259,43 @@ impl crate::client::endpoint::EndpointTransport for TestTransport {
 }
 
 #[test]
+fn local_selection_is_scheduled_ahead_of_a_full_event_queue() {
+    use crate::client::{
+        endpoint::{EndpointNegotiation, EndpointRegistry},
+        endpoint_commands::EndpointCommands,
+        ClientLoopEvent,
+    };
+    let mut endpoints = EndpointRegistry::new(
+        TestTransport { fail: false },
+        1,
+        EndpointNegotiation::default(),
+    );
+    let mut commands = EndpointCommands::default();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+    tx.try_send(ClientLoopEvent::Timer).unwrap();
+    let mut scheduled = None;
+    crate::client::shell_runtime::dispatch_client_shell_actions(
+        vec![ClientShellAction::ActivateEndpoint {
+            endpoint_id: ClientEndpointId::Local,
+            target: Some(ClientEndpointFocusTarget::Workspace("ws_1".into())),
+        }],
+        &mut commands,
+        &mut endpoints,
+        None,
+        &mut Vec::new(),
+        &crate::client::clipboard_writer::ClipboardWriter::inert(),
+        &mut scheduled,
+    )
+    .unwrap();
+    let next = scheduled.take().or_else(|| rx.try_recv().ok());
+    assert!(matches!(next, Some(ClientLoopEvent::ActivateEndpoint {
+        endpoint_id: ClientEndpointId::Local,
+        target: Some(ClientEndpointFocusTarget::Workspace(id)), ..
+    }) if id == "ws_1"));
+    assert!(matches!(rx.try_recv(), Ok(ClientLoopEvent::Timer)));
+}
+
+#[test]
 fn dispatcher_cancels_worktree_requests_on_frozen_surface_or_failed_send() {
     use crate::client::endpoint::{EndpointNegotiation, EndpointRegistry};
     use crate::client::endpoint_commands::EndpointCommands;
@@ -272,7 +309,7 @@ fn dispatcher_cancels_worktree_requests_on_frozen_surface_or_failed_send() {
         );
         endpoints.set_surface_active(&ClientEndpointId::Local, fail_send);
         let mut commands = EndpointCommands::default();
-        let (tx, _rx) = tokio::sync::mpsc::channel(16);
+        let mut scheduled = None;
         let (replay, repaint) = crate::client::shell_runtime::dispatch_client_shell_actions(
             actions,
             &mut commands,
@@ -280,7 +317,7 @@ fn dispatcher_cancels_worktree_requests_on_frozen_surface_or_failed_send() {
             Some(&mut state),
             &mut Vec::new(),
             &crate::client::clipboard_writer::ClipboardWriter::inert(),
-            &tx,
+            &mut scheduled,
         )
         .unwrap();
         assert!(repaint);

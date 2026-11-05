@@ -14,9 +14,10 @@ pub(super) fn is_modal_paste_shortcut_for_platform(
     key: &crate::input::TerminalKey,
     macos: bool,
 ) -> bool {
-    matches!(key.code, KeyCode::Char('v' | 'V'))
-        && (key.modifiers.contains(KeyModifiers::CONTROL)
-            || macos && key.modifiers.contains(KeyModifiers::SUPER))
+    key.generated_text.as_deref().is_none_or(str::is_empty)
+        && matches!(key.code, KeyCode::Char('v' | 'V'))
+        && (key.modifiers.difference(KeyModifiers::SHIFT) == KeyModifiers::CONTROL
+            || macos && key.modifiers.difference(KeyModifiers::SHIFT) == KeyModifiers::SUPER)
 }
 
 fn is_modal_paste_shortcut(key: &crate::input::TerminalKey) -> bool {
@@ -84,7 +85,7 @@ impl ClientShellState {
         )
     }
 
-    #[cfg(any(unix, test))]
+    #[cfg(test)]
     pub(crate) fn handle_input_bytes(&mut self, data: &[u8]) -> ClientShellInput {
         self.handle_raw_events(crate::raw_input::parse_raw_input_bytes_sync(data))
     }
@@ -134,7 +135,7 @@ impl ClientShellState {
             outcome.repaint = true;
             return true;
         }
-        self.pending_word_selection = None;
+        self.word_selection_gesture = None;
         if self.copy_or_terminal_mode() != ClientShellMode::Copy && self.selection.take().is_some()
         {
             self.stop_selection_autoscroll();
@@ -155,9 +156,10 @@ impl ClientShellState {
         outcome
     }
 
-    pub(super) fn handle_raw_events(&mut self, events: Vec<RawInputEvent>) -> ClientShellInput {
+    pub(crate) fn handle_raw_events(&mut self, events: Vec<RawInputEvent>) -> ClientShellInput {
         let mut outcome = ClientShellInput::default();
         if !events.is_empty() && self.endpoint_error.take().is_some() {
+            self.endpoint_error_deadline = None;
             outcome.repaint = true;
         }
         for event in events {
@@ -189,9 +191,7 @@ impl ClientShellState {
                     } else if self.overlay.is_some() {
                         // Some other modal is up and does not accept text.
                     } else if let Some(target) = self.popup_input_target() {
-                        // The popup owns committed text only in the shell's base context;
-                        // a shell sub-mode is interpreting the keyboard itself.
-                        if self.mode == ClientShellMode::Terminal {
+                        if self.popup_owns_committed_text() {
                             super::push_target_event(
                                 target,
                                 ClientPaneInputEvent::TextCommit(text),
@@ -227,9 +227,7 @@ impl ClientShellState {
                     } else if self.overlay.is_some() {
                         // Some other modal is up and does not accept text.
                     } else if let Some(target) = self.popup_input_target() {
-                        // The popup owns a paste only in the shell's base context;
-                        // a shell sub-mode is interpreting the keyboard itself.
-                        if self.mode == ClientShellMode::Terminal {
+                        if self.popup_owns_committed_text() {
                             super::push_target_event(
                                 target,
                                 ClientPaneInputEvent::Paste(text),
@@ -256,6 +254,7 @@ impl ClientShellState {
                         .push(ClientMessage::ClientShellFocus { focused: true });
                 }
                 RawInputEvent::OuterFocusLost => {
+                    outcome.repaint |= self.clear_link_hover();
                     self.outer_focused = Some(false);
                     self.release_input_leases(&mut outcome);
                     outcome
@@ -277,15 +276,21 @@ impl ClientShellState {
                 RawInputEvent::HostDefaultColor {
                     kind: crate::terminal_theme::DefaultColorKind::Background,
                     color,
-                } if !self.host_appearance_explicit => {
-                    let appearance = color.inferred_appearance();
-                    self.host_appearance = Some(appearance);
-                    if self.config.theme_runtime.auto_switch {
-                        self.config.palette = crate::app::client_palette_for_appearance(
-                            &self.config.theme_runtime,
-                            appearance,
-                        );
+                } => {
+                    if self.host_background != Some(color) {
+                        self.host_background = Some(color);
                         outcome.repaint = true;
+                    }
+                    if !self.host_appearance_explicit {
+                        let appearance = color.inferred_appearance();
+                        self.host_appearance = Some(appearance);
+                        if self.config.theme_runtime.auto_switch {
+                            self.config.palette = crate::app::client_palette_for_appearance(
+                                &self.config.theme_runtime,
+                                appearance,
+                            );
+                            outcome.repaint = true;
+                        }
                     }
                 }
                 RawInputEvent::HostDefaultColor { .. }
@@ -304,6 +309,7 @@ impl ClientShellState {
         key: crate::input::TerminalKey,
         outcome: &mut ClientShellInput,
     ) {
+        outcome.repaint |= self.clear_link_hover();
         if self.copy_operation_in_flight {
             self.copy_input_queue.push_back(key);
             return;
@@ -408,12 +414,13 @@ impl ClientShellState {
             .copy_mode
             .as_ref()
             .is_some_and(|copy_mode| copy_mode.search_prompt.is_some());
+        let popup_copy_search_prompt = copy_search_prompt && self.copy_mode_targets_popup();
         if self.popup_pending
             // A modal opened over a popup owns the keyboard, so the popup only
-            // suppresses the shortcut when no modal is up. The copy-search prompt
-            // is a shell text field too, including over a popup, where no overlay
-            // is open to mark it as modal.
-            || (!copy_search_prompt
+            // suppresses the shortcut when no modal is up. The popup's own
+            // copy-search prompt is a shell text field too, where no overlay is
+            // open to mark it as modal; a pane's prompt yields to the popup.
+            || (!popup_copy_search_prompt
                 && self.overlay.is_none()
                 && self.popup_input_target().is_some())
             || (self.overlay.is_none()
@@ -422,8 +429,8 @@ impl ClientShellState {
         {
             return false;
         }
-        if copy_search_prompt {
-            return self.overlay.is_none();
+        if self.mode == ClientShellMode::Copy && self.overlay.is_none() && copy_search_prompt {
+            return true;
         }
         matches!(
             self.overlay.as_ref(),
@@ -503,7 +510,7 @@ impl ClientShellState {
                 // does over a pane. Without this the stale range stays visible and
                 // the copy shortcut above would later copy it.
                 if !matches!(key.code, KeyCode::Modifier(_)) {
-                    self.pending_word_selection = None;
+                    self.word_selection_gesture = None;
                     if self.mode != ClientShellMode::Copy
                         && self.copy_or_terminal_mode() != ClientShellMode::Copy
                         && self.selection.take().is_some()
@@ -522,7 +529,7 @@ impl ClientShellState {
         if matches!(key.code, KeyCode::Modifier(_)) {
             return None;
         }
-        self.pending_word_selection = None;
+        self.word_selection_gesture = None;
         if self.mode != ClientShellMode::Copy
             && self.copy_or_terminal_mode() != ClientShellMode::Copy
             && !self.config.copy_on_select
@@ -619,7 +626,12 @@ impl ClientShellState {
                 None
             }
             ClientShellMode::Copy => {
-                if crate::config::terminal_key_matches_combo(key, self.config.keybinds.prefix) {
+                if self
+                    .copy_mode
+                    .as_ref()
+                    .is_none_or(|copy_mode| copy_mode.search_prompt.is_none())
+                    && crate::config::terminal_key_matches_combo(key, self.config.keybinds.prefix)
+                {
                     self.mode = ClientShellMode::Prefix;
                     self.prefix_repeat_deadline = None;
                     outcome.repaint = true;
@@ -879,6 +891,7 @@ impl ClientShellState {
             KeybindMatch::Action(KeybindAction::FocusAgent(index)) => {
                 super::aggregate_navigation::online_agent_targets(
                     &self.endpoints,
+                    &self.active_endpoint_id,
                     self.config.agent_panel_sort,
                 )
                 .get(*index)
@@ -1018,6 +1031,14 @@ impl ClientShellState {
     fn key_input_target(&self) -> Option<ClientInputTarget> {
         self.popup_input_target()
             .or_else(|| self.focused_pane_id().map(ClientInputTarget::Pane))
+    }
+
+    /// Whether committed text and pastes go to the open popup. A shell sub-mode
+    /// armed over the popup interprets the keyboard itself, so the popup owns
+    /// them in the base context, and over copy mode left on a pane.
+    fn popup_owns_committed_text(&self) -> bool {
+        self.mode == ClientShellMode::Terminal
+            || (self.mode == ClientShellMode::Copy && !self.copy_mode_targets_popup())
     }
 
     /// Whether the shell keeps this key instead of forwarding it to the popup

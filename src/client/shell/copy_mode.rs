@@ -22,6 +22,14 @@ impl ClientShellState {
         self.popup_terminal_id.as_deref() == Some(id)
     }
 
+    /// True when copy mode acts on the live popup terminal rather than on a
+    /// pane left behind it.
+    pub(super) fn copy_mode_targets_popup(&self) -> bool {
+        self.copy_mode
+            .as_ref()
+            .is_some_and(|copy_mode| self.is_popup_target(&copy_mode.pane_id))
+    }
+
     /// Content revision for a pane, or for the popup the revision that rides
     /// beside the surface.
     pub(super) fn target_content_revision(&self, id: &str) -> Option<u64> {
@@ -349,38 +357,18 @@ impl ClientShellState {
                 }
             }
             KeyCode::Enter => {
-                submit = Some((prompt.query.clone(), prompt.direction));
+                submit = Some((prompt.query.to_string(), prompt.direction));
                 if let Some(copy_mode) = self.copy_mode.as_mut() {
                     copy_mode.search_prompt = None;
                 }
             }
-            KeyCode::Backspace => {
-                if let Some(prompt) = self
-                    .copy_mode
-                    .as_mut()
-                    .and_then(|copy_mode| copy_mode.search_prompt.as_mut())
-                {
-                    prompt.query.pop();
-                }
-            }
-            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                if let Some(prompt) = self
-                    .copy_mode
-                    .as_mut()
-                    .and_then(|copy_mode| copy_mode.search_prompt.as_mut())
-                {
-                    prompt.query.clear();
-                }
-            }
             _ => {
-                if let Some(ch) = crate::copy_mode::copy_mode_command_char(key.clone()) {
-                    if let Some(prompt) = self
-                        .copy_mode
-                        .as_mut()
-                        .and_then(|copy_mode| copy_mode.search_prompt.as_mut())
-                    {
-                        prompt.query.push(ch);
-                    }
+                if let Some(prompt) = self
+                    .copy_mode
+                    .as_mut()
+                    .and_then(|copy_mode| copy_mode.search_prompt.as_mut())
+                {
+                    prompt.query.handle_key(key);
                 }
             }
         }
@@ -392,6 +380,16 @@ impl ClientShellState {
     }
 
     pub(super) fn insert_copy_search_text(&mut self, text: &str) -> bool {
+        // An open popup owns typed and pasted text, except when copy mode — and
+        // with it the search prompt — targets the popup itself.
+        let popup_owns_text = self.popup_terminal_id.is_some() && !self.copy_mode_targets_popup();
+        if self.mode != ClientShellMode::Copy
+            || self.overlay.is_some()
+            || popup_owns_text
+            || self.popup_pending
+        {
+            return false;
+        }
         let Some(prompt) = self
             .copy_mode
             .as_mut()
@@ -399,9 +397,7 @@ impl ClientShellState {
         else {
             return false;
         };
-        prompt
-            .query
-            .extend(text.chars().filter(|character| !character.is_control()));
+        prompt.query.insert(text);
         true
     }
 
@@ -411,7 +407,7 @@ impl ClientShellState {
         };
         copy_mode.search_prompt = Some(ClientCopySearchPrompt {
             direction,
-            query: String::new(),
+            query: TextEditor::default(),
         });
     }
 
