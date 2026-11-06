@@ -68,5 +68,5 @@ ZIG=~/.local/share/mise/installs/zig/0.16.0/zig mise exec -- just check
   `env -u HERDR_ENV ... ZIG="$HOME/.local/share/mise/installs/zig/0.16.0/zig" mise exec -- just check`
 - **この Mac（macOS 26.6）では `just check` は素の upstream でも緑にならない。** 毎回落ちるのは macOS の ACL を見る単体テスト 1 件で、
   ほかに handoff / SSH / プラグイン系のフレークがある（一覧は FORK_WORKFLOW §0。2026-11-06 に v0.9.5 で再測定）。
-  さらに `just check` に含まれる `windows-lint` は xwin と Microsoft の SDK が無いと通らない。`just check` は fail-fast なので、
+  さらに `just check` に含まれる `windows-lint` は xwin と Microsoft の SDK が無いと通らない（Windows 限定コードの clippy は SDK 無しでも回せる。手順は FORK_WORKFLOW §0）。`just check` は fail-fast なので、
   `cargo nextest run --no-fail-fast` で全体を取り、その一覧と照合して判断する。**失敗数だけを見て自分の変更のせいだと判断しない。**

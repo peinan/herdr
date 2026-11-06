@@ -81,7 +81,16 @@ nextest の `LEAK` 表示（`persist::writer::tests::snapshot_history_is_bounded
 `just check` は `ci`（`lint` と `ci-tests`）、`windows-lint`、`docs-contract-test` を順に走らせ、最初の失敗で止まる。
 `windows-lint` は xwin と Microsoft の SDK（`just setup-windows-cross`、ライセンス同意が要る）が無いと通らない。
 そのためローカルでは `just lint`、`cargo nextest run --no-fail-fast`、`just maintenance-test`、`just ui-hot-path-architecture-test`、
-`just integration-assets-test`、`just docs-contract-test` を個別に回し、Windows は CI に任せる。
+`just integration-assets-test`、`just docs-contract-test` を個別に回す。
+Windows 限定のコード（`#[cfg(windows)]` のテストなど）は Unix のビルドでは一切コンパイルされないので、SDK が無くても次の clippy は必ずかける。
+libghostty-vt の zig ビルドを空振りさせて、CI の Windows ジョブと同じ clippy を回す（リンクしないので check と clippy に限る。初回は `rustup target add x86_64-pc-windows-msvc`）:
+
+```bash
+ZIG=/usr/bin/true LIBGHOSTTY_VT_SIMD=false mise exec -- cargo clippy --all-targets --locked --target x86_64-pc-windows-msvc -- -D warnings
+```
+
+0.9.5 sync では、フォークが引数を足した関数を upstream の Windows 限定テストが呼んでいて、これを省いたために CI でしか見つからなかった。
+Windows でのテストの実行は CI に任せる。
 nextest の失敗は上の一覧と照合する。**失敗件数だけを見て自分の変更のせいだと判断しない。**
 同じ系統は CI の macOS ジョブでもたまに落ちる（実例: [#46](https://github.com/peinan/herdr/pull/46) の
 `federated_launch_opens_local_directly_while_saved_ssh_is_unavailable`）。その場合は失敗ジョブを再実行して切り分ける。
