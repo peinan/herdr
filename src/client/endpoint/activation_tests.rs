@@ -1593,6 +1593,7 @@ fn notification_click_on_remote_source_supersedes_a_handoff() {
         &mut endpoints,
         Some(&mut shell),
         &mut Vec::new(),
+        &crate::client::clipboard_writer::ClipboardWriter::inert(),
         &mut scheduled,
     )
     .unwrap();
