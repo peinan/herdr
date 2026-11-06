@@ -11,8 +11,7 @@ pub(super) fn forward_clipboard(clipboard: &clipboard_writer::ClipboardWriter, d
         warn!("received invalid clipboard payload from server");
         return false;
     };
-    clipboard.write(bytes);
-    true
+    clipboard.write(bytes)
 }
 
 #[cfg(test)]
@@ -28,7 +27,7 @@ mod tests {
         let writer = ClipboardWriter::new(
             false,
             Box::new(move |bytes: &[u8]| calls.send(bytes.to_vec()).is_ok()),
-            Box::new(|_: &[u8]| panic!("copies must go through the native writer")),
+            Box::new(|_: &[u8]| -> bool { panic!("copies must go through the native writer") }),
             events,
         );
         (writer, recorded)

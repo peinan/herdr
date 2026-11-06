@@ -15,7 +15,7 @@
 アップストリーム `ogulcancelik/herdr` の個人フォーク。ブランチ / リモートの役割:
 
 - **`main`** — 個人の開発・統合ライン。**既定ブランチ**。カスタマイズ・機能開発・upstream 取り込みはすべてここ。
-- **`master`** — **リリース源**として保持（継承 CI / `preview.yml` / `release.yml` が master 前提）。リリース時のみ `git push origin main:master` で反映してワークフローを回す。普段は触らない。
+- **`master`** — **リリース源**として保持（継承 CI / `preview.yml` / `release.yml` が master 前提）。リリース時のみ `git push origin main:master` で反映してワークフローを回す。普段は触らない。ただし 0.9.5 sync 以降、継承した `preview.yml` / `release.yml` はフォークでは動かない（→ FORK_WORKFLOW §6 A）。
 - `origin` = `peinan/herdr`（push 先）。`upstream` = `ogulcancelik/herdr`（取り込み元・読み取り専用、`upstream/master` がミラーの実体）。
 
 （旧 `develop` は 2026-07-23 に `main` へリネーム・廃止。旧「`master`＝アップストリームミラー」運用も終了。）
@@ -36,7 +36,7 @@ git push origin main
 - `rerere` + `merge.conflictStyle=zdiff3` は有効化済み（→ FORK_WORKFLOW §0）。
 - `just check` は UI 機能の欠落を検出できない。マージ後に自分のカスタマイズの描画も目視する。
 - 進行中の `feat/*` worktree が少ないときに取り込む。
-- 複数リリース分遅れたらリリースタグ単位で段階マージ（`v0.8.0` → `v0.8.2` → `upstream/master`）。直近: 2026-09-10 に v0.9.0 まで同期（詳細は `docs/fork/FORK_FEATURES.md` 変更履歴。sync で落とした 3 機能は同日中に #34/#35/#36 で再実装済み）。
+- 複数リリース分遅れたら、`upstream/master` 上のリリース同期点（`release: synchronize metadata for vX`）単位で段階マージする。リリースタグは master の祖先ではなく、`fetch.pruneTags` で消えるので SHA で指定する（→ FORK_WORKFLOW §2）。直近: 2026-11-06 に v0.9.5 の同期点 `2f3432c6` まで同期（詳細は `docs/fork/FORK_FEATURES.md` 変更履歴。次回の同期で扱うことは FORK_WORKFLOW §2）。
 
 ## 機能開発 / PR
 
@@ -55,18 +55,18 @@ gh api repos/peinan/herdr/pulls \
 - **「`master` へ反映する」手順の上書き:** `AGENTS.md`（Multi-agent isolation）は共有チェックアウトを fast-forward して `origin/master` に push せよと書くが、このフォークでは個人の作業は上記フォーク内 PR で `main` にランディングする。`master` はリリース時の `main:master` 反映でのみ動く。
 - **アップストリーム管理ファイル（`AGENTS.md`, `README`, `.github/workflows/*`, `config/model.rs` の既定 等）に個人変更を入れない**（取り込みのたびのコンフリクトを抑えるため。個人設定はこのファイルやユーザ config に置く）。
 - **コミット規約:** 小文字 conventional commits、絵文字なし、**AI の co-author 行なし**。`refs #<n>`（`fixes`/`closes` ではなく）は実 issue のみ。コミット文面は事前に提案して合意を取る。
-- **ツールチェーンは mise**（rust 1.96.1 / just / bun 1.3.14 / cargo-nextest / zig 0.15.2 / node）。`just check` は bun と node も要る。
-- **ビルド・テストには `ZIG` の指定が必要**（mise 管理の zig は非対話シェルの PATH に乗らない）。さらに macOS 26 の CLT SDK では
-  zig 0.15.2 が libSystem をリンクできないため、`xcrun --show-sdk-path` を 15.4 SDK に固定する zig ラッパを `ZIG` に渡す
-  （手順は FORK_WORKFLOW §0）:
+- **ツールチェーンは mise**（rust 1.96.1 / just / bun 1.3.14 / cargo-nextest / zig 0.16.0 / node）。`just check` は bun と node も要る。
+- **ビルド・テストには `ZIG` の指定が必要**（mise の zig はどの設定ファイルにも書いておらず、PATH に乗らない）。upstream v0.9.1 から
+  zig 0.16.0 が必須で、macOS 26 の CLT SDK にもそのままリンクできる（zig 0.15.2 時代の SDK 固定ラッパは不要になった。手順は FORK_WORKFLOW §0）:
 
 ```bash
-ZIG=~/.local/share/herdr-fork/zig mise exec -- just check
+ZIG=~/.local/share/mise/installs/zig/0.16.0/zig mise exec -- just check
 ```
 
 - herdr セッション内でテストするときは `HERDR_*` 環境変数を全部外す（`env -u HERDR_ENV -u HERDR_PANE_ID -u HERDR_SOCKET_PATH -u HERDR_CLIENT_SOCKET_PATH -u HERDR_TAB_ID -u HERDR_WORKSPACE_ID ...`）。
   この `env -u ...` を前置するときは **`ZIG` を `$HOME` で書く**（`ZIG=~/...` は `env` の引数になりチルダが展開されない）:
-  `env -u HERDR_ENV ... ZIG="$HOME/.local/share/herdr-fork/zig" mise exec -- just check`
-- **この Mac（macOS 26.6）では `just check` は素の `main` でも緑にならない。** 環境依存の統合テストが 7 件落ちる
-  （PTY / SSH / マルチクライアント系。詳細と一覧は FORK_WORKFLOW §0）。`just check` は fail-fast なので
+  `env -u HERDR_ENV ... ZIG="$HOME/.local/share/mise/installs/zig/0.16.0/zig" mise exec -- just check`
+- **この Mac（macOS 26.6）では `just check` は素の upstream でも緑にならない。** 毎回落ちるのは macOS の ACL を見る単体テスト 1 件で、
+  ほかに handoff / SSH / プラグイン系のフレークがある（一覧は FORK_WORKFLOW §0。2026-11-06 に v0.9.5 で再測定）。
+  さらに `just check` に含まれる `windows-lint` は xwin と Microsoft の SDK が無いと通らない（Windows 限定コードの clippy は SDK 無しでも回せる。手順は FORK_WORKFLOW §0）。`just check` は fail-fast なので、
   `cargo nextest run --no-fail-fast` で全体を取り、その一覧と照合して判断する。**失敗数だけを見て自分の変更のせいだと判断しない。**

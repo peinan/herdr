@@ -38,7 +38,7 @@ popup_background = "{background}"
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
     state.set_snapshot(Box::new(snapshot()));
     state.set_pane_surface(surface);
-    let frame = state.compose(106, 20).expect("popup frame");
+    let frame = state.compose(106, 20).expect("popup frame").frame;
     let hit = state.hits.popup.as_ref().expect("popup hit geometry");
     ComposedPopup {
         frame,

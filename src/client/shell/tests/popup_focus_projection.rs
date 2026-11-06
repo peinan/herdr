@@ -37,8 +37,7 @@ fn modal_paste_target_requires_a_focused_editable_client_field() {
 
     state.overlay = Some(ClientShellOverlay::Rename(ClientRenameOverlay {
         title: "rename pane",
-        input: String::new(),
-        replace_on_type: false,
+        input: TextEditor::default(),
         target: ClientRenameTarget::Pane {
             pane_id: "pane_1".into(),
         },
@@ -49,9 +48,8 @@ fn modal_paste_target_requires_a_focused_editable_client_field() {
         ClientWorktreeCreateOverlay {
             source_workspace_id: "ws_1".into(),
             repo_name: "repo".into(),
-            branch: String::new(),
+            branch: TextEditor::default(),
             checkout_path: String::new(),
-            replace_on_type: false,
             error: None,
             creating: true,
         },
@@ -67,7 +65,7 @@ fn modal_paste_target_requires_a_focused_editable_client_field() {
             source_workspace_id: "ws_1".into(),
             entries: Vec::new(),
             selected: 0,
-            query: String::new(),
+            query: TextEditor::default(),
             search_focused: false,
             error: None,
             opening: false,
@@ -80,12 +78,11 @@ fn modal_paste_target_requires_a_focused_editable_client_field() {
     assert!(state.modal_paste_target_active());
 
     state.overlay = Some(ClientShellOverlay::Navigator(ClientNavigatorOverlay {
-        query: String::new(),
+        query: TextEditor::default(),
         search_focused: false,
         selected: None,
         scroll: 0,
         filter: None,
-        expanded_workspaces: HashSet::new(),
     }));
     assert!(!state.modal_paste_target_active());
     if let Some(ClientShellOverlay::Navigator(navigator)) = state.overlay.as_mut() {
@@ -94,7 +91,7 @@ fn modal_paste_target_requires_a_focused_editable_client_field() {
     assert!(state.modal_paste_target_active());
 
     state.overlay = Some(ClientShellOverlay::Help(ClientHelpOverlay {
-        query: String::new(),
+        query: TextEditor::default(),
         search_focused: false,
         scroll: 0,
     }));
@@ -118,7 +115,7 @@ fn modal_paste_target_requires_a_focused_editable_client_field() {
         selection: None,
         search_prompt: Some(ClientCopySearchPrompt {
             direction: crate::api::schema::PaneCopySearchDirection::Forward,
-            query: String::new(),
+            query: TextEditor::default(),
         }),
         search_query: String::new(),
         search_direction: None,
@@ -129,6 +126,7 @@ fn modal_paste_target_requires_a_focused_editable_client_field() {
         search_generation: 0,
         copy_after_search: false,
     });
+    state.mode = ClientShellMode::Copy;
     assert!(state.modal_paste_target_active());
     state.popup_pending = true;
     assert!(!state.modal_paste_target_active());
@@ -298,6 +296,39 @@ fn popup_owns_keys_text_paste_and_mouse_before_shell_controls() {
     assert!(state.pane_mouse_gesture.is_some());
     state.set_pane_surface(surface());
     assert!(state.pane_mouse_gesture.is_none());
+}
+
+#[test]
+fn every_configured_prefix_reaches_the_shell_over_a_popup() {
+    let mut config = Config::default();
+    config.keys.prefix =
+        crate::config::BindingConfig::Many(vec!["ctrl+b".to_owned(), "ctrl+a".to_owned()]);
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    state.set_snapshot(Box::new(snapshot()));
+    state.apply_popup_surface_metrics(&popup_surface_metrics(1, 0, 0, 3));
+    state.set_pane_surface(surface_with_popup());
+    state.compose(106, 20).expect("popup frame");
+
+    for combo in [
+        (KeyCode::Char('b'), KeyModifiers::CONTROL),
+        (KeyCode::Char('a'), KeyModifiers::CONTROL),
+    ] {
+        let prefix = state.handle_raw_events(vec![RawInputEvent::Key(
+            crate::input::TerminalKey::new(combo.0, combo.1),
+        )]);
+        assert!(
+            prefix.requests.is_empty(),
+            "a configured prefix must not reach the popup, got {:?}",
+            prefix.requests
+        );
+        assert_eq!(state.mode, ClientShellMode::Prefix);
+
+        let _ = state.handle_raw_events(vec![RawInputEvent::Key(crate::input::TerminalKey::new(
+            KeyCode::Esc,
+            KeyModifiers::empty(),
+        ))]);
+        assert_eq!(state.mode, ClientShellMode::Terminal);
+    }
 }
 
 #[test]
@@ -950,6 +981,25 @@ fn pane_scrollbar_track_and_thumb_use_stable_endpoint_scroll_requests() {
 }
 
 #[test]
+fn clear_pane_binding_targets_the_focused_endpoint_pane() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface());
+    let mut input = ClientShellInput::default();
+    state.record_binding(
+        crate::input::KeybindMatch::Action(crate::input::KeybindAction::ClearPane),
+        &mut input,
+    );
+    assert!(input.requests.is_empty());
+    assert!(matches!(
+        &input.actions[..],
+        [ClientShellAction::Endpoint { request, .. }]
+            if matches!(&request.method, crate::api::schema::Method::PaneClear(target)
+                if target.pane_id == "pane_1")
+    ));
+}
+
+#[test]
 fn edit_scrollback_binding_targets_the_focused_endpoint_pane() {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
     state.set_snapshot(Box::new(snapshot()));
@@ -1361,8 +1411,7 @@ fn a_modal_over_the_popup_still_takes_the_paste_shortcut() {
 
     state.overlay = Some(ClientShellOverlay::Rename(ClientRenameOverlay {
         title: "Rename workspace",
-        input: String::new(),
-        replace_on_type: false,
+        input: TextEditor::default(),
         target: ClientRenameTarget::NewTab {
             workspace_id: "w1".into(),
             default_name: String::new(),
@@ -1440,8 +1489,7 @@ fn image_paste_obeys_the_popup_input_context() {
 
     state.overlay = Some(ClientShellOverlay::Rename(ClientRenameOverlay {
         title: "Rename workspace",
-        input: String::new(),
-        replace_on_type: false,
+        input: TextEditor::default(),
         target: ClientRenameTarget::NewTab {
             workspace_id: "w1".into(),
             default_name: String::new(),

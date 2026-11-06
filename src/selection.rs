@@ -188,6 +188,55 @@ impl<P> Selection<P> {
         self.ordered()
     }
 
+    pub(crate) fn visible_rects(&self, inner: Rect, metrics: Option<ScrollMetrics>) -> [Rect; 3] {
+        let mut rects = [Rect::default(); 3];
+        if !self.is_visible() || inner.is_empty() {
+            return rects;
+        }
+        let ((start_row, start_col), (end_row, end_col)) = self.ordered();
+        let top = viewport_top_row(metrics);
+        let bottom = top.saturating_add(u32::from(inner.height));
+        let rect = |first: u32, end: u32, left: u16, right: u16| {
+            let first = first.max(top);
+            let end = end.min(bottom);
+            let left = left.min(inner.width);
+            let right = right.min(inner.width);
+            if first >= end || left >= right {
+                Rect::default()
+            } else {
+                Rect::new(
+                    inner.x + left,
+                    inner.y + (first - top) as u16,
+                    right - left,
+                    (end - first) as u16,
+                )
+            }
+        };
+        if start_row == end_row {
+            rects[0] = rect(
+                start_row,
+                start_row.saturating_add(1),
+                start_col,
+                end_col.saturating_add(1),
+            );
+        } else {
+            rects[0] = rect(
+                start_row,
+                start_row.saturating_add(1),
+                start_col,
+                inner.width,
+            );
+            rects[1] = rect(start_row.saturating_add(1), end_row, 0, inner.width);
+            rects[2] = rect(
+                end_row,
+                end_row.saturating_add(1),
+                0,
+                end_col.saturating_add(1),
+            );
+        }
+        rects
+    }
+
     /// Check whether a pane-relative cell (row, col) is inside the selection.
     pub fn contains(&self, viewport_row: u16, col: u16, metrics: Option<ScrollMetrics>) -> bool {
         if !self.is_visible() {
@@ -309,15 +358,78 @@ pub(crate) fn should_prefer_osc52() -> bool {
 ///
 /// Some terminals still only honor BEL-terminated OSC 52 writes, so herdr
 /// emits BEL here even though ST works in newer emulators.
-pub(crate) fn write_osc52_sequence(bytes: &[u8]) {
+///
+/// Returns false when output fails.
+pub(crate) fn write_osc52_sequence(bytes: &[u8]) -> bool {
     let sequence = osc52_sequence(bytes);
-    let _ = std::io::stdout().write_all(sequence.as_bytes());
-    let _ = std::io::stdout().flush();
+    let mut stdout = std::io::stdout();
+    stdout.write_all(sequence.as_bytes()).is_ok() && stdout.flush().is_ok()
+}
+
+/// Write clipboard bytes to the system clipboard with native platform tools.
+///
+/// Skips the write when the clipboard already holds the same text, so a
+/// repeated copy adds no redundant clipboard history entry. Returns false only
+/// when the native write fails and the caller should fall back to OSC 52.
+///
+/// The comparison and the write can both block on the platform clipboard, so
+/// the client runs this on its clipboard worker, never on its event loop.
+pub(crate) fn write_native_clipboard(bytes: &[u8]) -> bool {
+    write_native_clipboard_with(
+        bytes,
+        crate::platform::clipboard_text_matches,
+        crate::platform::write_clipboard,
+    )
+}
+
+fn write_native_clipboard_with(
+    bytes: &[u8],
+    clipboard_text_matches: impl FnOnce(&[u8]) -> Option<bool>,
+    write_clipboard: impl FnOnce(&[u8]) -> bool,
+) -> bool {
+    if clipboard_text_matches(bytes) == Some(true) {
+        tracing::debug!(bytes = bytes.len(), "suppressed duplicate clipboard write");
+        return true;
+    }
+    write_clipboard(bytes)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn visible_rects_match_selection_cells_when_scrolled_and_reversed() {
+        let inner = Rect::new(10, 5, 8, 6);
+        for (start, end) in [
+            ((0, 2), (0, 5)),
+            ((1, 3), (4, 2)),
+            ((4, 2), (1, 3)),
+            ((0, 0), (20, 7)),
+            ((20, 0), (22, 7)),
+        ] {
+            let selection = Selection::absolute_range((), start, end);
+            for top in [0, 2, 5, 20] {
+                let metrics = Some(ScrollMetrics {
+                    offset_from_bottom: 0,
+                    max_offset_from_bottom: top,
+                    viewport_rows: 6,
+                });
+                let rects = selection.visible_rects(inner, metrics);
+                for row in 0..inner.height {
+                    for col in 0..inner.width {
+                        assert_eq!(
+                            rects
+                                .iter()
+                                .any(|rect| rect.contains((inner.x + col, inner.y + row).into())),
+                            selection.contains(row, col, metrics),
+                            "start={start:?} end={end:?} top={top} row={row} col={col}",
+                        );
+                    }
+                }
+            }
+        }
+    }
 
     fn make_sel(sr: u32, sc: u16, er: u32, ec: u16) -> Selection {
         let mut sel = Selection::anchor(PaneId::from_raw(0), sr as u16, sc, None);
@@ -330,6 +442,39 @@ mod tests {
     #[test]
     fn osc52_sequence_uses_bel_terminator() {
         assert_eq!(osc52_sequence(b"hello"), "\x1b]52;c;aGVsbG8=\x07");
+    }
+
+    #[test]
+    fn native_clipboard_skips_text_it_already_holds() {
+        let mut written = Vec::new();
+        // A skipped duplicate still reports success, so the caller does not
+        // fall back to OSC 52 and write the copy again.
+        assert!(write_native_clipboard_with(
+            b"same",
+            |_| Some(true),
+            |bytes| {
+                written.push(bytes.to_vec());
+                true
+            }
+        ));
+        assert!(written.is_empty());
+    }
+
+    #[test]
+    fn native_clipboard_writes_unless_the_clipboard_is_known_to_match() {
+        for current in [Some(false), None] {
+            let mut written = Vec::new();
+            assert!(write_native_clipboard_with(
+                b"new",
+                |_| current,
+                |bytes| {
+                    written.push(bytes.to_vec());
+                    true
+                }
+            ));
+            assert_eq!(written, vec![b"new".to_vec()]);
+            assert!(!write_native_clipboard_with(b"new", |_| current, |_| false));
+        }
     }
 
     #[test]

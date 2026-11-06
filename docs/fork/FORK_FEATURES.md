@@ -31,7 +31,7 @@ git diff upstream/master...main -- src/config/model.rs # 追加した設定フ�
 これで 2 軸が独立して読める。`0.9.0-fork.9` と `0.10.0-fork.9` ならフォーク機能は同一で upstream だけ新しく、
 `0.9.0-fork.8` と `0.9.0-fork.9` なら upstream は同じでフォーク機能が 1 世代進んでいる。
 
-最終更新: 2026-10-05 (fork.10)
+最終更新: 2026-11-06 (0.9.5 sync、fork.10 据え置き)
 
 ## 機能一覧
 
@@ -87,7 +87,7 @@ git diff upstream/master...main -- src/config/model.rs # 追加した設定フ�
 | `ui.agent_mark_color` | string | `"magenta"` | マークの色。16 進 / 名前 / `rgb(r,g,b)`。**Catppuccin のパレット名(`mauve` 等)は不可**(`parse_color` の表に無く cyan にフォールバック)。`yellow` は Working ステータス色と衝突するので避ける |
 | `keys.toggle_mark` | binding | `"prefix+m"` | フォーカス中のエージェントのマークを切り替える。エージェントでないペインでは no-op |
 | `keys.repeat_timeout` | u64 (ms) | `500` | repeatable バインドがアーム状態を保つ時間。`0` は既定値に丸める |
-| `keys.<action>`(テーブル形式) | `{ key, repeat }` | `repeat = false` | `{ key = "prefix+n", repeat = true }` で tmux `bind -r` 風の繰り返しを有効化。文字列/配列形式は repeat しない |
+| `keys.<action>`(テーブル形式) | `{ key, repeat }` | `repeat = false` | `{ key = "prefix+n", repeat = true }` で tmux `bind -r` 風の繰り返しを有効化。文字列/配列形式は repeat しない。`keys.prefix` にも書けるが、`repeat` は効かず警告を出して無視する |
 
 ## 補足: ペインタイトル書式 (`pane_title_format`)
 
@@ -203,10 +203,40 @@ repeat_timeout = 500
 - **対象外**: ダイアログ/サブモードに入る動作(rename, help, settings, ワークスペース
   ピッカー, ナビゲータ, copy / resize モード)。`repeat = true` を付けても通常遷移して
   アーム終了する
+- **`keys.prefix` の `repeat`**: upstream の複数 prefix キー対応(v0.9.2)以降、`keys.prefix` もテーブル形式を
+  受け付ける。prefix キーには繰り返す動作が無いので `repeat = true` は無視し、設定の警告(画面上部の警告行と
+  `herdr config check`)を出す。prefix キー自体はそのまま効く(致命扱いにすると既定の `ctrl+b` に戻るため)
 
 ## 変更履歴
 
 新しい順。詳細は各表を参照。
+
+### 0.9.5 sync — fork.10 据え置き (2026-11-06, base 0.9.5)
+- upstream v0.9.5 まで 3 段で取り込み：v0.9.1(`956f23ff`)→ v0.9.3(`f9a99bd2`)→ v0.9.5(`2f3432c6`)— [`f7091d1`](https://github.com/peinan/herdr/commit/f7091d1), [`2af6944`](https://github.com/peinan/herdr/commit/2af6944), [`9593572`](https://github.com/peinan/herdr/commit/9593572)
+  - 区切りは master 上の `release: synchronize metadata for vX` コミット。upstream のリリースタグは master の祖先ではない(→ [`FORK_WORKFLOW.md`](./FORK_WORKFLOW.md) §2)。
+  - v0.9.5 は master にしかない [#5212](https://github.com/ogulcancelik/herdr/pull/5212)(CLI と API の契約を表から導出するリファクタ)と、その後の接続まわりの修正も含む。
+    それより後の master(CLAUDE.md の削除、[#5583](https://github.com/ogulcancelik/herdr/pull/5583) など)は次回に回した。
+- ビルド：upstream が v0.9.1 で Zig 0.16.0 を必須にした([#3906](https://github.com/ogulcancelik/herdr/pull/3906))。`Makefile` を zig@0.16.0 に上げ、xcrun シムのラッパを外した — [`5e0aadc`](https://github.com/peinan/herdr/commit/5e0aadc)
+- フォーク機能はすべて残した。upstream の作り替えに合わせて載せ直した主な箇所：
+  - エージェントのマーク：`pane.mark.set` は `src/api/schema.rs` の `define_operations!` 表の 1 行になった。
+    `herdr pane mark` は `src/cli/pane/bindings.rs` の Leaf、`herdr agent mark` は `src/cli/agent/bindings.rs` の Operation へ移した(文法は不変)。
+    契約テストは `tests/cli/contracts.rs` にあり、Linux CI でだけ走る(`tests/cli.rs` が macOS を除外している)。
+    ビューの絞り込みと並びは upstream の `src/agent_view_eval.rs`(`AgentViewEntry::marked`)に載せた。並びは同期前と同じで、upstream の「切断中のエンドポイントは後ろ」が先、マークはその次のキー。
+  - popup の copy mode と選択：upstream の単語選択(`word_selection_gesture`)と、ペインと共用の遮蔽対応ハイライト・カーソルへ載せ替えた。
+  - popup を開いている間の確定文字と貼り付け：upstream の [#3698](https://github.com/ogulcancelik/herdr/pull/3698) で、popup が開いているときは copy mode の検索プロンプトが確定文字(IME の確定など)と貼り付けを受け取らず、popup へ渡すようになった。
+    フォークは、copy mode が popup 自体を対象にしているときだけ、従来どおりプロンプトで受け取る。
+    ペインで copy mode に入ったまま popup が開いた場合は、upstream と同じく popup に入る(同期前のフォークは、検索プロンプトがあればそこへ入れ、無ければ捨てていた)。
+  - popup のメトリクス：画像を伴うフレームが ordered レーンを通るようになったので、`send_ordered_with_control` でメトリクスを同じロックの中でフレームの直前に積む。
+  - repeatable prefix：upstream の複数 prefix キーにテーブル形式を載せた。`prefix_repeat_deadline` は upstream のタイマーと同じ `timer_delay` で待つ。
+  - ペイン内余白：upstream が新しいペインを最初から配置後のサイズで起動するようにした([#4873](https://github.com/ogulcancelik/herdr/pull/4873))ので、そのサイズ計算(通常とズーム中)にも余白を通した。
+  - ペインタイトルの git：cwd だけを更新する早期 return で、upstream の再試行フラグ([#4958](https://github.com/ogulcancelik/herdr/pull/4958))も下ろす。
+  - クリップボード：非同期ワーカー(fork.10 #58)は残し、upstream の重複判定([#4709](https://github.com/ogulcancelik/herdr/pull/4709)：Windows で同じ内容なら書かない)はワーカーの中で行う。
+    重複で書かなかった分は OSC 52 へ回さない。toast は v0.9.5 の upstream と同じく書き込み前に出す。そのため Windows で同じ内容をコピーしたときも toast が出る(upstream は出さない)。
+    書き込み後に toast を出す #5583 の扱いは次回の同期で決める。
+  - `docs/next/CHANGELOG.md` は upstream 側を採り、フォークが足していた未リリースの 2 行(`ui.sidebar_divider`、`ui.zoom_indicator`)は落とした(本書が正)。
+- **fix**: `keys.prefix` に `repeat = true` を書くと設定の警告を出すように — [`2b42da5`](https://github.com/peinan/herdr/commit/2b42da5)
+  - 同期前の `keys.prefix` は文字列しか受け付けず、テーブル形式は設定エラーだった。upstream の複数 prefix キー対応で同じ設定型になり、`repeat` が黙って消えるようになっていた。
+  - 警告は画面上部の警告行と `herdr config check` に出る。prefix キーとリロードはそのまま効く。
 
 ### fork.10 — マウス周りの修正 (2026-10-05, base 0.9.0)
 - **fix**: マウスを捕捉するペインで「離す」が届かなかった押下が残り、次のクリックが無視されたり、ドラッグが古いペインへ流れたりする不具合を修正 — [#53](https://github.com/peinan/herdr/issues/53) → [#56](https://github.com/peinan/herdr/pull/56) ([`08aa896`](https://github.com/peinan/herdr/commit/08aa896))

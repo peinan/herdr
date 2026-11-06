@@ -63,7 +63,7 @@ impl ClientShellState {
             remote_collapsed_groups,
         };
         if let Err(error) = preferences::store(path, preferences) {
-            self.endpoint_error = Some(error);
+            self.set_endpoint_error(error);
             outcome.repaint = true;
         }
     }
@@ -97,7 +97,7 @@ impl ClientShellState {
                         .config
                         .apply_snapshot_keybindings(profile.as_deref(), &commands)
                     {
-                        self.endpoint_error = Some(err);
+                        self.set_endpoint_error(err);
                     }
                 }
             }
@@ -149,7 +149,7 @@ impl ClientShellConfig {
                 .live_keybinds_with_diagnostics()
                 .map(|(keybinds, _diagnostics)| keybinds)
                 .unwrap_or_else(|_diagnostics| LiveKeybindConfig {
-                    prefix: config.prefix_key(),
+                    prefix: config.prefix_keys(),
                     keybinds: config.keybinds(),
                 }),
             local_keys: config.keys.clone(),
@@ -205,6 +205,31 @@ impl ClientShellConfig {
 
     pub(crate) fn with_local_endpoint(self, socket_path: &std::path::Path) -> Self {
         self.with_preferences_path(preferences::path_for_local_endpoint(socket_path))
+    }
+
+    pub(crate) fn with_process_endpoint_preferences(self, socket_path: &std::path::Path) -> Self {
+        self.with_endpoint_preferences(
+            socket_path,
+            std::env::var(crate::remote::REMOTE_PREFERENCES_ENV_VAR)
+                .ok()
+                .as_deref(),
+        )
+    }
+
+    pub(crate) fn with_endpoint_preferences(
+        self,
+        socket_path: &std::path::Path,
+        remote_identity: Option<&str>,
+    ) -> Self {
+        let identity = remote_identity
+            .and_then(|value| serde_json::from_str::<(String, String)>(value).ok())
+            .filter(|(target, session)| !target.is_empty() && !session.is_empty());
+        match identity {
+            Some((target, session)) => {
+                self.with_preferences_path(preferences::path_for_remote_endpoint(&target, &session))
+            }
+            None => self.with_local_endpoint(socket_path),
+        }
     }
 
     pub(super) fn with_preferences_path(mut self, path: std::path::PathBuf) -> Self {
@@ -490,7 +515,7 @@ mod tests {
         next.ui.agent_mark_indicator = "*".to_owned();
         next.ui.agent_mark_color = "red".to_owned();
         next.ui.sidebar.agents = toml::from_str("rows = [[{ token = 'machine', rules = [{ equals = 'Local', bold = true }] }]]\nrow_gap = 2").unwrap();
-        next.keys.prefix = "ctrl+a".to_owned();
+        next.keys.prefix = crate::config::BindingConfig::one("ctrl+a");
         next.keys.repeat_timeout = 750;
 
         let diagnostics = shell.apply_live_config(&next, &[], &[]);
@@ -522,7 +547,10 @@ mod tests {
             std::time::Duration::from_millis(750)
         );
         assert_eq!(
-            shell.agents.rows[0][0].style_for_value("Local").bold,
+            shell.agents.rows[0][0]
+                .style_for_value("Local")
+                .unwrap()
+                .bold,
             Some(true)
         );
         let previous = shell.agents.clone();
@@ -542,7 +570,7 @@ mod tests {
         );
         assert_eq!(
             shell.keybinds.prefix,
-            (KeyCode::Char('a'), KeyModifiers::CONTROL)
+            vec![(KeyCode::Char('a'), KeyModifiers::CONTROL)]
         );
         assert_eq!(
             shell.prefix_repeat_timeout,
@@ -578,13 +606,13 @@ mod tests {
     fn live_reload_preserves_invalid_client_owned_sections() {
         let mut initial = Config::default();
         initial.ui.sidebar_width = 29;
-        initial.keys.prefix = "ctrl+x".to_owned();
+        initial.keys.prefix = crate::config::BindingConfig::one("ctrl+x");
         initial.keys.repeat_timeout = 250;
         let mut shell = ClientShellConfig::from_config(&initial);
 
         let mut invalid = Config::default();
         invalid.ui.sidebar_width = 35;
-        invalid.keys.prefix = "ctrl+a".to_owned();
+        invalid.keys.prefix = crate::config::BindingConfig::one("ctrl+a");
         invalid.keys.repeat_timeout = 750;
         let invalid_sections = vec!["ui".to_owned(), "keys".to_owned()];
         shell.apply_live_config(&invalid, &[], &invalid_sections);
@@ -592,7 +620,7 @@ mod tests {
         assert_eq!(shell.sidebar_width, 29);
         assert_eq!(
             shell.keybinds.prefix,
-            (KeyCode::Char('x'), KeyModifiers::CONTROL)
+            vec![(KeyCode::Char('x'), KeyModifiers::CONTROL)]
         );
         assert_eq!(
             shell.prefix_repeat_timeout,

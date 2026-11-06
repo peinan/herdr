@@ -201,8 +201,7 @@ fn generated_protocol_schema_artifact_is_current() {
         )
     });
     assert_eq!(
-        expected,
-        actual,
+        expected, actual,
         "generated API schema artifact is stale; run `HERDR_UPDATE_API_SCHEMA=1 just test-one generated_protocol_schema_artifact_is_current`"
     );
 }
@@ -744,6 +743,7 @@ fn success_response_round_trips() {
                 endpoint_protocol_generation: Some(1),
                 surface_interest: true,
                 health_check: true,
+                ssh_agent_registration: false,
             }),
         },
     };
@@ -844,6 +844,7 @@ fn worktree_request_and_response_round_trip() {
                 marked: false,
                 cwd: Some("/worktrees/herdr/worktree-api".into()),
                 foreground_cwd: None,
+                restore_error: None,
                 label: None,
                 agent: None,
                 title: None,
@@ -1273,6 +1274,7 @@ fn create_response_round_trips_with_root_pane() {
                 marked: false,
                 cwd: Some("/tmp/review".into()),
                 foreground_cwd: None,
+                restore_error: None,
                 label: None,
                 agent: None,
                 title: None,
@@ -1451,4 +1453,34 @@ fn popup_close_request_round_trips() {
 
     assert_eq!(json["method"], "popup.close");
     assert_eq!(json["params"], serde_json::json!({}));
+}
+
+#[test]
+fn pane_link_resolve_round_trips() {
+    let request: Request = serde_json::from_value(serde_json::json!({
+        "id": "hover", "method": "pane.link.resolve",
+        "params": {"pane_id": "pane-1", "viewport_row": 2, "col": 3}
+    }))
+    .unwrap();
+    assert!(matches!(request.method, Method::PaneLinkResolve(_)));
+    let result = ResponseResult::PaneLinkResolved {
+        regions: vec![PaneLinkRegion {
+            row: 2,
+            start_col: 3,
+            end_col: 9,
+        }],
+    };
+    let json = serde_json::to_value(&result).unwrap();
+    assert_eq!(json["type"], "pane_link_resolved");
+    assert_eq!(json["regions"][0]["end_col"], 9);
+    assert_eq!(
+        serde_json::from_value::<ResponseResult>(json).unwrap(),
+        result
+    );
+}
+
+#[test]
+fn read_choices_cover_every_api_value() {
+    crate::cli::projection::assert_choices_cover_api_enum(READ_SOURCES);
+    crate::cli::projection::assert_choices_cover_api_enum(READ_FORMATS);
 }

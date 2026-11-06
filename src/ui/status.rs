@@ -54,10 +54,10 @@ pub(crate) fn render_copy_feedback_buffer(
     offset_rows: u16,
     position: ToastClipboardPosition,
     palette: &Palette,
-) {
+) -> Rect {
     let feedback_area = copy_feedback_rect(area, feedback, offset_rows, position);
     if feedback_area.is_empty() {
-        return;
+        return feedback_area;
     }
 
     Clear.render(feedback_area, buffer);
@@ -71,7 +71,7 @@ pub(crate) fn render_copy_feedback_buffer(
     super::widgets::repair_wide_grapheme_edges(buffer, feedback_area);
 
     if inner.height == 0 {
-        return;
+        return feedback_area;
     }
 
     let text = Line::from(vec![
@@ -86,6 +86,7 @@ pub(crate) fn render_copy_feedback_buffer(
         ),
     ]);
     Paragraph::new(text).render(inner, buffer);
+    feedback_area
 }
 
 pub(crate) fn render_config_diagnostic_buffer(
@@ -93,6 +94,7 @@ pub(crate) fn render_config_diagnostic_buffer(
     area: Rect,
     message: &str,
     palette: &Palette,
+    mut covered: impl FnMut(Rect),
 ) -> u16 {
     let style = Style::default()
         .fg(panel_contrast_fg(palette))
@@ -115,6 +117,7 @@ pub(crate) fn render_config_diagnostic_buffer(
             1,
         );
 
+        covered(diagnostic_area);
         Clear.render(diagnostic_area, buffer);
         Paragraph::new(Span::styled(text, style)).render(diagnostic_area, buffer);
         super::widgets::repair_wide_grapheme_edges(buffer, diagnostic_area);
