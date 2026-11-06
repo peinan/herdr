@@ -221,8 +221,11 @@ repeat_timeout = 500
   - エージェントのマーク：`pane.mark.set` は `src/api/schema.rs` の `define_operations!` 表の 1 行になった。
     `herdr pane mark` は `src/cli/pane/bindings.rs` の Leaf、`herdr agent mark` は `src/cli/agent/bindings.rs` の Operation へ移した(文法は不変)。
     契約テストは `tests/cli/contracts.rs` にあり、Linux CI でだけ走る(`tests/cli.rs` が macOS を除外している)。
-    ビューの絞り込みと並びは upstream の `src/agent_view_eval.rs`(`AgentViewEntry::marked`)に載せ、並びは upstream の「切断中のエンドポイントは後ろ」を優先してマークをその次のキーにした。
+    ビューの絞り込みと並びは upstream の `src/agent_view_eval.rs`(`AgentViewEntry::marked`)に載せた。並びは同期前と同じで、upstream の「切断中のエンドポイントは後ろ」が先、マークはその次のキー。
   - popup の copy mode と選択：upstream の単語選択(`word_selection_gesture`)と、ペインと共用の遮蔽対応ハイライト・カーソルへ載せ替えた。
+  - popup を開いている間の確定文字と貼り付け：upstream の [#3698](https://github.com/ogulcancelik/herdr/pull/3698) で、popup が開いているときは copy mode の検索プロンプトが確定文字(IME の確定など)と貼り付けを受け取らず、popup へ渡すようになった。
+    フォークは、copy mode が popup 自体を対象にしているときだけ、従来どおりプロンプトで受け取る。
+    ペインで copy mode に入ったまま popup が開いた場合は、upstream と同じく popup に入る(同期前のフォークは、検索プロンプトがあればそこへ入れ、無ければ捨てていた)。
   - popup のメトリクス：画像を伴うフレームが ordered レーンを通るようになったので、`send_ordered_with_control` でメトリクスを同じロックの中でフレームの直前に積む。
   - repeatable prefix：upstream の複数 prefix キーにテーブル形式を載せた。`prefix_repeat_deadline` は upstream のタイマーと同じ `timer_delay` で待つ。
   - ペイン内余白：upstream が新しいペインを最初から配置後のサイズで起動するようにした([#4873](https://github.com/ogulcancelik/herdr/pull/4873))ので、そのサイズ計算(通常とズーム中)にも余白を通した。
