@@ -627,6 +627,7 @@ impl<'de> Deserialize<'de> for KeysConfig {
         let mut keys = KeysConfig::default();
 
         let prefix_was_supplied = input.prefix.is_some() || input.extra_prefixes.is_some();
+        let prefix_repeat = input.prefix.as_ref().is_some_and(BindingConfig::repeatable);
         let mut prefix_values = Vec::new();
         if let Some(prefix) = input.prefix {
             prefix_values.extend(prefix.into_values());
@@ -642,6 +643,15 @@ impl<'de> Deserialize<'de> for KeysConfig {
                 1 => BindingConfig::One(prefix_values.remove(0)),
                 _ => BindingConfig::Many(prefix_values),
             };
+            if prefix_repeat {
+                // A prefix key has nothing to repeat. Keep the option so prefix
+                // validation reports it instead of dropping it silently.
+                let key = match std::mem::take(&mut keys.prefix) {
+                    BindingConfig::One(value) => super::keybinds::BindingKey::One(value),
+                    other => super::keybinds::BindingKey::Many(other.into_values()),
+                };
+                keys.prefix = BindingConfig::Table { key, repeat: true };
+            }
             keys.user_fields.insert("prefix");
         }
 

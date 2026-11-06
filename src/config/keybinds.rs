@@ -1446,6 +1446,14 @@ fn parse_prefix_keys(config: &BindingConfig) -> (Vec<KeyCombo>, Option<String>, 
             )),
         }
     }
+    // The table form lets `keys.prefix` carry `repeat`, but a prefix key has no
+    // action to repeat. Report it without rejecting, so the prefix keys apply.
+    if config.repeatable() {
+        diagnostics.push(
+            "unsupported keybinding option: keys.prefix does not support repeat; ignoring repeat"
+                .to_string(),
+        );
+    }
 
     if combos.is_empty() {
         let reject = Some(format!(
@@ -2113,6 +2121,37 @@ prefix = []
             .any(|diag| diag.contains("keys.prefix")));
         // A reload treats the empty list as invalid and keeps the current keybinds.
         assert!(config.live_keybinds_with_diagnostics().is_err());
+    }
+
+    #[test]
+    fn prefix_repeat_is_reported_while_the_prefix_keeps_working() {
+        let ctrl_a = (KeyCode::Char('a'), KeyModifiers::CONTROL);
+        let reports_repeat =
+            |diag: &String| diag.contains("keys.prefix") && diag.contains("ignoring repeat");
+
+        let config: Config = toml::from_str(
+            r#"
+[keys]
+prefix = { key = "ctrl+a", repeat = true }
+"#,
+        )
+        .unwrap();
+        assert_eq!(config.prefix_keys(), vec![ctrl_a]);
+        assert!(config.collect_diagnostics().iter().any(reports_repeat));
+        // Only a warning: a reload still applies the prefix.
+        let (live, diagnostics) = config.live_keybinds_with_diagnostics().unwrap();
+        assert_eq!(live.prefix, vec![ctrl_a]);
+        assert!(diagnostics.iter().any(reports_repeat));
+
+        let without_repeat: Config = toml::from_str(
+            r#"
+[keys]
+prefix = { key = "ctrl+a" }
+"#,
+        )
+        .unwrap();
+        assert_eq!(without_repeat.prefix_keys(), vec![ctrl_a]);
+        assert!(without_repeat.collect_diagnostics().is_empty());
     }
 
     #[test]
