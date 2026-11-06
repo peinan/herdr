@@ -20,7 +20,7 @@ use super::ClientLoopEvent;
 const FLUSH_TIMEOUT: Duration = Duration::from_millis(500);
 
 type NativeWrite = Box<dyn Fn(&[u8]) -> bool + Send>;
-type Osc52Write = Box<dyn Fn(&[u8])>;
+type Osc52Write = Box<dyn Fn(&[u8]) -> bool>;
 
 enum Job {
     Write(Vec<u8>),
@@ -40,7 +40,7 @@ impl ClipboardWriter {
     pub(super) fn spawn(events: tokio::sync::mpsc::Sender<ClientLoopEvent>) -> Self {
         Self::new(
             crate::selection::should_prefer_osc52(),
-            Box::new(crate::platform::write_clipboard),
+            Box::new(crate::selection::write_native_clipboard),
             Box::new(crate::selection::write_osc52_sequence),
             events,
         )
@@ -81,15 +81,19 @@ impl ClipboardWriter {
     }
 
     /// Hands `bytes` to the system clipboard without waiting for a native tool.
-    pub(super) fn write(&self, bytes: Vec<u8>) {
+    ///
+    /// Returns false only when an inline OSC 52 write fails. A write queued
+    /// for the worker returns true because its native outcome is not known
+    /// yet; if it fails, the worker still hands it back for OSC 52.
+    pub(super) fn write(&self, bytes: Vec<u8>) -> bool {
         let Some(jobs) = &self.jobs else {
-            (self.write_osc52)(&bytes);
-            return;
+            return (self.write_osc52)(&bytes);
         };
         if let Err(mpsc::SendError(Job::Write(bytes))) = jobs.send(Job::Write(bytes)) {
             warn!("clipboard writer stopped; writing the copy as OSC 52");
-            (self.write_osc52)(&bytes);
+            return (self.write_osc52)(&bytes);
         }
+        true
     }
 
     /// Writes a copy the worker could not place natively. Runs on the loop,
@@ -121,7 +125,7 @@ impl ClipboardWriter {
         Self {
             jobs: None,
             pending_fallbacks: Arc::default(),
-            write_osc52: Box::new(|_| {}),
+            write_osc52: Box::new(|_| true),
         }
     }
 }
@@ -217,8 +221,10 @@ mod tests {
     fn osc52_recorder() -> (Osc52Write, Recorded) {
         let written = Recorded::default();
         let sink = written.clone();
-        let write: Osc52Write =
-            Box::new(move |bytes: &[u8]| sink.borrow_mut().push(bytes.to_vec()));
+        let write: Osc52Write = Box::new(move |bytes: &[u8]| {
+            sink.borrow_mut().push(bytes.to_vec());
+            true
+        });
         (write, written)
     }
 
@@ -309,7 +315,8 @@ mod tests {
         let (events_tx, mut events) = tokio::sync::mpsc::channel(8);
         let writer = ClipboardWriter::new(false, native, osc52, events_tx);
 
-        writer.write(b"busy".to_vec());
+        // A queued write reports success before the worker learns it failed.
+        assert!(writer.write(b"busy".to_vec()));
         assert!(writer.flush(WAIT));
         writer.write(b"second".to_vec());
         assert!(writer.flush(WAIT));
@@ -356,11 +363,20 @@ mod tests {
         let (events_tx, mut events) = tokio::sync::mpsc::channel(8);
         let writer = ClipboardWriter::new(true, native, osc52, events_tx);
 
-        writer.write(b"remote".to_vec());
+        assert!(writer.write(b"remote".to_vec()));
         assert_eq!(*written.borrow(), vec![b"remote".to_vec()]);
         drop(writer);
         assert!(recorded.try_recv().is_err());
         assert!(next_fallback(&mut events).is_none());
+    }
+
+    #[test]
+    fn failed_inline_osc52_write_is_reported() {
+        let native: NativeWrite = Box::new(|_: &[u8]| true);
+        let (events_tx, _events) = tokio::sync::mpsc::channel(8);
+        let writer = ClipboardWriter::new(true, native, Box::new(|_: &[u8]| false), events_tx);
+
+        assert!(!writer.write(b"remote".to_vec()));
     }
 
     #[test]

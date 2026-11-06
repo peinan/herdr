@@ -358,10 +358,40 @@ pub(crate) fn should_prefer_osc52() -> bool {
 ///
 /// Some terminals still only honor BEL-terminated OSC 52 writes, so herdr
 /// emits BEL here even though ST works in newer emulators.
-pub(crate) fn write_osc52_sequence(bytes: &[u8]) {
+///
+/// Returns false when output fails.
+pub(crate) fn write_osc52_sequence(bytes: &[u8]) -> bool {
     let sequence = osc52_sequence(bytes);
-    let _ = std::io::stdout().write_all(sequence.as_bytes());
-    let _ = std::io::stdout().flush();
+    let mut stdout = std::io::stdout();
+    stdout.write_all(sequence.as_bytes()).is_ok() && stdout.flush().is_ok()
+}
+
+/// Write clipboard bytes to the system clipboard with native platform tools.
+///
+/// Skips the write when the clipboard already holds the same text, so a
+/// repeated copy adds no redundant clipboard history entry. Returns false only
+/// when the native write fails and the caller should fall back to OSC 52.
+///
+/// The comparison and the write can both block on the platform clipboard, so
+/// the client runs this on its clipboard worker, never on its event loop.
+pub(crate) fn write_native_clipboard(bytes: &[u8]) -> bool {
+    write_native_clipboard_with(
+        bytes,
+        crate::platform::clipboard_text_matches,
+        crate::platform::write_clipboard,
+    )
+}
+
+fn write_native_clipboard_with(
+    bytes: &[u8],
+    clipboard_text_matches: impl FnOnce(&[u8]) -> Option<bool>,
+    write_clipboard: impl FnOnce(&[u8]) -> bool,
+) -> bool {
+    if clipboard_text_matches(bytes) == Some(true) {
+        tracing::debug!(bytes = bytes.len(), "suppressed duplicate clipboard write");
+        return true;
+    }
+    write_clipboard(bytes)
 }
 
 #[cfg(test)]
@@ -412,6 +442,39 @@ mod tests {
     #[test]
     fn osc52_sequence_uses_bel_terminator() {
         assert_eq!(osc52_sequence(b"hello"), "\x1b]52;c;aGVsbG8=\x07");
+    }
+
+    #[test]
+    fn native_clipboard_skips_text_it_already_holds() {
+        let mut written = Vec::new();
+        // A skipped duplicate still reports success, so the caller does not
+        // fall back to OSC 52 and write the copy again.
+        assert!(write_native_clipboard_with(
+            b"same",
+            |_| Some(true),
+            |bytes| {
+                written.push(bytes.to_vec());
+                true
+            }
+        ));
+        assert!(written.is_empty());
+    }
+
+    #[test]
+    fn native_clipboard_writes_unless_the_clipboard_is_known_to_match() {
+        for current in [Some(false), None] {
+            let mut written = Vec::new();
+            assert!(write_native_clipboard_with(
+                b"new",
+                |_| current,
+                |bytes| {
+                    written.push(bytes.to_vec());
+                    true
+                }
+            ));
+            assert_eq!(written, vec![b"new".to_vec()]);
+            assert!(!write_native_clipboard_with(b"new", |_| current, |_| false));
+        }
     }
 
     #[test]

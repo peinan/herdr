@@ -146,9 +146,37 @@ impl ClientWriter {
             .try_send_render_with_control(control, render)
     }
 
+    /// Sends an ordered render frame together with a control message that must
+    /// reach the client first. See `ClientWriterQueue::send_ordered_with_control`.
+    pub(crate) fn send_ordered_with_control(
+        &self,
+        control: Vec<u8>,
+        render: Vec<u8>,
+    ) -> Result<(), TrySendError<Vec<u8>>> {
+        self.render.queue.send_ordered_with_control(control, render)
+    }
+
     /// Drops render-lane work that has not yet been claimed by the writer.
     pub(crate) fn discard_pending_render(&self) {
         self.render.queue.discard_pending_render();
+    }
+
+    #[cfg(all(test, unix))]
+    pub(crate) fn test_paused() -> Self {
+        let queue = ClientWriterQueue::new();
+        Self {
+            control: ClientControlWriter::queue(queue.clone()),
+            render: ClientRenderWriter::queue(queue),
+        }
+    }
+
+    #[cfg(all(test, unix))]
+    pub(crate) fn test_drain(&self) -> Vec<Vec<u8>> {
+        let mut state = self.render.queue.lock_state();
+        let mut frames = state.control.drain(..).collect::<Vec<_>>();
+        frames.extend(state.ordered.drain(..));
+        frames.extend(state.render.take());
+        frames
     }
 
     #[cfg(test)]
@@ -380,6 +408,34 @@ impl ClientWriterQueue {
         Ok(())
     }
 
+    /// `send_ordered` with a control message enqueued under the same lock.
+    ///
+    /// The ordered lane has the same window as the render slot: the writer can
+    /// claim the frame before a separately sent control is queued. Here either
+    /// both are queued or neither, and the control lands ahead of the frame. A
+    /// frame displaced from the render slot is written after this control too;
+    /// any control paired with that older frame was queued with it, earlier.
+    fn send_ordered_with_control(
+        &self,
+        control: Vec<u8>,
+        data: Vec<u8>,
+    ) -> Result<(), TrySendError<Vec<u8>>> {
+        let mut state = self.lock_state();
+        if !state.writer_alive {
+            return Err(TrySendError::Disconnected(data));
+        }
+        if !state.ordered.is_empty() {
+            return Err(TrySendError::Full(data));
+        }
+        if let Some(older) = state.render.take() {
+            state.ordered.push_back(older);
+        }
+        state.control.push_back(control);
+        state.ordered.push_back(data);
+        self.ready.notify_one();
+        Ok(())
+    }
+
     fn recv(&self) -> Option<ClientWriteItem> {
         let mut state = self.lock_state();
         loop {
@@ -448,6 +504,7 @@ pub(crate) enum ServerEvent {
         surface_v2: bool,
         surface_reuse: bool,
         surface_delta: bool,
+        surface_scroll: bool,
         writer: ClientWriter,
     },
     /// A client sent an input message.
@@ -816,6 +873,7 @@ pub(crate) fn handle_client_handshake(
                     hello.supports_surface_v2(),
                     hello.surface_reuse,
                     hello.surface_delta,
+                    hello.surface_scroll,
                 )),
             )
         }
@@ -914,6 +972,7 @@ pub(crate) fn handle_client_handshake(
         surface_v2,
         surface_reuse,
         surface_delta,
+        surface_scroll,
     )) = shell_options
     {
         ServerEvent::ClientShellConnected {
@@ -930,6 +989,7 @@ pub(crate) fn handle_client_handshake(
             surface_v2,
             surface_reuse,
             surface_delta,
+            surface_scroll,
             writer,
         }
     } else {
@@ -1506,6 +1566,7 @@ mod tests {
             surface_active: true,
             surface_reuse: false,
             surface_delta: false,
+            surface_scroll: false,
             snapshot_codecs: vec![crate::protocol::endpoint::SNAPSHOT_CODEC_V1.into()],
             surface_codecs: vec![crate::protocol::endpoint::SURFACE_CODEC_V1.into()],
             input_codecs: vec![crate::protocol::endpoint::INPUT_CODEC_V1.into()],
@@ -1604,6 +1665,51 @@ mod tests {
             writer.render.send_ordered(b"closed".to_vec()),
             Err(TrySendError::Disconnected(_))
         ));
+    }
+
+    #[test]
+    fn ordered_frame_with_control_writes_the_control_before_any_frame() {
+        let (writer, queue) = test_queue_writer();
+        writer.render.try_send(b"old".to_vec()).unwrap();
+        writer
+            .send_ordered_with_control(b"metrics".to_vec(), b"direct".to_vec())
+            .unwrap();
+
+        assert_eq!(
+            queue.recv(),
+            Some(ClientWriteItem::Control(b"metrics".to_vec()))
+        );
+        for expected in [b"old".as_slice(), b"direct"] {
+            assert_eq!(
+                queue.recv(),
+                Some(ClientWriteItem::Render(expected.to_vec()))
+            );
+        }
+    }
+
+    #[test]
+    fn ordered_frame_with_control_queues_both_or_neither() {
+        let (writer, queue) = test_queue_writer();
+        writer.render.send_ordered(b"pending".to_vec()).unwrap();
+        assert!(matches!(
+            writer.send_ordered_with_control(b"metrics".to_vec(), b"direct".to_vec()),
+            Err(TrySendError::Full(_))
+        ));
+        {
+            let state = queue.lock_state();
+            assert!(
+                state.control.is_empty(),
+                "a rejected frame leaves no control"
+            );
+            assert_eq!(state.ordered, [b"pending".to_vec()]);
+        }
+
+        queue.close_writer();
+        assert!(matches!(
+            writer.send_ordered_with_control(b"metrics".to_vec(), b"closed".to_vec()),
+            Err(TrySendError::Disconnected(_))
+        ));
+        assert!(queue.lock_state().control.is_empty());
     }
 
     #[test]
@@ -2024,10 +2130,12 @@ mod tests {
                 surface_v2,
                 surface_reuse,
                 surface_delta,
+                surface_scroll,
                 writer,
             } => {
                 assert!(!surface_reuse);
                 assert!(!surface_delta);
+                assert!(!surface_scroll);
                 assert_eq!(client_id, 43);
                 assert_eq!((surface_cols, surface_rows), (80, 29));
                 assert_eq!((cell_width_px, cell_height_px), (8, 16));

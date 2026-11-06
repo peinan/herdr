@@ -27,7 +27,7 @@ fn compose_with_popup(config: ClientShellConfig) -> ComposedPopup {
     state.set_snapshot(Box::new(snapshot()));
     state.set_pane_surface(surface_with_popup());
     let layout = state.layout(106, 20);
-    let frame = state.compose(106, 20).expect("popup frame");
+    let frame = state.compose(106, 20).expect("popup frame").frame;
     let popup = state.hits.popup.as_ref().expect("popup hit geometry").rect;
     assert!(layout.sidebar.width > 0, "desktop layout expected");
     ComposedPopup {

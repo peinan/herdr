@@ -184,6 +184,7 @@ fn pane_scroll_result(
             marked: false,
             cwd: None,
             foreground_cwd: None,
+            restore_error: None,
             label: None,
             agent: None,
             title: None,
@@ -287,6 +288,7 @@ fn popup_surface_metrics(
 
 mod agents_worktrees_notifications;
 mod chrome_context;
+mod close_tab;
 mod copy;
 mod endpoint_requests;
 mod endpoints;

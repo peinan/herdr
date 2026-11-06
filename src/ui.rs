@@ -13,8 +13,8 @@ mod widgets;
 
 pub(crate) use self::onboarding::{
     onboarding_welcome_continue_rect, ONBOARDING_DESCRIPTION, ONBOARDING_HELP_LABEL,
-    ONBOARDING_HELP_SUFFIX, ONBOARDING_NEXT, ONBOARDING_PREFIX_LABEL, ONBOARDING_PREFIX_SUFFIX,
-    ONBOARDING_SUBTITLE, ONBOARDING_TITLE,
+    ONBOARDING_HELP_SUFFIX, ONBOARDING_NEXT, ONBOARDING_PREFIX_SUFFIX, ONBOARDING_SUBTITLE,
+    ONBOARDING_TITLE,
 };
 pub(crate) use self::panes::apply_pane_padding;
 pub(crate) use self::panes::popup_border_label;

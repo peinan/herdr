@@ -268,12 +268,15 @@ pub struct SessionConfig {
     /// Resume supported AI-agent panes into their native conversation sessions
     /// when restoring a Herdr session. Default: true.
     pub resume_agents_on_restore: bool,
+    /// Milliseconds between automatic agent restores. Zero disables spacing.
+    pub startup_per_agent_delay_ms: u32,
 }
 
 impl Default for SessionConfig {
     fn default() -> Self {
         Self {
             resume_agents_on_restore: true,
+            startup_per_agent_delay_ms: 100,
         }
     }
 }
@@ -331,8 +334,9 @@ pub struct LoadedConfig {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct KeysConfig {
-    /// Prefix key to enter prefix mode (e.g. "ctrl+b", "f12", "esc").
-    pub prefix: String,
+    /// Prefix key(s) to enter prefix mode (e.g. "ctrl+b", "f12", "esc", or an
+    /// array to accept several).
+    pub prefix: BindingConfig,
     /// Window (milliseconds) a repeatable prefix binding stays "armed" so the
     /// bare key can repeat without re-pressing the prefix. Default: 500.
     /// `0` clamps to the default.
@@ -411,6 +415,7 @@ pub struct KeysConfig {
     pub rename_pane: BindingConfig,
     /// Open the focused pane scrollback in $EDITOR. Default: "prefix+e".
     pub edit_scrollback: BindingConfig,
+    pub clear_pane: BindingConfig,
     /// Enter keyboard copy mode for the focused pane. Default: "prefix+[".
     pub copy_mode: BindingConfig,
     /// Focus the pane to the left. Default: "prefix+h".
@@ -469,7 +474,12 @@ pub struct KeysConfig {
 #[serde(default)]
 pub(crate) struct KeysConfigOverlay {
     #[serde(skip_serializing_if = "Option::is_none")]
-    prefix: Option<String>,
+    prefix: Option<BindingConfig>,
+    /// Additional prefix keys published for cross-version compatibility.
+    /// Older clients parse `prefix` as a single string and ignore this field;
+    /// new clients merge it into the effective prefix list.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    extra_prefixes: Option<BindingConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     repeat_timeout: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -546,6 +556,7 @@ pub(crate) struct KeysConfigOverlay {
     rename_pane: Option<BindingConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     edit_scrollback: Option<BindingConfig>,
+    clear_pane: Option<BindingConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     copy_mode: Option<BindingConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -597,8 +608,13 @@ pub(crate) struct KeysConfigOverlay {
 }
 
 impl KeysConfigOverlay {
-    pub(crate) fn set_prefix(&mut self, prefix: String) {
-        self.prefix = Some(prefix);
+    pub(crate) fn set_prefixes(&mut self, prefixes: &[super::keybinds::KeyCombo]) {
+        let mut labels = prefixes
+            .iter()
+            .map(|combo| super::keybinds::format_key_combo(*combo));
+        self.prefix = Some(BindingConfig::One(labels.next().unwrap_or_default()));
+        let extra: Vec<String> = labels.collect();
+        self.extra_prefixes = (!extra.is_empty()).then_some(BindingConfig::Many(extra));
     }
 }
 
@@ -610,6 +626,25 @@ impl<'de> Deserialize<'de> for KeysConfig {
         let input = KeysConfigOverlay::deserialize(deserializer)?;
         let mut keys = KeysConfig::default();
 
+        let prefix_was_supplied = input.prefix.is_some() || input.extra_prefixes.is_some();
+        let mut prefix_values = Vec::new();
+        if let Some(prefix) = input.prefix {
+            prefix_values.extend(prefix.into_values());
+        }
+        if let Some(extra) = input.extra_prefixes {
+            prefix_values.extend(extra.into_values());
+        }
+        if prefix_was_supplied {
+            // An explicitly empty list stays empty so prefix validation rejects
+            // it and a reload keeps the current keybindings.
+            keys.prefix = match prefix_values.len() {
+                0 => BindingConfig::Many(Vec::new()),
+                1 => BindingConfig::One(prefix_values.remove(0)),
+                _ => BindingConfig::Many(prefix_values),
+            };
+            keys.user_fields.insert("prefix");
+        }
+
         macro_rules! apply_field {
             ($field:ident) => {
                 if let Some(value) = input.$field {
@@ -619,7 +654,6 @@ impl<'de> Deserialize<'de> for KeysConfig {
             };
         }
 
-        apply_field!(prefix);
         apply_field!(repeat_timeout);
         apply_field!(help);
         apply_field!(settings);
@@ -658,6 +692,7 @@ impl<'de> Deserialize<'de> for KeysConfig {
         apply_field!(close_tab);
         apply_field!(rename_pane);
         apply_field!(edit_scrollback);
+        apply_field!(clear_pane);
         apply_field!(copy_mode);
         apply_field!(focus_pane_left);
         apply_field!(focus_pane_down);
@@ -764,6 +799,7 @@ impl KeysConfig {
         copy_effective_action_field!(close_tab, keybinds.close_tab);
         copy_effective_action_field!(rename_pane, keybinds.rename_pane);
         copy_effective_action_field!(edit_scrollback, keybinds.edit_scrollback);
+        copy_effective_action_field!(clear_pane, keybinds.clear_pane);
         copy_effective_action_field!(copy_mode, keybinds.copy_mode);
         copy_effective_action_field!(focus_pane_left, keybinds.focus_pane_left);
         copy_effective_action_field!(focus_pane_down, keybinds.focus_pane_down);
@@ -1267,7 +1303,7 @@ pub struct ExperimentalConfig {
 impl Default for KeysConfig {
     fn default() -> Self {
         Self {
-            prefix: "ctrl+b".into(),
+            prefix: BindingConfig::one("ctrl+b"),
             repeat_timeout: super::keybinds::DEFAULT_REPEAT_TIMEOUT_MS,
             help: BindingConfig::one("prefix+?"),
             settings: BindingConfig::one("prefix+s"),
@@ -1306,6 +1342,7 @@ impl Default for KeysConfig {
             close_tab: BindingConfig::one("prefix+shift+x"),
             rename_pane: BindingConfig::one("prefix+shift+p"),
             edit_scrollback: BindingConfig::one("prefix+e"),
+            clear_pane: BindingConfig::default(),
             copy_mode: BindingConfig::one("prefix+["),
             focus_pane_left: BindingConfig::one("prefix+h"),
             focus_pane_down: BindingConfig::one("prefix+j"),
@@ -1597,13 +1634,16 @@ new_cwd = "~/Projects"
     fn resume_agents_on_restore_defaults_on_and_parses() {
         let default_config = Config::default();
         assert!(default_config.session.resume_agents_on_restore);
+        assert_eq!(default_config.session.startup_per_agent_delay_ms, 100);
 
         let toml = r#"
 [session]
 resume_agents_on_restore = false
+startup_per_agent_delay_ms = 0
 "#;
         let config: Config = toml::from_str(toml).unwrap();
         assert!(!config.session.resume_agents_on_restore);
+        assert_eq!(config.session.startup_per_agent_delay_ms, 0);
     }
 
     #[test]
